@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Houji display orientation
+Exec=/usr/libexec/armada/houji-first-plasma-session
+OnlyShowIn=KDE;
+NoDisplay=true

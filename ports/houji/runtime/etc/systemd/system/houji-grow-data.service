@@ -1,0 +1,9 @@
+[Unit]
+Description=Expand the Armada userdata filesystem
+After=local-fs.target
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/usr/sbin/resize2fs "$(cat /run/houji/root-device)"'
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target

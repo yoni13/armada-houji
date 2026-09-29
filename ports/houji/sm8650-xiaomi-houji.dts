@@ -1,0 +1,502 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * Xiaomi 14 (houji), stock-ABL Linux port.
+ * Wiring: lolipuru/kernel_xiaomi_sm8650-devicetrees at
+ * 25446a168427695fed4adecb61fd63926f12bc17, qcom/houji-sm8650.dtsi,
+ * xiaomi-sm8650-common.dtsi, pineapple-mtp.dtsi and pineapple-regulators.dtsi.
+ * Mainline binding reference: Linux v7.2 sm8650-mtp.dts (Linaro, BSD-3-Clause).
+ * Deliberately does not inherit another product's board DTS.
+ */
+/dts-v1/;
+
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+#include "sm8650.dtsi"
+#include "pm8550.dtsi"
+#include "pm8550b.dtsi"
+#define PMK8550VE_SID 8
+#include "pm8550ve.dtsi"
+#include "pm8550vs.dtsi"
+#include "pmk8550.dtsi"
+#include "bluetooth-haptics.dtsi"
+#include "board-thermals.dtsi"
+
+/* The firmware locates this reservation elsewhere than the reference board. */
+/delete-node/ &hwfence_shbuf;
+
+/ {
+	model = "Xiaomi 14";
+	compatible = "xiaomi,houji", "qcom,sm8650";
+	chassis-type = "handset";
+
+	/* Xiaomi's downstream houji-sm8650-overlay.dts selection values. */
+	qcom,msm-id = <557 0x10000>, <557 0x20000>;
+	qcom,board-id = <8 0>;
+	xiaomi,miboard-id = <2 0>;
+
+	aliases {
+		serial0 = &uart14;
+	};
+
+	/* Firmware overlay targets in the downstream pineapple.dtsi. Runtime
+	 * properties and capabilities are supplied by the stock hypervisor.
+	 */
+	hypervisor: hypervisor {
+		gh_watchdog: qcom,gh-watchdog { };
+	};
+
+	/* Battery telemetry is provided by the stock ADSP charger service. */
+	pmic-glink {
+		compatible = "qcom,sm8650-pmic-glink",
+			     "qcom,sm8550-pmic-glink",
+			     "qcom,pmic-glink";
+	};
+
+	chosen {
+		/* Preserve bootloader-owned clocks/rails until their drivers exist. */
+		bootargs = "rdinit=/init clk_ignore_unused pd_ignore_unused regulator_ignore_unused";
+	};
+
+	vph_pwr: regulator-vph-pwr {
+		compatible = "regulator-fixed";
+		regulator-name = "vph_pwr";
+		regulator-min-microvolt = <3700000>;
+		regulator-max-microvolt = <3700000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	panel_vddd: regulator-panel-vddd {
+		compatible = "regulator-fixed";
+		regulator-name = "panel_vddd";
+		regulator-min-microvolt = <1060000>;
+		regulator-max-microvolt = <1060000>;
+		gpio = <&tlmm 28 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+		pinctrl-names = "default";
+		pinctrl-0 = <&panel_vddd_default>;
+	};
+
+	wcn7850-pmu {
+		compatible = "qcom,wcn7850-pmu";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&wlan_en>, <&bt_default>;
+
+		wlan-enable-gpios = <&tlmm 16 GPIO_ACTIVE_HIGH>;
+		bt-enable-gpios = <&tlmm 17 GPIO_ACTIVE_HIGH>;
+
+		vdd-supply = <&vreg_s4i>;
+		vddio-supply = <&vreg_l15b>;
+		vddio1p2-supply = <&vreg_l3c>;
+		vddaon-supply = <&vreg_s2c>;
+		vdddig-supply = <&vreg_s3c>;
+		vddrfa1p2-supply = <&vreg_s1c>;
+		vddrfa1p8-supply = <&vreg_s6c>;
+
+		clocks = <&rpmhcc RPMH_RF_CLK1>;
+
+		regulators {
+			vreg_pmu_rfa_cmn: ldo0 {
+				regulator-name = "vreg_pmu_rfa_cmn";
+			};
+
+			vreg_pmu_aon_0p59: ldo1 {
+				regulator-name = "vreg_pmu_aon_0p59";
+			};
+
+			vreg_pmu_wlcx_0p8: ldo2 {
+				regulator-name = "vreg_pmu_wlcx_0p8";
+			};
+
+			vreg_pmu_wlmx_0p85: ldo3 {
+				regulator-name = "vreg_pmu_wlmx_0p85";
+			};
+
+			vreg_pmu_btcmx_0p85: ldo4 {
+				regulator-name = "vreg_pmu_btcmx_0p85";
+			};
+
+			vreg_pmu_rfa_0p8: ldo5 {
+				regulator-name = "vreg_pmu_rfa_0p8";
+			};
+
+			vreg_pmu_rfa_1p2: ldo6 {
+				regulator-name = "vreg_pmu_rfa_1p2";
+			};
+
+			vreg_pmu_rfa_1p8: ldo7 {
+				regulator-name = "vreg_pmu_rfa_1p8";
+			};
+
+			vreg_pmu_pcie_0p9: ldo8 {
+				regulator-name = "vreg_pmu_pcie_0p9";
+			};
+
+			vreg_pmu_pcie_1p8: ldo9 {
+				regulator-name = "vreg_pmu_pcie_1p8";
+			};
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		key-volume-up {
+			label = "Volume Up";
+			linux,code = <KEY_VOLUMEUP>;
+			gpios = <&pm8550_gpios 6 GPIO_ACTIVE_LOW>;
+			debounce-interval = <32>;
+			wakeup-source;
+		};
+	};
+};
+
+/* Gunyah's firmware overlay refers to the downstream arch_timer symbol. */
+arch_timer: &{/timer} {
+};
+
+/* Static reserved regions from the pinned Houji stock firmware. */
+&reserved_memory {
+	hwfence_shbuf: hwfence-shbuf@ff100000 {
+		reg = <0 0xff100000 0 0x2dd000>;
+		no-map;
+	};
+	xiaomi_display_dump: display-dump@816e0000 {
+		reg = <0 0x816e0000 0 0x800>;
+		no-map;
+	};
+	xbl_ramdump: xbl-ramdump@84a00000 {
+		reg = <0 0x84a00000 0 0x200000>;
+		no-map;
+	};
+	xiaomi_lost_regs: lost-registers@9b09c000 {
+		reg = <0 0x9b09c000 0 0x4000>;
+		no-map;
+	};
+	ramoops@a7000000 {
+		compatible = "ramoops";
+		reg = <0 0xa7000000 0 0x400000>;
+		console-size = <0x200000>;
+		pmsg-size = <0x200000>;
+		mem-type = <2>;
+	};
+};
+
+&adspslpi_mem {
+	reg = <0 0x9df00000 0 0x4680000>;
+};
+
+/* The stock overlay reserves the splash buffer at fc400000..fef00000.
+ * Coalesce it with the inherited OEM VM reservation (f7c00000..fc800000)
+ * so there are no overlapping reserved-memory entries during bring-up.
+ */
+&oem_vm_mem {
+	reg = <0 0xf7c00000 0 0x7300000>;
+};
+
+&apps_rsc {
+	regulators-0 {
+		compatible = "qcom,pm8550-rpmh-regulators";
+		qcom,pmic-id = "b";
+		vdd-bob1-supply = <&vph_pwr>;
+		vdd-bob2-supply = <&vph_pwr>;
+		vdd-l2-l13-l14-supply = <&vreg_bob1>;
+		vdd-l5-l16-supply = <&vreg_bob1>;
+		vdd-l15-supply = <&vreg_s6c>;
+		vdd-l17-supply = <&vreg_bob2>;
+
+		vreg_bob1: bob1 {
+			regulator-name = "vreg_bob1";
+			regulator-min-microvolt = <3296000>;
+			regulator-max-microvolt = <3960000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+		vreg_bob2: bob2 {
+			regulator-name = "vreg_bob2";
+			regulator-min-microvolt = <2720000>;
+			regulator-max-microvolt = <3008000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+		vreg_l5b: ldo5 {
+			regulator-name = "vreg_l5b";
+			regulator-min-microvolt = <3104000>;
+			regulator-max-microvolt = <3104000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+		vreg_l13b: ldo13 {
+			regulator-name = "vreg_l13b";
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3000000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+		vreg_l15b: ldo15 {
+			regulator-name = "vreg_l15b";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+		vreg_l17b: ldo17 {
+			regulator-name = "vreg_l17b";
+			regulator-min-microvolt = <2504000>;
+			regulator-max-microvolt = <2504000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+	regulators-1 {
+		compatible = "qcom,pm8550vs-rpmh-regulators";
+		qcom,pmic-id = "c";
+		vdd-l1-supply = <&vreg_s1c>;
+		vdd-l3-supply = <&vreg_s6c>;
+		vdd-s2-supply = <&vph_pwr>;
+		vdd-s1-supply = <&vph_pwr>;
+		vdd-s3-supply = <&vph_pwr>;
+		vdd-s6-supply = <&vph_pwr>;
+		vreg_s2c: smps2 {
+			regulator-name = "vreg_s2c";
+			regulator-min-microvolt = <976000>;
+			regulator-max-microvolt = <976000>;
+		};
+		vreg_l3c: ldo3 {
+			regulator-name = "vreg_l3c";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+		vreg_s1c: smps1 {
+			regulator-name = "vreg_s1c";
+			regulator-min-microvolt = <1316000>;
+			regulator-max-microvolt = <1316000>;
+		};
+		vreg_s6c: smps6 {
+			regulator-name = "vreg_s6c";
+			regulator-min-microvolt = <1864000>;
+			regulator-max-microvolt = <1864000>;
+		};
+		vreg_s3c: smps3 {
+			regulator-name = "vreg_s3c";
+			regulator-min-microvolt = <916000>;
+			regulator-max-microvolt = <916000>;
+		};
+		vreg_l1c: ldo1 {
+			regulator-name = "vreg_l1c";
+			regulator-min-microvolt = <1100000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+	regulators-2 {
+		compatible = "qcom,pm8550vs-rpmh-regulators";
+		qcom,pmic-id = "d";
+		vdd-l1-supply = <&vreg_s3c>;
+		vreg_l1d: ldo1 {
+			regulator-name = "vreg_l1d";
+			regulator-min-microvolt = <912000>;
+			regulator-max-microvolt = <920000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+	regulators-3 {
+		compatible = "qcom,pm8550ve-rpmh-regulators";
+		qcom,pmic-id = "i";
+		vdd-l1-supply = <&vreg_s3c>;
+		vdd-l3-supply = <&vreg_s1c>;
+		vdd-s4-supply = <&vph_pwr>;
+		vreg_s4i: smps4 {
+			regulator-name = "vreg_s4i";
+			regulator-min-microvolt = <940000>;
+			regulator-max-microvolt = <940000>;
+		};
+		vreg_l1i: ldo1 {
+			regulator-name = "vreg_l1i";
+			regulator-min-microvolt = <880000>;
+			regulator-max-microvolt = <880000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+		vreg_l3i: ldo3 {
+			regulator-name = "vreg_l3i";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+	regulators-4 {
+		compatible = "qcom,pm8550vs-rpmh-regulators";
+		qcom,pmic-id = "g";
+		/* Stock describes ldog2 but not its upstream input rail. */
+		vreg_l2g: ldo2 {
+			regulator-name = "vreg_l2g";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+	regulators-5 {
+		compatible = "qcom,pmr735d-rpmh-regulators";
+		qcom,pmic-id = "k";
+		/* Stock's shared antenna rail; keep on during Wi-Fi bring-up.
+		 * Its upstream input is not described by the supplied stock DT.
+		 */
+		vreg_l6k: ldo6 {
+			regulator-name = "vreg_l6k_wifi_ant_share";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
+		};
+	};
+};
+
+&pon_pwrkey { status = "okay"; linux,code = <KEY_POWER>; };
+&pon_resin { status = "okay"; linux,code = <KEY_VOLUMEDOWN>; };
+
+&ufs_mem_hc {
+	reset-gpios = <&tlmm 210 GPIO_ACTIVE_LOW>;
+	vcc-supply = <&vreg_l17b>;
+	vcc-max-microamp = <1300000>;
+	vccq-supply = <&vreg_l1c>;
+	vccq-max-microamp = <1200000>;
+	status = "okay";
+};
+&ufs_mem_phy {
+	vdda-phy-supply = <&vreg_l1d>;
+	vdda-pll-supply = <&vreg_l3i>;
+	status = "okay";
+};
+
+/* USB2 repeater; Type-C roles and the SuperSpeed PHY are wired below. */
+&pm8550b_eusb2_repeater {
+	vdd18-supply = <&vreg_l15b>;
+	vdd3-supply = <&vreg_l5b>;
+	status = "okay";
+};
+&usb_1_hsphy {
+	vdd-supply = <&vreg_l1i>;
+	vdda12-supply = <&vreg_l3i>;
+	phys = <&pm8550b_eusb2_repeater>;
+	status = "okay";
+};
+#include "otg-usb3.dtsi"
+
+&xo_board { clock-frequency = <76800000>; };
+
+/* Native display path; no bootloader framebuffer address is assumed. */
+&mdss {
+	status = "okay";
+};
+
+&mdss_dsi0 {
+	vdda-supply = <&vreg_l3i>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "xiaomi,n3-42-0d-0a";
+		reg = <0>;
+		reset-gpios = <&tlmm 133 GPIO_ACTIVE_LOW>;
+		vddio-supply = <&vreg_l2g>;
+		vci-supply = <&vreg_l13b>;
+		vddd-supply = <&panel_vddd>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&panel_reset_default>, <&panel_te_default>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&mdss_dsi0_out>;
+			};
+		};
+	};
+};
+
+&mdss_dsi0_out {
+	remote-endpoint = <&panel_in>;
+	data-lanes = <0 1 2 3>;
+};
+
+&mdss_dsi0_phy {
+	vdds-supply = <&vreg_l1i>;
+	status = "okay";
+};
+
+&tlmm {
+	/* Match qcom,gpios-reserved in Houji's stock firmware. */
+	gpio-reserved-ranges = <8 4>, <36 4>, <42 1>, <74 1>;
+
+	panel_reset_default: panel-reset-default-state {
+		pins = "gpio133";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	panel_te_default: panel-te-default-state {
+		pins = "gpio86";
+		function = "mdp_vsync";
+		drive-strength = <2>;
+		bias-pull-down;
+	};
+
+	panel_vddd_default: panel-vddd-default-state {
+		pins = "gpio28";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+};
+
+/* Kiwi v2 (WCN7850), PCIe controller 0 and vendor GPIO wiring. */
+&pcie0 {
+	wake-gpios = <&tlmm 96 GPIO_ACTIVE_HIGH>;
+	perst-gpios = <&tlmm 94 GPIO_ACTIVE_LOW>;
+
+	pinctrl-0 = <&pcie0_default_state>;
+	pinctrl-names = "default";
+
+	status = "okay";
+};
+
+&pcieport0 {
+	wifi@0 {
+		compatible = "pci17cb,1107";
+		reg = <0x10000 0x0 0x0 0x0 0x0>;
+
+		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
+		vddaon-supply = <&vreg_pmu_aon_0p59>;
+		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+		vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
+		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+		vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
+		vddpcie0p9-supply = <&vreg_pmu_pcie_0p9>;
+		vddpcie1p8-supply = <&vreg_pmu_pcie_1p8>;
+	};
+};
+
+&pcie0_phy {
+	vdda-phy-supply = <&vreg_l1i>;
+	vdda-pll-supply = <&vreg_l3i>;
+
+	status = "okay";
+};
+
+
+&tlmm {
+	wlan_en: wlan-en-state {
+		pins = "gpio16";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-pull-down;
+	};
+	bt_default: bt-default-state {
+		pins = "gpio17";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-disable;
+	};
+};
+
+/* Drivers load firmware from this handset's stock modem partition. */
+&remoteproc_adsp { status = "okay"; };
+&gpu { status = "okay"; };
+&gpu_zap_shader { firmware-name = "qcom/sm8650/xiaomi/houji/gen70900_zap.mbn"; };
+#include "touch.dtsi"
+#include "audio.dtsi"

@@ -1,0 +1,3 @@
+# Patch context and hash-verified stock firmware must keep their original bytes.
+*.patch -text -whitespace
+ports/houji/firmware/** -text -whitespace

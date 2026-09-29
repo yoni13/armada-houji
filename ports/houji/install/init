@@ -1,0 +1,61 @@
+#!/bin/sh
+# Stock ABL -> Linux -> internal Armada root. No USB console or timed reboot.
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+/bin/busybox --install -s /bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+exec </dev/console >/dev/console 2>&1
+mount -t tmpfs -o mode=0755 tmpfs /run
+mkdir -p /run/houji/data /run/houji/lower /newroot /dev/pts
+mount -t devpts devpts /dev/pts
+fail() { echo "Armada startup failed: $*"; exec /bin/sh; }
+[ "$(tr -d '\000' </sys/firmware/devicetree/base/model)" = 'Xiaomi 14' ] || fail 'wrong device'
+partition() {
+    for part in /sys/class/block/*; do
+        [ -f "$part/uevent" ] || continue
+        if grep -qx "PARTNAME=$1" "$part/uevent"; then echo "/dev/${part##*/}"; return 0; fi
+    done
+    return 1
+}
+for attempt in $(seq 1 30); do
+    rootdev=$(partition userdata) && break
+    sleep 1
+done
+[ -b "$rootdev" ] || fail 'userdata unavailable'
+# A marker plus build identity prevents an Android filesystem being used as root.
+mount -t ext4 -o rw,noatime "$rootdev" /run/houji/data || fail 'mount Armada userdata'
+base=/run/houji/data/@LAYOUT@
+[ -f "$base/build-id" ] || fail 'Armada layout missing'
+[ "$(cat "$base/build-id")" = '@BUILD_ID@' ] || fail 'kernel and root image do not match'
+[ "$(stat -c %s "$base/rootfs.erofs")" = '@ROOT_SIZE@' ] || fail 'root image size'
+mount -t erofs -o loop,ro "$base/rootfs.erofs" /run/houji/lower || fail 'mount Armada root image'
+grep -q '^ID=armada$' /run/houji/lower/usr/lib/os-release || fail 'not Armada'
+mount -t overlay overlay -o lowerdir=/run/houji/lower,upperdir="$base/upper",workdir="$base/work" /newroot || fail 'root overlay'
+# A preserving update can reuse the existing home without old system overrides.
+if [ -f "$base/shared-home" ]; then
+    home=$(realpath "/run/houji/data/$(cat "$base/shared-home")")
+    case "$home" in /run/houji/data/*) ;; *) fail 'invalid shared home';; esac
+    mkdir -p /newroot/var/home
+    mkdir -p "$base/home-work"
+    mount -t overlay overlay -o lowerdir=/run/houji/lower/var/home,upperdir="$home",workdir="$base/home-work" /newroot/var/home || fail 'persistent home'
+fi
+printf '%s\n' "$rootdev" >/run/houji/root-device
+# The DSP firmware and factory calibration belong to this handset. Never replay
+# the ext4 journal or write to these stock partitions.
+mkdir -p /run/houji/firmware /run/houji/dsp /run/houji/persist /run/houji/qcom/sensors
+mount -t vfat -o ro "$(partition modem_b)" /run/houji/firmware || fail 'ADSP firmware'
+mount -t ext4 -o ro,noload "$(partition dsp_b)" /run/houji/dsp || fail 'DSP libraries'
+mount -t ext4 -o ro,noload "$(partition persist)" /run/houji/persist || fail 'factory calibration'
+echo /run/houji/firmware/image >/sys/module/firmware_class/parameters/path
+cp -r /newroot/usr/lib/armada/houji/sensors/config /run/houji/qcom/sensors/
+cp /newroot/usr/lib/armada/houji/sensors/sns_reg.conf /run/houji/qcom/sensors/
+cp -r /run/houji/persist/sensors/registry/registry /run/houji/qcom/sensors/ || fail 'sensor registry'
+for name in sns_reg_version parsed_file_list.csv; do
+    cp "/run/houji/persist/sensors/registry/$name" /run/houji/qcom/sensors/ || fail 'sensor registry metadata'
+done
+ln -s /run/houji/dsp /run/houji/qcom/dsp
+ln -s /sys/devices/soc0 /run/houji/qcom/socinfo
+mkdir -p /newroot/proc /newroot/sys /newroot/dev /newroot/run
+for name in proc sys dev run; do mount --move "/$name" "/newroot/$name" || fail "move $name"; done
+exec switch_root -c /dev/console /newroot /usr/lib/systemd/systemd

@@ -1,0 +1,76 @@
+{
+  "sha256": "a13aa43685901df51d86adc04ede25cbdc2ab03d501e0c0b5157775ba7b1ea40",
+  "images": {
+    "NON-HLOS.bin": {
+      "size": 131624960,
+      "sha256": "5d23fdb7267891538e2a9a427e1c2f4f1a7d3937b368090e11f50c131c714b47"
+    },
+    "boot.img": {
+      "size": 100663296,
+      "sha256": "5d8798fd4cae988be83cb471dd9622c88fe35e35f77fc09147a832ad3d25c5e2",
+      "kind": "boot",
+      "header_version": 4,
+      "kernel_size": 35432960,
+      "ramdisk_size": 0,
+      "os_version": 0,
+      "header_size": 1584,
+      "page_size": 4096,
+      "cmdline": ""
+    },
+    "dtbo.img": {
+      "size": 20971520,
+      "sha256": "a66c08c5d786115febb0e42fc6b2217403a99cb246a8cfc6e1582952f2a9b791"
+    },
+    "init_boot.img": {
+      "size": 8388608,
+      "sha256": "bb9be11b9baec214c0cbfc3a38b743c3db42810832a870c750ba5ed37639921b",
+      "kind": "boot",
+      "header_version": 4,
+      "kernel_size": 0,
+      "ramdisk_size": 2308999,
+      "os_version": 0,
+      "header_size": 1584,
+      "page_size": 4096,
+      "cmdline": ""
+    },
+    "super.img": {
+      "size": 7816300408,
+      "sha256": "3ea8c17a6b5954efd21f6132be1a7a3acf610fb9a54a9edf948feab6eef67cb4"
+    },
+    "vbmeta.img": {
+      "size": 8192,
+      "sha256": "71489addd8beb5e031cc6fccc51e86140b54a1a40400b4e0b448566ba19051ed"
+    },
+    "vbmeta_system.img": {
+      "size": 4096,
+      "sha256": "372f26ec53e82d190663e5e5f4469ec28b8967002c27e0cd1737b5ef506b1ef9"
+    },
+    "vendor_boot.img": {
+      "size": 100663296,
+      "sha256": "083e50f1b8742711ab586a9fd8b0764cac7ae15d8e9c1a57186415d3698c837f",
+      "kind": "vendor_boot",
+      "header_version": 4,
+      "page_size": 4096,
+      "kernel_addr": 32768,
+      "ramdisk_addr": 16777216,
+      "ramdisk_size": 32934872,
+      "dtb_size": 2364928,
+      "dtb_addr": 32505856,
+      "tags_addr": 256,
+      "header_size": 2128,
+      "table_size": 108,
+      "table_entries": 1,
+      "table_entry_size": 108,
+      "bootconfig_size": 205,
+      "cmdline": "video=vfb:640x400,bpp=32,memsize=3072000 swinfo.fingerprint=houji:14/OS3.0.303.0.WNCTWXM:user mtdoops.fingerprint=houji:14/OS3.0.303.0.WNCTWXM:user bootconfig"
+    }
+  },
+  "dtb_count": 4,
+  "dtbs": {
+    "stock-0.dtb": "3090fc7c5890a1e446a8a3af80de07d6b91b153e81c1b8f4dcf5b033b44d30fd",
+    "stock-1.dtb": "0486c9b6458d3819320f7920b76310d44772d5718ce5957d7dd91be79123b3e7",
+    "stock-2.dtb": "f3a68b78d31893f46f4847f967e515cbab9a866a65b37fe3f8f57b215cc027db",
+    "stock-3.dtb": "4fa59d39eae5bc1bb5892fc83137e5e06a1ccc326c22907e2a0e72a29d9a6c5a"
+  },
+  "overlay_sha256": "9cae97b87cb369f414693f060478d442bdc5959c7be53d6049a78f90e722c139"
+}

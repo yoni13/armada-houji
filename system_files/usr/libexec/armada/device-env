@@ -10,6 +10,7 @@ if [[ -z "$model" ]]; then
     model=$(tr -d '\0' </sys/firmware/devicetree/base/model 2>/dev/null || true)
 fi
 case "$model" in
+    "Xiaomi 14") profile=xiaomi-14 ;;
     "AYANEO Pocket EVO") profile=ayaneo-pocket-evo ;;
     "AYN Odin 2") profile=ayn-odin-2 ;;
     "AYN Odin 2 Mini") profile=ayn-odin-2-mini ;;
@@ -107,8 +108,11 @@ vars=(
     ARMADA_DEVICE_ID
     ARMADA_DEVICE_NAME
     ARMADA_SOC_CLASS
+    ARMADA_USB_ROLE_POLICY
     ARMADA_PROTON_DEFAULTS
     ARMADA_SUSPEND_MODE
+    ARMADA_FAKE_SUSPEND_DISPLAY_MODE
+    ARMADA_FAKE_SUSPEND_USB_RUNTIME_PM
     ARMADA_SYNC_SUSPEND
     ARMADA_PRIMARY_CONNECTOR
     ARMADA_PRIMARY_BACKLIGHT

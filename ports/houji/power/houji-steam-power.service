@@ -1,0 +1,22 @@
+[Unit]
+Description=Houji UPower telemetry for Steam Game Mode
+Wants=upower.service
+After=upower.service
+Before=display-manager.service
+ConditionPathExists=/sys/class/power_supply/qcom-battmgr-bat
+
+[Service]
+Type=notify
+ExecStart=/usr/libexec/armada/houji-steam-power
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=45
+RuntimeDirectory=vpower
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=restart
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

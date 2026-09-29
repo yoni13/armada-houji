@@ -1,0 +1,59 @@
+From: Armada Houji port <armada@localhost>
+Subject: [PATCH] drm: match Houji panel rendering to the RGB DSC stream
+
+The vendor panel table bypasses DDIC subpixel rendering for a source-SPR,
+native-422 stream. This port emits full RGB DSC, so retain the DDIC reset
+rendering settings instead of programming that bypass and packed-input map.
+The command table remains intact as vendor provenance; skip its five
+source-SPR configuration writes only, retaining page and offset commands.
+
+Match the stock SM8650 >8-bpc DSC ICH precision setting. Keep the capability
+check board-specific here to preserve the BTF layout used by the tested
+out-of-tree touch modules.
+
+Validated on houji with primary and mixed color charts viewed through the
+Pixel 7a camera. This corrects the gross hue shift; it is not a calibrated
+color-accuracy measurement.
+
+--- a/drivers/gpu/drm/panel/panel-xiaomi-n3.c
++++ b/drivers/gpu/drm/panel/panel-xiaomi-n3.c
+@@ -335,6 +335,16 @@
+ 
+ 		if (cmd->len == 3 && data[0] == 0xf0 && data[1] == 0xaa)
+ 			page = data[2];
++		/* RGB stream diagnostic: retain the reset DDIC renderer instead
++		 * of selecting the vendor source-SPR packed input path.
++		 */
++		if ((page == 0x10 && cmd->len == 14 && data[0] == 0xbd) ||
++		    (page == 0x17 && (data[0] == 0xb0 || data[0] == 0xc0 ||
++		                     data[0] == 0xbf)) ||
++		    (page == 0x10 && cmd->len == 2 && data[0] == 0xb6 &&
++		     data[1] == 0x00))
++			continue;
++
+ 		if (gamma && page == 0x13 && data[0] >= 0xb0 && data[0] <= 0xbb) {
+ 			unsigned int reg = data[0] - 0xb0;
+ 			unsigned int len = reg % 4 == 3 ? 3 : 17;
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dsc_1_2.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dsc_1_2.c
+@@ -3,6 +3,8 @@
+  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
+  * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved
+  */
++
++#include <linux/of.h>
+ 
+ #include <drm/drm_managed.h>
+ 
+@@ -125,6 +127,11 @@
+ 
+ 	data |= (_dsc_calc_output_buf_max_addr(hw_dsc, num_active_slice_per_enc) << 18);
+ 
++	/* Match the stock SM8650 DSC full-precision ICH mode for RGB10. */
++	if (of_machine_is_compatible("xiaomi,houji") &&
++	    dsc->bits_per_component > 8)
++		data |= BIT(12);
++
+ 	DPU_REG_WRITE(hw, sblk->enc.base + ENC_DF_CTRL, data);
+ 
+ 	data = (dsc->dsc_version_minor & 0xf) << 28;

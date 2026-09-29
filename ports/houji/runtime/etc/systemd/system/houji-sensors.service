@@ -1,0 +1,11 @@
+[Unit]
+Description=Houji sensor DSP file service
+After=systemd-udevd.service
+Before=iio-sensor-proxy.service
+[Service]
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do test ! -e /dev/fastrpc-adsp || exit 0; sleep 1; done; exit 1'
+ExecStart=/usr/bin/stdbuf -oL -eL /usr/bin/hexagonrpcd -f /dev/fastrpc-adsp -d adsp -s -R /run/houji/qcom
+Restart=on-failure
+RestartSec=3
+[Install]
+WantedBy=multi-user.target

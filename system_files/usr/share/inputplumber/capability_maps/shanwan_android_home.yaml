@@ -1,0 +1,15 @@
+version: 2
+kind: CapabilityMap
+name: SHANWAN Android Home button
+id: shanwan_android_home
+mapping:
+  - name: Home as Guide
+    source_events:
+      - evdev:
+          event_type: KEY
+          event_code: KEY_HOMEPAGE
+          value_type: button
+    target_event:
+      gamepad:
+        button: Guide
+filtered_events: []

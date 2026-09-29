@@ -1,0 +1,551 @@
+--- a/include/dt-bindings/sound/qcom,q6dsp-lpass-ports.h
++++ b/include/dt-bindings/sound/qcom,q6dsp-lpass-ports.h
+@@ -243,5 +243,6 @@
+ #define LPASS_CLK_ATTRIBUTE_COUPLE_NO		0x1
+ #define LPASS_CLK_ATTRIBUTE_COUPLE_DIVIDEND	0x2
+ #define LPASS_CLK_ATTRIBUTE_COUPLE_DIVISOR	0x3
++#define LPASS_CLK_ATTRIBUTE_INVERT_COUPLE_NO	0x4
+ 
+ #endif /* __DT_BINDINGS_Q6_AUDIO_PORTS_H__ */
+--- a/sound/soc/codecs/wcd939x.c
++++ b/sound/soc/codecs/wcd939x.c
+@@ -1229,41 +1229,34 @@
+ {
+ 	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+ 	struct wcd939x_priv *wcd939x = snd_soc_component_get_drvdata(component);
+-	int bank;
+-	int rate;
+-
+-	bank = sdw_slave_get_current_bank(wcd939x->sdw_priv[AIF1_CAP]->sdev);
+-
++	int bank, mode = 0, rate, adc;
++
++	if (!strnstr(w->name, "ADC", sizeof("ADC")))
++		return 0;
++
++	/* Mixers power up before ADC widgets in DAPM's sequence. Track the
++	 * active ADC here so the first stream does not select the idle clock.
++	 */
+ 	switch (event) {
+ 	case SND_SOC_DAPM_PRE_PMU:
+-		if (strnstr(w->name, "ADC", sizeof("ADC"))) {
+-			int mode = 0;
+-
+-			if (test_bit(WCD_ADC1, &wcd939x->status_mask))
+-				mode |= tx_mode_bit[wcd939x->tx_mode[WCD_ADC1]];
+-			if (test_bit(WCD_ADC2, &wcd939x->status_mask))
+-				mode |= tx_mode_bit[wcd939x->tx_mode[WCD_ADC2]];
+-			if (test_bit(WCD_ADC3, &wcd939x->status_mask))
+-				mode |= tx_mode_bit[wcd939x->tx_mode[WCD_ADC3]];
+-			if (test_bit(WCD_ADC4, &wcd939x->status_mask))
+-				mode |= tx_mode_bit[wcd939x->tx_mode[WCD_ADC4]];
+-
+-			if (mode)
+-				rate = wcd939x_get_clk_rate(ffs(mode) - 1);
+-			else
+-				rate = wcd939x_get_clk_rate(ADC_MODE_INVALID);
+-			wcd939x_set_swr_clk_rate(component, rate, bank);
+-			wcd939x_set_swr_clk_rate(component, rate, !bank);
+-		}
++		set_bit(w->shift, &wcd939x->status_mask);
+ 		break;
+ 	case SND_SOC_DAPM_POST_PMD:
+-		if (strnstr(w->name, "ADC", sizeof("ADC"))) {
+-			rate = wcd939x_get_clk_rate(ADC_MODE_INVALID);
+-			wcd939x_set_swr_clk_rate(component, rate, !bank);
+-			wcd939x_set_swr_clk_rate(component, rate, bank);
+-		}
+-		break;
+-	}
++		clear_bit(w->shift, &wcd939x->status_mask);
++		break;
++	default:
++		return 0;
++	}
++
++	for (adc = WCD_ADC1; adc <= WCD_ADC4; adc++)
++		if (test_bit(adc, &wcd939x->status_mask))
++			mode |= tx_mode_bit[wcd939x->tx_mode[adc]];
++
++	/* Mode values start at one; ffs() already uses that numbering. */
++	rate = wcd939x_get_clk_rate(mode ? ffs(mode) : ADC_MODE_INVALID);
++	bank = sdw_slave_get_current_bank(wcd939x->sdw_priv[AIF1_CAP]->sdev);
++	wcd939x_set_swr_clk_rate(component, rate, bank);
++	wcd939x_set_swr_clk_rate(component, rate, !bank);
+ 
+ 	return 0;
+ }
+@@ -1305,7 +1298,6 @@
+ 				    struct snd_kcontrol *kcontrol, int event)
+ {
+ 	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+-	struct wcd939x_priv *wcd939x = snd_soc_component_get_drvdata(component);
+ 
+ 	switch (event) {
+ 	case SND_SOC_DAPM_PRE_PMU:
+@@ -1314,7 +1306,6 @@
+ 		snd_soc_component_write_field(component, WCD939X_DIGITAL_CDC_ANA_CLK_CTL,
+ 					      WCD939X_CDC_ANA_CLK_CTL_ANA_TX_DIV2_CLK_EN,
+ 					      true);
+-		set_bit(w->shift, &wcd939x->status_mask);
+ 		break;
+ 	case SND_SOC_DAPM_POST_PMD:
+ 		snd_soc_component_write_field(component, WCD939X_DIGITAL_CDC_ANA_CLK_CTL,
+@@ -1323,7 +1314,6 @@
+ 		snd_soc_component_write_field(component, WCD939X_DIGITAL_CDC_ANA_CLK_CTL,
+ 					      WCD939X_CDC_ANA_CLK_CTL_ANA_TX_CLK_EN,
+ 					      false);
+-		clear_bit(w->shift, &wcd939x->status_mask);
+ 		break;
+ 	}
+ 
+@@ -2053,7 +2043,9 @@
+ 	}
+ 	portidx = wcd->ch_info[ch_id].port_num;
+ 
+-	ucontrol->value.integer.value[0] = wcd->port_enable[portidx] ? 1 : 0;
++	/* Several ADC switches share a port; report the selected channel. */
++	ucontrol->value.integer.value[0] =
++		!!(wcd->port_config[portidx - 1].ch_mask & wcd->ch_info[ch_id].ch_mask);
+ 
+ 	return 0;
+ }
+@@ -2934,13 +2926,13 @@
+ 	SND_SOC_DAPM_MIXER_E("ADC1_MIXER", SND_SOC_NOPM, 0, 0,
+ 			     adc1_switch, ARRAY_SIZE(adc1_switch), wcd939x_tx_swr_ctrl,
+ 			     SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+-	SND_SOC_DAPM_MIXER_E("ADC2_MIXER", SND_SOC_NOPM, 0, 0,
++	SND_SOC_DAPM_MIXER_E("ADC2_MIXER", SND_SOC_NOPM, 1, 0,
+ 			     adc2_switch, ARRAY_SIZE(adc2_switch), wcd939x_tx_swr_ctrl,
+ 			     SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+-	SND_SOC_DAPM_MIXER_E("ADC3_MIXER", SND_SOC_NOPM, 0, 0,
++	SND_SOC_DAPM_MIXER_E("ADC3_MIXER", SND_SOC_NOPM, 2, 0,
+ 			     adc3_switch, ARRAY_SIZE(adc3_switch), wcd939x_tx_swr_ctrl,
+ 			     SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+-	SND_SOC_DAPM_MIXER_E("ADC4_MIXER", SND_SOC_NOPM, 0, 0,
++	SND_SOC_DAPM_MIXER_E("ADC4_MIXER", SND_SOC_NOPM, 3, 0,
+ 			     adc4_switch, ARRAY_SIZE(adc4_switch), wcd939x_tx_swr_ctrl,
+ 			     SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+ 	SND_SOC_DAPM_MIXER_E("DMIC1_MIXER", SND_SOC_NOPM, 0, 0,
+--- a/sound/soc/qcom/qdsp6/audioreach.c
++++ b/sound/soc/qcom/qdsp6/audioreach.c
+@@ -145,6 +145,25 @@
+ 				ch * sizeof(uint8_t), 8)
+ 
+ #define APM_PCM_OUT_FMT_CFG_PSIZE(p, n) ALIGN(struct_size(p, channel_mapping, n), 4)
++
++/* Qualcomm pcm_tdm_api.h: PARAM_ID_TDM_INTF_CFG (28-byte payload). */
++#define PARAM_ID_TDM_INTF_CFG 0x0800101B
++#define PARAM_ID_TDM_LANE_CFG 0x0800106A
++#define PARAM_ID_HW_INTF_CLK_CFG 0x0800113C
++struct apm_tdm_module_intf_cfg {
++	struct apm_module_param_data param_data;
++	u32 lpaif_type;
++	u32 intf_idx;
++	u16 sync_src;
++	u16 data_out_enable;
++	u32 slot_mask;
++	u16 slots_per_frame;
++	u16 slot_width;
++	u16 sync_mode;
++	u16 invert_sync;
++	u16 sync_data_delay;
++	u16 reserved;
++} __packed;
+ 
+ struct apm_i2s_module_intf_cfg {
+ 	struct apm_module_param_data param_data;
+@@ -1061,6 +1080,104 @@
+ 	return q6apm_send_cmd_sync(graph->apm, pkt, 0);
+ }
+ 
++static int audioreach_tdm_set_media_format(struct q6apm_graph *graph,
++					 const struct audioreach_module *module,
++					 const struct audioreach_module_config *cfg)
++{
++	struct apm_tdm_module_intf_cfg *intf;
++	struct apm_module_hw_ep_mf_cfg *hw;
++	struct apm_module_frame_size_factor_cfg *fs;
++	struct apm_module_param_data *param;
++	u32 *clock_cfg;
++	u16 *lane_cfg;
++	int intf_size = ALIGN(sizeof(*intf), 8);
++	int lane_size = ALIGN(APM_MODULE_PARAM_DATA_SIZE + 4, 8);
++	int clock_size = APM_MODULE_PARAM_DATA_SIZE + 16;
++	int size = intf_size + APM_HW_EP_CFG_PSIZE + APM_FS_CFG_PSIZE + lane_size + clock_size;
++	u16 sync_src, sync_mode, delay, invert;
++	u32 clock_attr = 0;
++	void *p;
++
++	if (!cfg->tdm_slots || !cfg->tdm_slot_mask ||
++	    hweight32(cfg->tdm_slot_mask) != cfg->num_channels ||
++	    cfg->bit_width > cfg->tdm_slot_width || module->sd_line_idx >= 16)
++		return -EINVAL;
++
++	switch (cfg->fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
++	case SND_SOC_DAIFMT_BP_FP: sync_src = 1; break;
++	case SND_SOC_DAIFMT_BC_FC: sync_src = 0; break;
++	default: return -EINVAL;
++	}
++	switch (cfg->fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
++	case SND_SOC_DAIFMT_I2S: sync_mode = 1; delay = 1; break;
++	case SND_SOC_DAIFMT_DSP_A: sync_mode = 0; delay = 1; break;
++	case SND_SOC_DAIFMT_DSP_B: sync_mode = 0; delay = 0; break;
++	default: return -EINVAL;
++	}
++	switch (cfg->fmt & SND_SOC_DAIFMT_INV_MASK) {
++	case SND_SOC_DAIFMT_NB_NF: invert = 0; break;
++	case SND_SOC_DAIFMT_NB_IF: invert = 1; break;
++	case SND_SOC_DAIFMT_IB_NF: invert = 0; clock_attr = 4; break;
++	case SND_SOC_DAIFMT_IB_IF: invert = 1; clock_attr = 4; break;
++	default: return -EINVAL;
++	}
++
++	struct gpr_pkt *pkt __free(kfree) = audioreach_alloc_apm_cmd_pkt(size, APM_CMD_SET_CFG, 0);
++	if (IS_ERR(pkt))
++		return PTR_ERR(pkt);
++	p = (void *)pkt + GPR_HDR_SIZE + APM_CMD_HDR_SIZE;
++	intf = p;
++	intf->param_data.module_instance_id = module->instance_id;
++	intf->param_data.param_id = PARAM_ID_TDM_INTF_CFG;
++	intf->param_data.param_size = sizeof(*intf) - APM_MODULE_PARAM_DATA_SIZE;
++	intf->lpaif_type = module->hw_interface_type;
++	intf->intf_idx = module->hw_interface_idx;
++	intf->sync_src = sync_src;
++	intf->data_out_enable = 1;
++	intf->slot_mask = cfg->tdm_slot_mask;
++	intf->slots_per_frame = cfg->tdm_slots;
++	intf->slot_width = cfg->tdm_slot_width;
++	intf->sync_mode = sync_mode;
++	intf->invert_sync = invert;
++	intf->sync_data_delay = delay;
++
++	p += intf_size;
++	hw = p;
++	hw->param_data.module_instance_id = module->instance_id;
++	hw->param_data.param_id = PARAM_ID_HW_EP_MF_CFG;
++	hw->param_data.param_size = sizeof(*hw) - APM_MODULE_PARAM_DATA_SIZE;
++	hw->mf.sample_rate = cfg->sample_rate;
++	hw->mf.bit_width = cfg->bit_width;
++	hw->mf.num_channels = cfg->num_channels;
++	hw->mf.data_format = module->data_format;
++
++	p += APM_HW_EP_CFG_PSIZE;
++	fs = p;
++	fs->param_data.module_instance_id = module->instance_id;
++	fs->param_data.param_id = PARAM_ID_HW_EP_FRAME_SIZE_FACTOR;
++	fs->param_data.param_size = sizeof(fs->frame_size_factor);
++	fs->frame_size_factor = 1;
++
++	p += APM_FS_CFG_PSIZE;
++	param = p;
++	param->module_instance_id = module->instance_id;
++	param->param_id = PARAM_ID_TDM_LANE_CFG;
++	param->param_size = 4;
++	lane_cfg = p + APM_MODULE_PARAM_DATA_SIZE;
++	lane_cfg[0] = BIT(module->sd_line_idx);
++
++	p += lane_size;
++	param = p;
++	param->module_instance_id = module->instance_id;
++	param->param_id = PARAM_ID_HW_INTF_CLK_CFG;
++	param->param_size = 16;
++	clock_cfg = p + APM_MODULE_PARAM_DATA_SIZE;
++	/* ID/frequency/root zero: derive the interface's clock automatically. */
++	clock_cfg[2] = clock_attr;
++
++	return q6apm_send_cmd_sync(graph->apm, pkt, 0);
++}
++
+ static int audioreach_logging_set_media_format(struct q6apm_graph *graph,
+ 					       const struct audioreach_module *module)
+ {
+@@ -1409,6 +1526,9 @@
+ 	case  MODULE_ID_SMECNS_V2:
+ 		rc = audioreach_set_module_config(graph, module, cfg);
+ 		break;
++	case MODULE_ID_TDM_SINK:
++	case MODULE_ID_TDM_SOURCE:
++		return audioreach_tdm_set_media_format(graph, module, cfg);
+ 	case MODULE_ID_I2S_SOURCE:
+ 	case MODULE_ID_I2S_SINK:
+ 		rc = audioreach_i2s_set_media_format(graph, module, cfg);
+--- a/sound/soc/qcom/qdsp6/audioreach.h
++++ b/sound/soc/qcom/qdsp6/audioreach.h
+@@ -22,6 +22,8 @@
+ #define MODULE_ID_PLACEHOLDER_DECODER	0x07001009
+ #define MODULE_ID_I2S_SINK		0x0700100A
+ #define MODULE_ID_I2S_SOURCE		0x0700100B
++#define MODULE_ID_TDM_SINK		0x0700100E
++#define MODULE_ID_TDM_SOURCE		0x0700100F
+ #define MODULE_ID_SAL			0x07001010
+ #define MODULE_ID_MFC			0x07001015
+ #define MODULE_ID_DATA_LOGGING		0x0700101A
+@@ -906,6 +908,9 @@
+ 	u16	dp_idx;
+ 	u32	channel_allocation;
+ 	u32	sd_line_mask;
++	u32	tdm_slot_mask;
++	u16	tdm_slots;
++	u16	tdm_slot_width;
+ 	int	fmt;
+ 	struct snd_codec codec;
+ 	u8 channel_map[AR_PCM_MAX_NUM_CHANNEL];
+--- a/sound/soc/qcom/qdsp6/q6apm-dai.c
++++ b/sound/soc/qcom/qdsp6/q6apm-dai.c
+@@ -93,11 +93,12 @@
+ 				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME |
+ 				 SNDRV_PCM_INFO_NO_REWINDS | SNDRV_PCM_INFO_SYNC_APPLPTR |
+ 				 SNDRV_PCM_INFO_BATCH),
+-	.formats =              (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_LE),
++	.formats =              (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_LE |
++				 SNDRV_PCM_FMTBIT_S32_LE),
+ 	.rates =                SNDRV_PCM_RATE_8000_48000,
+ 	.rate_min =             8000,
+ 	.rate_max =             48000,
+-	.channels_min =         2,
++	.channels_min =         1,
+ 	.channels_max =         4,
+ 	.buffer_bytes_max =     CAPTURE_MAX_NUM_PERIODS * CAPTURE_MAX_PERIOD_SIZE,
+ 	.period_bytes_min =	CAPTURE_MIN_PERIOD_SIZE,
+@@ -113,7 +114,8 @@
+ 				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME |
+ 				 SNDRV_PCM_INFO_NO_REWINDS | SNDRV_PCM_INFO_SYNC_APPLPTR |
+ 				 SNDRV_PCM_INFO_BATCH),
+-	.formats =              (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_LE),
++	.formats =              (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_LE |
++				 SNDRV_PCM_FMTBIT_S32_LE),
+ 	.rates =                SNDRV_PCM_RATE_8000_192000,
+ 	.rate_min =             8000,
+ 	.rate_max =             192000,
+@@ -522,6 +524,9 @@
+ 	case SNDRV_PCM_FORMAT_S24_LE:
+ 		prtd->bits_per_sample = 24;
+ 		break;
++	case SNDRV_PCM_FORMAT_S32_LE:
++		prtd->bits_per_sample = 32;
++		break;
+ 	default:
+ 		return -EINVAL;
+ 	}
+--- a/sound/soc/qcom/qdsp6/q6apm-lpass-dais.c
++++ b/sound/soc/qcom/qdsp6/q6apm-lpass-dais.c
+@@ -278,6 +278,34 @@
+ 	return 0;
+ }
+ 
++static int q6tdm_set_tdm_slot(struct snd_soc_dai *dai, unsigned int tx_mask,
++			    unsigned int rx_mask, int slots, int slot_width)
++{
++	struct q6apm_lpass_dai_data *data = dev_get_drvdata(dai->dev);
++	struct audioreach_module_config *cfg = &data->module_config[dai->id];
++	u32 mask = dai->id & 1 ? tx_mask : rx_mask;
++
++	if (slots < 1 || slots > 32 ||
++	    (slot_width != 16 && slot_width != 32) || !mask ||
++	    (slots < 32 && mask >> slots))
++		return -EINVAL;
++
++	cfg->tdm_slots = slots;
++	cfg->tdm_slot_width = slot_width;
++	cfg->tdm_slot_mask = mask;
++	return 0;
++}
++
++static const struct snd_soc_dai_ops q6tdm_ops = {
++	.prepare = q6apm_lpass_dai_prepare,
++	.startup = q6apm_lpass_dai_startup,
++	.shutdown = q6apm_lpass_dai_shutdown,
++	.hw_params = q6dma_hw_params,
++	.set_fmt = q6i2s_set_fmt,
++	.set_tdm_slot = q6tdm_set_tdm_slot,
++	.trigger = q6apm_lpass_dai_trigger,
++};
++
+ static const struct snd_soc_dai_ops q6dma_ops = {
+ 	.prepare	= q6apm_lpass_dai_prepare,
+ 	.startup	= q6apm_lpass_dai_startup,
+@@ -331,6 +359,7 @@
+ 	memset(&cfg, 0, sizeof(cfg));
+ 	cfg.q6i2s_ops = &q6i2s_ops;
+ 	cfg.q6dma_ops = &q6dma_ops;
++	cfg.q6tdm_ops = &q6tdm_ops;
+ 	cfg.q6hdmi_ops = &q6hdmi_ops;
+ 	dais = q6dsp_audio_ports_set_config(dev, &cfg, &num_dais);
+ 
+--- a/sound/soc/qcom/qdsp6/q6dsp-lpass-clocks.c
++++ b/sound/soc/qcom/qdsp6/q6dsp-lpass-clocks.c
+@@ -113,7 +113,8 @@
+ 	unsigned int idx = clkspec->args[0];
+ 	unsigned int attr = clkspec->args[1];
+ 
+-	if (idx >= Q6DSP_MAX_CLK_ID || attr > LPASS_CLK_ATTRIBUTE_COUPLE_DIVISOR) {
++	if (idx >= Q6DSP_MAX_CLK_ID || attr < LPASS_CLK_ATTRIBUTE_COUPLE_NO ||
++	    attr > LPASS_CLK_ATTRIBUTE_INVERT_COUPLE_NO) {
+ 		dev_err(cc->dev, "Invalid clk specifier (%d, %d)\n", idx, attr);
+ 		return ERR_PTR(-EINVAL);
+ 	}
+--- a/sound/soc/qcom/qdsp6/q6prm-clocks.c
++++ b/sound/soc/qcom/qdsp6/q6prm-clocks.c
+@@ -19,6 +19,7 @@
+ 	}
+ 
+ static const struct q6dsp_clk_init q6prm_clks[] = {
++	Q6PRM_CLK(LPASS_CLK_ID_SEC_TDM_IBIT),
+ 	Q6PRM_CLK(LPASS_CLK_ID_PRI_MI2S_IBIT),
+ 	Q6PRM_CLK(LPASS_CLK_ID_PRI_MI2S_EBIT),
+ 	Q6PRM_CLK(LPASS_CLK_ID_SEC_MI2S_IBIT),
+--- a/sound/soc/qcom/qdsp6/q6prm.h
++++ b/sound/soc/qcom/qdsp6/q6prm.h
+@@ -52,6 +52,9 @@
+ /* Clock ID for QUINARY MI2S OSR CLK  */
+ #define Q6PRM_LPASS_CLK_ID_QUI_MI2S_OSR                         0x116
+ 
++/* TDM internal bit clocks, audio_hw_clk_api.h. */
++#define Q6PRM_LPASS_CLK_ID_SEC_TDM_IBIT 0x202
++
+ #define Q6PRM_LPASS_CLK_ID_WSA_CORE_MCLK			0x305
+ #define Q6PRM_LPASS_CLK_ID_WSA_CORE_NPL_MCLK			0x306
+ 
+--- a/sound/soc/qcom/qdsp6/topology.c
++++ b/sound/soc/qcom/qdsp6/topology.c
+@@ -802,6 +802,8 @@
+ 	case MODULE_ID_DATA_LOGGING:
+ 		audioreach_widget_log_module_load(mod, mod_array);
+ 		break;
++	case MODULE_ID_TDM_SINK:
++	case MODULE_ID_TDM_SOURCE:
+ 	case MODULE_ID_I2S_SINK:
+ 	case MODULE_ID_I2S_SOURCE:
+ 		audioreach_widget_i2s_module_load(mod, mod_array);
+--- a/sound/soc/qcom/sc8280xp.c
++++ b/sound/soc/qcom/sc8280xp.c
+@@ -11,6 +11,7 @@
+ #include <sound/pcm_params.h>
+ #include <linux/soundwire/sdw.h>
+ #include <sound/jack.h>
++#include <sound/cs35l41.h>
+ #include <linux/input-event-codes.h>
+ #include "qdsp6/q6afe.h"
+ #include "qdsp6/q6dsp-common.h"
+@@ -23,6 +24,8 @@
+ 	struct snd_soc_jack jack;
+ 	struct snd_soc_jack dp_jack[8];
+ 	struct clk *i2s_clk;
++	struct clk *tdm_clk;
++	bool houji;
+ 	int mi2s_clk_count;
+ 	bool jack_setup;
+ 	bool wsa2_only;
+@@ -69,7 +72,53 @@
+ 	if (dp_jack)
+ 		return qcom_snd_dp_jack_setup(rtd, dp_jack, dp_pcm_id);
+ 
++	if (data->houji)
++		return 0;
+ 	return qcom_snd_wcd_jack_setup(rtd, &data->jack, &data->jack_setup);
++}
++
++/* Houji: secondary TDM carries four 32-bit slots at 48 kHz.
++ * CS35L41 I2S slots 0/1 select the left/right LRCLK phases. On the TDM
++ * endpoint these begin at physical slots 0/2, so the active mask is 0x5.
++ * A contiguous 0x3 mask leaves the right amplifier silent.
++ */
++static int houji_tdm_startup(struct snd_soc_pcm_runtime *rtd)
++{
++	struct sc8280xp_snd_data *data = snd_soc_card_get_drvdata(rtd->card);
++	struct snd_soc_dai *cpu = snd_soc_rtd_to_cpu(rtd, 0), *codec;
++	unsigned int fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF;
++	unsigned int slots[2];
++	int i, ret;
++
++	ret = snd_soc_dai_set_fmt(cpu, SND_SOC_DAIFMT_I2S |
++				  SND_SOC_DAIFMT_IB_NF | SND_SOC_DAIFMT_BP_FP);
++	if (ret)
++		return ret;
++	ret = snd_soc_dai_set_tdm_slot(cpu, 0, 5, 4, 32);
++	if (ret)
++		return ret;
++	for_each_rtd_codec_dais(rtd, i, codec) {
++		ret = snd_soc_dai_set_fmt(codec, fmt | SND_SOC_DAIFMT_BC_FC);
++		if (ret)
++			return ret;
++		slots[0] = !strcmp(codec->component->name_prefix, "B") ? 1 : 0;
++		slots[1] = !slots[0];
++		ret = snd_soc_dai_set_channel_map(codec, 0, NULL, 2, slots);
++		if (ret)
++			return ret;
++		ret = snd_soc_component_set_sysclk(codec->component,
++					CS35L41_CLKID_SCLK, 0, 6144000, SND_SOC_CLOCK_IN);
++		if (ret)
++			return ret;
++		ret = snd_soc_dai_set_sysclk(codec, CS35L41_CLKID_SCLK,
++					    6144000, SND_SOC_CLOCK_IN);
++		if (ret)
++			return ret;
++	}
++	ret = clk_set_rate(data->tdm_clk, 6144000);
++	if (ret)
++		return ret;
++	return clk_prepare_enable(data->tdm_clk);
+ }
+ 
+ static int sc8280xp_snd_startup(struct snd_pcm_substream *substream)
+@@ -81,6 +130,9 @@
+ 	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+ 	struct snd_soc_dai *codec_dai = snd_soc_rtd_to_codec(rtd, 0);
+ 	int ret;
++
++	if (pdata->houji && cpu_dai->id == SECONDARY_TDM_RX_0)
++		return houji_tdm_startup(rtd);
+ 
+ 	switch (cpu_dai->id) {
+ 	case PRIMARY_MI2S_RX...QUATERNARY_MI2S_TX:
+@@ -122,6 +174,8 @@
+ 		break;
+ 	}
+ 
++	if (pdata->houji && cpu_dai->id == SECONDARY_TDM_RX_0)
++		clk_disable_unprepare(pdata->tdm_clk);
+ 	qcom_snd_sdw_shutdown(substream);
+ }
+ 
+@@ -134,6 +188,16 @@
+ 	struct snd_interval *channels = hw_param_interval(params,
+ 					SNDRV_PCM_HW_PARAM_CHANNELS);
+ 	struct snd_mask *fmt = hw_param_mask(params, SNDRV_PCM_HW_PARAM_FORMAT);
++
++	struct sc8280xp_snd_data *data = snd_soc_card_get_drvdata(rtd->card);
++
++	if (data->houji && cpu_dai->id == SECONDARY_TDM_RX_0) {
++		rate->min = rate->max = 48000;
++		channels->min = channels->max = 2;
++		snd_mask_none(fmt);
++		snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S32_LE);
++		return 0;
++	}
+ 
+ 	rate->min = rate->max = 48000;
+ 	snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S16_LE);
+@@ -252,6 +316,13 @@
+ 	if (IS_ERR(data->i2s_clk))
+ 		return dev_err_probe(dev, PTR_ERR(data->i2s_clk), "unable to get i2s clock\n");
+ 
++	data->houji = of_device_is_compatible(dev->of_node, "xiaomi,houji-sndcard");
++	if (data->houji) {
++		data->tdm_clk = devm_clk_get(dev, "tdm_clk");
++		if (IS_ERR(data->tdm_clk))
++			return dev_err_probe(dev, PTR_ERR(data->tdm_clk), "missing TDM clock\n");
++	}
++
+ 	data->wsa2_only = of_device_is_compatible(dev->of_node,
+ 						  "ayaneo,pocket-s2-sndcard") ||
+ 			  of_device_is_compatible(dev->of_node,
+@@ -262,6 +333,7 @@
+ }
+ 
+ static const struct of_device_id snd_sc8280xp_dt_match[] = {
++	{.compatible = "xiaomi,houji-sndcard", "houji"},
+ 	{.compatible = "ayaneo,pocket-s2-sndcard", "ayaneo-ps2"},
+ 	{.compatible = "konkr,pocket-fit-sndcard", "sm8650"},
+ 	{.compatible = "qcom,eliza-sndcard", "eliza"},

@@ -1,0 +1,56 @@
+// SPDX-License-Identifier: BSD-3-Clause
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/sound/qcom,q6afe.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include "codec.dtsi"
+#include "amplifiers.dtsi"
+
+&{/} {
+	sound {
+		compatible = "xiaomi,houji-sndcard";
+		model = "Xiaomi-14";
+		clocks = <&q6prmcc LPASS_CLK_ID_SEC_TDM_IBIT LPASS_CLK_ATTRIBUTE_INVERT_COUPLE_NO>;
+		clock-names = "tdm_clk";
+		pinctrl-names = "default";
+		pinctrl-0 = <&houji_tdm_active &houji_receiver_speaker>;
+		/* Xiaomi swaps AMIC3/4 and AMIC5 bias assignments vs QRD. */
+		audio-routing = "AMIC1", "MIC BIAS1",
+			"AMIC2", "MIC BIAS2",
+			"AMIC3", "MIC BIAS4",
+			"AMIC4", "MIC BIAS4",
+			"AMIC5", "MIC BIAS3",
+			"TX SWR_INPUT4", "ADC1_OUTPUT",
+			"TX SWR_INPUT5", "ADC2_OUTPUT",
+			"TX SWR_INPUT8", "ADC3_OUTPUT",
+			"TX SWR_INPUT9", "ADC4_OUTPUT";
+		speaker-dai-link {
+			link-name = "CS35L41 Speakers";
+			cpu { sound-dai = <&q6apmbedai SECONDARY_TDM_RX_0>; };
+			codec { sound-dai = <&houji_spk_t 0>, <&houji_spk_b 0>; };
+			platform { sound-dai = <&q6apm>; };
+		};
+		wcd-capture-dai-link {
+			link-name = "WCD Capture";
+			cpu { sound-dai = <&q6apmbedai TX_CODEC_DMA_TX_3>; };
+			/* swr2 has one playback DAI; its first capture DAI is 1. */
+			codec { sound-dai = <&houji_wcd 1>, <&swr2 1>, <&lpass_txmacro 0>; };
+			platform { sound-dai = <&q6apm>; };
+		};
+	};
+};
+
+&tlmm {
+	houji_tdm_active: houji-tdm-active-state {
+		bclk { pins = "gpio121"; function = "i2s1_sck"; drive-strength = <8>; bias-disable; };
+		fs { pins = "gpio123"; function = "i2s1_ws"; drive-strength = <8>; bias-disable; };
+		din { pins = "gpio122"; function = "i2s1_data0"; drive-strength = <8>; bias-disable; };
+		dout { pins = "gpio124"; function = "i2s1_data1"; drive-strength = <8>; bias-disable; };
+	};
+	houji_receiver_speaker: houji-receiver-speaker-state {
+		pins = "gpio70";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+		output-high;
+	};
+};

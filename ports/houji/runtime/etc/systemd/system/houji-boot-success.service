@@ -1,0 +1,8 @@
+[Unit]
+Description=Mark the Armada boot slot successful
+After=multi-user.target display-manager.service houji-stock-touch.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/qbootctl -m b
+[Install]
+WantedBy=graphical.target

@@ -1,0 +1,60 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/* Houji stock audio overlay: WCD939x, GPIO107 and L15B/BOB1/L3C.
+ * Microphone biases are 2.75 V in Xiaomi's audio/xiaomi-sm8650-common.dtsi.
+ * SoundWire port numbering uses the upstream WCD939x binding.
+ */
+&{/} {
+	houji_wcd: audio-codec {
+		compatible = "qcom,wcd9395-codec", "qcom,wcd9390-codec";
+		#sound-dai-cells = <1>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&houji_wcd_reset>;
+		reset-gpios = <&tlmm 107 GPIO_ACTIVE_LOW>;
+		vdd-buck-supply = <&vreg_l15b>;
+		vdd-rxtx-supply = <&vreg_l15b>;
+		vdd-io-supply = <&vreg_l15b>;
+		vdd-px-supply = <&vreg_l3c>;
+		vdd-mic-bias-supply = <&vreg_bob1>;
+		qcom,micbias1-microvolt = <2750000>;
+		qcom,micbias2-microvolt = <2750000>;
+		qcom,micbias3-microvolt = <2750000>;
+		qcom,micbias4-microvolt = <2750000>;
+		qcom,rx-device = <&houji_wcd_rx>;
+		qcom,tx-device = <&houji_wcd_tx>;
+	};
+};
+
+&tlmm {
+	houji_wcd_reset: houji-wcd-reset-state {
+		pins = "gpio107";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-disable;
+		output-low;
+	};
+};
+
+&swr1 {
+	#address-cells = <2>;
+	#size-cells = <0>;
+	status = "okay";
+	houji_wcd_rx: codec@0,4 {
+		compatible = "sdw20217010e00";
+		reg = <0 4>;
+		qcom,rx-port-mapping = <1 2 3 4 5 9>;
+	};
+};
+
+&swr2 {
+	/* HyperOS copies the ADC slave lane onto its remapped master port. */
+	qcom,ports-lane-control = /bits/ 8 <0xff 0x01 0x01 0x00 0x00>;
+	#address-cells = <2>;
+	#size-cells = <0>;
+	status = "okay";
+	houji_wcd_tx: codec@0,3 {
+		compatible = "sdw20217010e00";
+		reg = <0 3>;
+		/* HyperOS AMIC1 uses SWRM_TX2_CH1: master port 3, ADC lane 1. */
+		qcom,tx-port-mapping = <3 2 3 4>;
+	};
+};

@@ -1,0 +1,16 @@
+{
+  "protocol": {
+    "url": "https://github.com/OpenGamingCollective/gamescope/blob/4b50dd7a719c09acb1a0141ff6eac9dab1ab4f2f/protocol/gamescope-control.xml",
+    "revision": "4b50dd7a719c09acb1a0141ff6eac9dab1ab4f2f",
+    "sha256": "84b992b1307ca2f1fc7bfa9aa9a203d92950c4e57014f047812592602ddd92b7",
+    "bound_version": 2
+  },
+  "sensor_source": "net.hadess.SensorProxy, corrected by the Houji accelerometer mounting matrix",
+  "rotation": "Gamescope control rotate_display; internal display only; composition rotation required",
+  "compositor": {
+    "repository": "https://github.com/OpenGamingCollective/gamescope",
+    "revision": "4b50dd7a719c09acb1a0141ff6eac9dab1ab4f2f",
+    "patch": "0001-associate-houji-touch.patch",
+    "purpose": "Bind stock uinput touchscreen to internal display so Gamescope applies its rotation transform"
+  }
+}

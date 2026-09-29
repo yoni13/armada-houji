@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/* Houji wiring from Xiaomi's pineapple-kiwi-bt.dtsi and houji-sm8650.dtsi. */
+#include <dt-bindings/input/qcom,hv-haptics.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+&qupv3_id_1 {
+	status = "okay";
+};
+
+&uart14 {
+	status = "okay";
+
+	bluetooth {
+		compatible = "qcom,wcn7850-bt";
+		/* The PMU sequencer owns BT_EN and the rails shared with Wi-Fi. */
+		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
+		vddaon-supply = <&vreg_pmu_aon_0p59>;
+		vddwlcx-supply = <&vreg_pmu_wlcx_0p8>;
+		vddwlmx-supply = <&vreg_pmu_wlmx_0p85>;
+		vddrfa0p8-supply = <&vreg_pmu_rfa_0p8>;
+		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
+		vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
+		max-speed = <3200000>;
+	};
+};
+
+&pm8550b {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	haptics@f000 {
+		compatible = "qcom,hv-haptics";
+		reg = <0xf000>, <0xf100>, <0xf200>;
+		interrupts = <0x7 0xf0 0x1 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "fifo-empty";
+		/* Use the phone's nominal motor limits, not the reference board's. */
+		qcom,vmax-mv = <2050>;
+		qcom,lra-period-us = <5714>;
+		qcom,drv-sig-shape = <WF_SINE>;
+		qcom,brake-sig-shape = <WF_SINE>;
+		qcom,brake-mode = <BRAKE_CLOSE_LOOP>;
+		qcom,brake-pattern = /bits/ 8 <0xff 0x3f 0x1f>;
+
+		qcom,hap-swr-slave-reg {
+			regulator-name = "hap-swr-slave-reg";
+		};
+	};
+};

@@ -1,0 +1,204 @@
+--- a/drivers/input/misc/qcom-hv-haptics.c
++++ b/drivers/input/misc/qcom-hv-haptics.c
+@@ -781,6 +781,9 @@
+ 	const struct fifo_hw_info	*fifo_info;
+ 	struct dentry			*debugfs_dir;
+ 	struct delayed_work		stop_work;
++	struct work_struct		play_work;
++	atomic_t			play_requested;
++	u32				constant_length_ms;
+ 	struct regulator_dev		*swr_slave_rdev;
+ 	struct nvmem_cell		*cl_brake_nvmem;
+ 	struct nvmem_device		*hap_cfg_nvmem;
+@@ -3125,6 +3128,8 @@
+ 	struct haptics_chip *chip = container_of(work, struct haptics_chip, stop_work.work);
+ 	int rc = 0;
+ 
++	mutex_lock(&chip->play.lock);
++	dev_dbg(chip->dev, "FF duration elapsed\n");
+ 	rc = haptics_enable_play(chip, false);
+ 	if (rc < 0)
+ 		dev_err(chip->dev, "stop constant effect play failed\n");
+@@ -3132,6 +3137,7 @@
+ 	rc = haptics_enable_hpwr_vreg(chip, false);
+ 	if (rc < 0)
+ 		dev_err(chip->dev, "disable hpwr_vreg failed\n");
++	mutex_unlock(&chip->play.lock);
+ }
+ 
+ static inline bool is_haptics_runtime_pm_enabled(struct haptics_chip *chip)
+@@ -3227,6 +3233,12 @@
+ 	u8 amplitude;
+ 	u16 gain;
+ 	int rc = 0;
++
++	/* Normalize before taking the runtime-PM reference: the constant-effect
++	 * upload acquires and releases its own reference.
++	 */
++	if (effect->type == FF_PERIODIC && effect->u.periodic.waveform == FF_SINE)
++		return haptics_upload_ff_periodic_sine(dev, effect, old);
+ 
+ 	rc = haptics_runtime_resume_get(chip);
+ 	if (rc < 0)
+@@ -3263,8 +3275,9 @@
+ 
+ 			dev->ff->set_gain(dev, gain);
+ 
+-			//Also, reschedule the stop_work timer
+-			schedule_delayed_work(&chip->stop_work, msecs_to_jiffies(effect->replay.length));
++			chip->constant_length_ms = effect->replay.length ?: 30000;
++			mod_delayed_work(system_wq, &chip->stop_work,
++				msecs_to_jiffies(chip->constant_length_ms));
+ 		}
+ 
+ 		haptics_runtime_autosuspend_put(chip);
+@@ -3280,8 +3293,9 @@
+ 		amplitude = tmp / 0x7fff;
+ 		dev_dbg(chip->dev, "upload constant effect, length = %dms, amplitude = %#x\n",
+ 				length_ms, amplitude);
+-		schedule_delayed_work(&chip->stop_work, msecs_to_jiffies(length_ms));
+-		haptics_load_constant_effect(chip, amplitude);
++		/* Upload prepares the effect; its duration begins at playback. */
++		chip->constant_length_ms = length_ms ?: 30000;
++		rc = haptics_load_constant_effect(chip, amplitude);
+ 		if (rc < 0) {
+ 			dev_err(chip->dev, "set direct play failed, rc=%d\n",
+ 					rc);
+@@ -3291,9 +3305,6 @@
+ 		break;
+ 	case FF_PERIODIC:
+ 		switch (effect->u.periodic.waveform) {
+-			case FF_SINE:
+-				return haptics_upload_ff_periodic_sine(dev, effect, old);
+-
+ 			case FF_CUSTOM:
+ 				break;
+ 
+@@ -3366,23 +3377,58 @@
+ 	return rc;
+ }
+ 
++/* The FF playback callback runs under input_dev.event_lock. Do register and
++ * regulator operations in workqueue context, where they are allowed to sleep.
++ */
++static void haptics_play_work(struct work_struct *work)
++{
++	struct haptics_chip *chip = container_of(work, struct haptics_chip, play_work);
++	int rc = 0;
++
++	cancel_delayed_work_sync(&chip->stop_work);
++	mutex_lock(&chip->play.lock);
++	dev_dbg(chip->dev, "FF playback request %d\n",
++		atomic_read(&chip->play_requested));
++	if (!atomic_read(&chip->play_requested)) {
++		rc = haptics_enable_play(chip, false);
++		if (!rc)
++			rc = haptics_enable_hpwr_vreg(chip, false);
++		goto out;
++	}
++	if (!chip->chip_effect_loaded)
++		goto out;
++
++	/* The duration timer disables HPWR, so replay must enable it again. */
++	rc = haptics_enable_hpwr_vreg(chip, true);
++	if (rc)
++		goto out;
++	rc = haptics_wait_hboost_ready(chip);
++	if (rc)
++		goto stop;
++	if (chip->config.measure_lra_impedance && chip->visense_enabled)
++		chip->pattern_start_time = ktime_get_boottime();
++	rc = haptics_enable_play(chip, true);
++	if (rc)
++		goto stop;
++	if (chip->play.pattern_src == DIRECT_PLAY)
++		mod_delayed_work(system_wq, &chip->stop_work,
++			msecs_to_jiffies(chip->constant_length_ms));
++	goto out;
++stop:
++	haptics_enable_play(chip, false);
++	haptics_enable_hpwr_vreg(chip, false);
++out:
++	mutex_unlock(&chip->play.lock);
++	if (rc)
++		dev_err(chip->dev, "FF playback failed: %d\n", rc);
++}
++
+ static int haptics_playback(struct input_dev *dev, int effect_id, int val)
+ {
+ 	struct haptics_chip *chip = input_get_drvdata(dev);
+ 
+-	dev_dbg(chip->dev, "playback val = %d\n", val);
+-	if (!!val && !chip->chip_is_playing) {
+-		if (!chip->chip_effect_loaded) {
+-			dev_dbg(chip->dev, "Trying to playback while no effect is loaded!\n");
+-			return 0;
+-		}
+-
+-		if (chip->config.measure_lra_impedance && chip->visense_enabled)
+-			chip->pattern_start_time = ktime_get_boottime();
+-
+-		return haptics_enable_play(chip, true);
+-	}
+-
++	atomic_set(&chip->play_requested, !!val);
++	schedule_work(&chip->play_work);
+ 	return 0;
+ }
+ 
+@@ -3467,8 +3513,9 @@
+ 
+ 	dev_dbg(chip->dev, "erase effect, really stop play\n");
+ 	cancel_work_sync(&chip->set_gain_work);
++	cancel_work_sync(&chip->play_work);
++	cancel_delayed_work_sync(&chip->stop_work);
+ 	mutex_lock(&play->lock);
+-	cancel_delayed_work_sync(&chip->stop_work);
+ 	pattern_run_time = ktime_us_delta(ktime_get_boottime(), chip->pattern_start_time);
+ 	if ((play->pattern_src == FIFO) &&
+ 			atomic_read(&play->fifo_status.is_busy)) {
+@@ -3563,9 +3610,6 @@
+ {
+ 	struct haptics_chip *chip = input_get_drvdata(dev);
+ 	struct haptics_play_info *play = &chip->play;
+-
+-	if (gain == 0)
+-		return;
+ 
+ 	if (gain > 0x7fff)
+ 		gain = 0x7fff;
+@@ -6441,6 +6485,8 @@
+ 	hrtimer_setup(&chip->hbst_off_timer, haptics_disable_hbst_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+ 	INIT_DELAYED_WORK(&chip->stop_work, haptics_stop_constant_effect_play);
+ 	INIT_WORK(&chip->set_gain_work, haptics_set_gain_work);
++	INIT_WORK(&chip->play_work, haptics_play_work);
++	atomic_set(&chip->play_requested, 0);
+ 
+ 	atomic_set(&chip->play.fifo_status.is_busy, 0);
+ 	atomic_set(&chip->play.fifo_status.written_done, 0);
+@@ -6455,6 +6501,7 @@
+ 	input_set_capability(input_dev, EV_FF, FF_CONSTANT);
+ 	//if ((chip->effects_count != 0) || (chip->primitives_count != 0)) {
+ 	input_set_capability(input_dev, EV_FF, FF_PERIODIC);
++	input_set_capability(input_dev, EV_FF, FF_SINE);
+ 	//input_set_capability(input_dev, EV_FF, FF_CUSTOM); //Drop FF_CUSTOM
+ 	//}
+ 	input_set_capability(input_dev, EV_FF, FF_GAIN);
+@@ -6562,6 +6609,9 @@
+ 	class_unregister(&chip->hap_class);
+ 	//haptics_remove_debugfs(chip);
+ 	input_unregister_device(chip->input_dev);
++	cancel_work_sync(&chip->play_work);
++	cancel_work_sync(&chip->set_gain_work);
++	cancel_delayed_work_sync(&chip->stop_work);
+ 	dev_set_drvdata(chip->dev, NULL);
+ 
+ 	return;
+@@ -6610,6 +6660,7 @@
+ 	int rc;
+ 
+ 	/* Pending workers must not fire into the resume path */
++	cancel_work_sync(&chip->play_work);
+ 	cancel_work_sync(&chip->set_gain_work);
+ 	cancel_delayed_work_sync(&chip->stop_work);
+ 

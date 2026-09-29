@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/* Board thermistors from the original Houji DT. Temperatures are sampled by
+ * the stock PMK8550 PBS ADC firmware through the upstream ADC5 Gen3 driver.
+ */
+&{/soc@0/spmi@c400000/pmic@7/gpio@8800} {
+	houji_charge_therm_pins: charge-therm-state {
+		pins = "gpio10", "gpio12";
+		bias-high-impedance;
+	};
+};
+
+&{/soc@0/spmi@c400000/pmic@0} {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	houji_adc: adc@9000 {
+		compatible = "qcom,spmi-adc5-gen3";
+		reg = <0x9000>, <0x9100>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		#io-channel-cells = <1>;
+		interrupts = <0 0x90 1 1>, <0 0x91 1 1>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&houji_charge_therm_pins>;
+
+		channel@144 {
+			reg = <0x144>;
+			label = "cpu_therm";
+			qcom,ratiometric;
+			qcom,hw-settle-time = <200>;
+			qcom,pre-scaling = <1 1>;
+		};
+		channel@146 {
+			reg = <0x146>;
+			label = "wifi_therm";
+			qcom,ratiometric;
+			qcom,hw-settle-time = <200>;
+			qcom,pre-scaling = <1 1>;
+		};
+		channel@147 {
+			reg = <0x147>;
+			label = "pa_therm0";
+			qcom,ratiometric;
+			qcom,hw-settle-time = <200>;
+			qcom,pre-scaling = <1 1>;
+		};
+		channel@747 {
+			reg = <0x747>;
+			label = "usb_therm";
+			qcom,ratiometric;
+			qcom,hw-settle-time = <200>;
+			qcom,pre-scaling = <1 1>;
+		};
+		channel@749 {
+			reg = <0x749>;
+			label = "charger_therm0";
+			qcom,ratiometric;
+			qcom,pre-scaling = <1 1>;
+		};
+		channel@74d {
+			reg = <0x74d>;
+			label = "quiet_therm";
+			qcom,ratiometric;
+			qcom,pre-scaling = <1 1>;
+		};
+	};
+};

@@ -1,0 +1,93 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/* Houji: downstream pineapple-usb.dtsi + houji-sm8650.dtsi.
+ * VBUS/source negotiation stays with the stock ADSP UCSI/PD service.
+ * GPIO29 reports cable orientation; SuperSpeed lanes go to the QMP PHY.
+ * WCD9395 handles the separate SBU/analog-audio path, not these SS lanes.
+ */
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/phy/phy-qcom-qmp.h>
+#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+
+&{/pmic-glink} {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	orientation-gpios = <&tlmm 29 GPIO_ACTIVE_HIGH>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&houji_usb_orientation>;
+
+	connector@0 {
+		compatible = "usb-c-connector";
+		reg = <0>;
+		power-role = "dual";
+		data-role = "dual";
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			port@0 {
+				reg = <0>;
+				houji_typec_hs: endpoint {
+					remote-endpoint = <&usb_1_dwc3_hs>;
+				};
+			};
+			port@1 {
+				reg = <1>;
+				houji_typec_ss: endpoint {
+					remote-endpoint = <&usb_dp_qmpphy_out>;
+				};
+			};
+		};
+	};
+};
+
+&tlmm {
+	houji_usb_orientation: usb-orientation-state {
+		pins = "gpio29";
+		function = "gpio";
+		bias-pull-down;
+		drive-strength = <2>;
+		input-enable;
+	};
+};
+
+&apps_rsc {
+	regulators-4 {
+		/* Stock ldog3: 880 mV initial voltage, 912 mV upper bound.
+		 * Stock does not identify its upstream regulator.
+		 */
+		vreg_l3g: ldo3 {
+			regulator-name = "vreg_l3g_usb";
+			regulator-min-microvolt = <880000>;
+			regulator-max-microvolt = <912000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-allow-set-load;
+			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
+						   RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+};
+
+&usb_1 {
+	dr_mode = "otg";
+	usb-role-switch;
+	role-switch-default-mode = "peripheral";
+	maximum-speed = "super-speed";
+	/delete-property/ qcom,select-utmi-as-pipe-clk;
+	phys = <&usb_1_hsphy>, <&usb_dp_qmpphy QMP_USB43DP_USB3_PHY>;
+	phy-names = "usb2-phy", "usb3-phy";
+	status = "okay";
+};
+
+&usb_1_dwc3_hs {
+	remote-endpoint = <&houji_typec_hs>;
+};
+
+&usb_dp_qmpphy {
+	vdda-phy-supply = <&vreg_l3i>;
+	vdda-pll-supply = <&vreg_l3g>;
+	status = "okay";
+};
+
+&usb_dp_qmpphy_out {
+	remote-endpoint = <&houji_typec_ss>;
+};

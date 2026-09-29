@@ -1,0 +1,367 @@
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -60,6 +60,7 @@
+ #define BATT_CURR_NOW			9
+ #define BATT_CHG_CTRL_LIM		10
+ #define BATT_CHG_CTRL_LIM_MAX		11
++#define HOUJI_BATT_FCC			12 /* Xiaomi wire ID, microamps */
+ #define BATT_TEMP			12
+ #define BATT_TECHNOLOGY			13
+ #define BATT_CHG_COUNTER		14
+@@ -322,6 +323,10 @@
+ 
+ 	enum qcom_battmgr_unit unit;
+ 
++	u32 pending_opcode;
++	u32 pending_property;
++	u32 houji_fcc;
++	u32 houji_xm_value;
+ 	int error;
+ 	struct completion ack;
+ 
+@@ -344,22 +349,26 @@
+ 
+ static int qcom_battmgr_request(struct qcom_battmgr *battmgr, void *data, size_t len)
+ {
++	struct qcom_battmgr_property_request *req = data;
+ 	unsigned long left;
+ 	int ret;
+ 
++	WRITE_ONCE(battmgr->pending_property, len == sizeof(*req) ?
++		   le32_to_cpu(req->property) : U32_MAX);
++	WRITE_ONCE(battmgr->pending_opcode, le32_to_cpu(req->hdr.opcode));
+ 	reinit_completion(&battmgr->ack);
+ 
+ 	battmgr->error = 0;
+ 
+ 	ret = pmic_glink_send(battmgr->client, data, len);
+ 	if (ret < 0)
+-		return ret;
++		goto out;
+ 
+ 	left = wait_for_completion_timeout(&battmgr->ack, HZ);
+-	if (!left)
+-		return -ETIMEDOUT;
+-
+-	return battmgr->error;
++	ret = left ? battmgr->error : -ETIMEDOUT;
++out:
++	WRITE_ONCE(battmgr->pending_opcode, 0);
++	return ret > 0 ? -EIO : ret;
+ }
+ 
+ static int qcom_battmgr_request_property(struct qcom_battmgr *battmgr, int opcode,
+@@ -460,6 +469,15 @@
+ 	unsigned int prop;
+ 	int ret;
+ 
++	if (psp == POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT &&
++	    battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI) {
++		mutex_lock(&battmgr->lock);
++		ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_GET,
++					   HOUJI_BATT_FCC, 0);
++		mutex_unlock(&battmgr->lock);
++		return ret;
++	}
++
+ 	if (psp >= ARRAY_SIZE(sm8350_bat_prop_map))
+ 		return -EINVAL;
+ 
+@@ -536,6 +554,9 @@
+ 		return ret;
+ 
+ 	switch (psp) {
++	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
++		val->intval = battmgr->houji_fcc;
++		break;
+ 	case POWER_SUPPLY_PROP_STATUS:
+ 		val->intval = battmgr->status.status;
+ 		break;
+@@ -903,6 +924,107 @@
+ 	.get_property = qcom_battmgr_bat_get_property,
+ };
+ 
++/* Stock HyperOS thermal_fcc_override writes BAT_SET property 12.
++ * This bring-up interface permits at most 1 A battery current. Firmware
++ * adapter, authentication, JEITA and other thermal votes remain in place.
++ */
++static int houji_bat_set_property(struct power_supply *psy,
++				  enum power_supply_property psp,
++				  const union power_supply_propval *val)
++{
++	struct qcom_battmgr *b = power_supply_get_drvdata(psy);
++	int ret;
++	if (b->variant != QCOM_BATTMGR_XIAOMI_HOUJI ||
++	    psp != POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT)
++		return -EOPNOTSUPP;
++	if (val->intval < 0 || val->intval > 1000000)
++		return -ERANGE;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	/* A positive request requires a detected USB-PD supply and sane battery
++  * temperature. Zero remains available for reducing the host vote. */
++	if (val->intval) {
++		ret = qcom_battmgr_request_property(b, BATTMGR_USB_PROPERTY_GET,
++						    USB_ONLINE, 0);
++		if (ret)
++			goto out;
++		if (!b->usb.online) {
++			ret = -ENODEV;
++			goto out;
++		}
++		ret = qcom_battmgr_request_property(b, BATTMGR_USB_PROPERTY_GET,
++						    USB_ADAP_TYPE, 0);
++		if (ret)
++			goto out;
++		if (b->usb.usb_type != POWER_SUPPLY_USB_TYPE_PD) {
++			ret = -EOPNOTSUPP;
++			goto out;
++		}
++		ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_GET,
++						    BATT_TEMP + 1, 0);
++		if (ret)
++			goto out;
++		if (b->status.temperature < 100 ||
++		    b->status.temperature > 400) {
++			ret = -ERANGE;
++			goto out;
++		}
++	}
++	ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_SET,
++					    HOUJI_BATT_FCC, val->intval);
++	if (!ret)
++		ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_GET,
++						    HOUJI_BATT_FCC, 0);
++out:
++	mutex_unlock(&b->lock);
++	if (!ret)
++		power_supply_changed(psy);
++	return ret;
++}
++
++static int houji_bat_is_writeable(struct power_supply *psy,
++				  enum power_supply_property psp)
++{
++	return psp == POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT;
++}
++
++static const enum power_supply_property houji_bat_props[] = {
++	POWER_SUPPLY_PROP_STATUS,
++	POWER_SUPPLY_PROP_HEALTH,
++	POWER_SUPPLY_PROP_PRESENT,
++	POWER_SUPPLY_PROP_CHARGE_TYPE,
++	POWER_SUPPLY_PROP_CAPACITY,
++	POWER_SUPPLY_PROP_VOLTAGE_OCV,
++	POWER_SUPPLY_PROP_VOLTAGE_NOW,
++	POWER_SUPPLY_PROP_VOLTAGE_MAX,
++	POWER_SUPPLY_PROP_CURRENT_NOW,
++	POWER_SUPPLY_PROP_TEMP,
++	POWER_SUPPLY_PROP_TECHNOLOGY,
++	POWER_SUPPLY_PROP_CHARGE_COUNTER,
++	POWER_SUPPLY_PROP_CYCLE_COUNT,
++	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
++	POWER_SUPPLY_PROP_CHARGE_FULL,
++	POWER_SUPPLY_PROP_CHARGE_NOW,
++	POWER_SUPPLY_PROP_MODEL_NAME,
++	POWER_SUPPLY_PROP_TIME_TO_FULL_AVG,
++	POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG,
++	POWER_SUPPLY_PROP_INTERNAL_RESISTANCE,
++	POWER_SUPPLY_PROP_STATE_OF_HEALTH,
++	POWER_SUPPLY_PROP_POWER_NOW,
++	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT,
++};
++
++static const struct power_supply_desc houji_bat_psy_desc = {
++	.name = "qcom-battmgr-bat",
++	.type = POWER_SUPPLY_TYPE_BATTERY,
++	.properties = houji_bat_props,
++	.num_properties = ARRAY_SIZE(houji_bat_props),
++	.get_property = qcom_battmgr_bat_get_property,
++	.set_property = houji_bat_set_property,
++	.property_is_writeable = houji_bat_is_writeable,
++};
++
+ static const enum power_supply_property sm8550_bat_props[] = {
+ 	POWER_SUPPLY_PROP_STATUS,
+ 	POWER_SUPPLY_PROP_HEALTH,
+@@ -1395,6 +1517,16 @@
+ 	switch (opcode) {
+ 	case BATTMGR_BAT_PROPERTY_GET:
+ 		property = le32_to_cpu(resp->intval.property);
++		if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI &&
++		    property == HOUJI_BATT_FCC) {
++			if (payload_len != sizeof(resp->intval))
++				battmgr->error = -ENODATA;
++			else if (le32_to_cpu(resp->intval.result))
++				battmgr->error = -EIO;
++			else
++				battmgr->houji_fcc = le32_to_cpu(resp->intval.value);
++			goto out_complete;
++		}
+ 		/* Normalize the Xiaomi wire IDs before decoding the payload. */
+ 		if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI) {
+ 			if (property <= BATT_CHG_CTRL_LIM_MAX) {
+@@ -1585,6 +1717,14 @@
+ 			break;
+ 		}
+ 		break;
++	case BATTMGR_BAT_PROPERTY_SET:
++		if (battmgr->variant != QCOM_BATTMGR_XIAOMI_HOUJI)
++			return;
++		if (payload_len != sizeof(resp->intval))
++			battmgr->error = -ENODATA;
++		else
++			battmgr->error = le32_to_cpu(resp->intval.result) ? -EIO : 0;
++		break;
+ 	case BATTMGR_REQUEST_NOTIFICATION:
+ 	case BATTMGR_CHG_CTRL_LIMIT_EN:
+ 		battmgr->error = 0;
+@@ -1602,13 +1742,36 @@
+ {
+ 	const struct pmic_glink_hdr *hdr = data;
+ 	struct qcom_battmgr *battmgr = priv;
+-	unsigned int opcode = le32_to_cpu(hdr->opcode);
+-
+-	/* Xiaomi's 0x50 vendor reports are unsolicited, not replies to our
+-	 * reads. Do not let them complete an unrelated pending request.
+-	 */
+-	if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI && opcode == 0x50)
++	const struct qcom_battmgr_message *resp = data;
++	unsigned int opcode;
++
++	if (len < sizeof(*hdr))
+ 		return;
++	opcode = le32_to_cpu(hdr->opcode);
++	if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI &&
++	    opcode != BATTMGR_NOTIFICATION) {
++		if (opcode != READ_ONCE(battmgr->pending_opcode))
++			return;
++		if (opcode >= BATTMGR_BAT_PROPERTY_GET && opcode <= BATTMGR_WLS_PROPERTY_SET &&
++		    (len < sizeof(*hdr) + sizeof(__le32) ||
++		     le32_to_cpu(resp->intval.property) != READ_ONCE(battmgr->pending_property)))
++			return;
++	}
++
++	/* Only accept the matching fixed Xiaomi status/cancellation request. */
++	if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI &&
++	    (opcode == 0x50 || opcode == 0x51)) {
++		if (len != sizeof(*hdr) + sizeof(resp->intval))
++			battmgr->error = -ENODATA;
++		else if (le32_to_cpu(resp->intval.property) != READ_ONCE(battmgr->pending_property))
++			return;
++		else if (le32_to_cpu(resp->intval.result))
++			battmgr->error = -EIO;
++		else
++			battmgr->houji_xm_value = le32_to_cpu(resp->intval.value);
++		complete(&battmgr->ack);
++		return;
++	}
+ 
+ 	if (opcode == BATTMGR_NOTIFICATION)
+ 		qcom_battmgr_notification(battmgr, data, len);
+@@ -1629,7 +1792,9 @@
+ 	};
+ 	int ret;
+ 
++	mutex_lock(&battmgr->lock);
+ 	ret = qcom_battmgr_request(battmgr, &req, sizeof(req));
++	mutex_unlock(&battmgr->lock);
+ 	if (ret)
+ 		dev_err(battmgr->dev, "failed to request power notifications\n");
+ }
+@@ -1659,6 +1824,66 @@
+ 
+ static char *qcom_battmgr_battery[] = { "battery" };
+ 
++/* HyperOS always sends VERIFY_PROCESS=0 on its failure/abort path before
++ * reporting the authentication result. This ends negotiation, not authenticates
++ * the adapter. Deliberately expose neither an auth result setter nor a start.
++ */
++static ssize_t houji_charger_state_show(struct device *dev,
++					struct device_attribute *attr,
++					char *buf)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	const u32 props[] = { 20, 32, 5 };
++	const char *names[] = { "verify_process", "pd_verified",
++				"battery_authentic" };
++	int i, ret, count = 0;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	for (i = 0; i < ARRAY_SIZE(props); i++) {
++		ret = qcom_battmgr_request_property(b, 0x50, props[i], 0);
++		if (ret) {
++			count = ret;
++			break;
++		}
++		count += sysfs_emit_at(buf, count, "%s=%u\n", names[i],
++				       b->houji_xm_value);
++	}
++	mutex_unlock(&b->lock);
++	return count;
++}
++static DEVICE_ATTR_RO(houji_charger_state);
++
++static ssize_t houji_charger_verify_idle_store(struct device *dev,
++					       struct device_attribute *attr,
++					       const char *buf, size_t count)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	union power_supply_propval val = { .intval = 500000 };
++	bool value;
++	int ret;
++	if (kstrtobool(buf, &value) || value)
++		return -EINVAL;
++	/* Install a conservative FCC cap, with PD/temperature guards, first. */
++	ret = houji_bat_set_property(
++		b->bat_psy, POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT, &val);
++	if (ret)
++		return ret;
++	mutex_lock(&b->lock);
++	ret = qcom_battmgr_request_property(b, 0x51, 20, 0);
++	mutex_unlock(&b->lock);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR_WO(houji_charger_verify_idle);
++static struct attribute *houji_charger_attrs[] = {
++	&dev_attr_houji_charger_state.attr,
++	&dev_attr_houji_charger_verify_idle.attr,
++	NULL,
++};
++static const struct attribute_group houji_charger_group = {
++	.attrs = houji_charger_attrs,
++};
++
+ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 			      const struct auxiliary_device_id *id)
+ {
+@@ -1675,6 +1900,7 @@
+ 		return -ENOMEM;
+ 
+ 	battmgr->dev = dev;
++	dev_set_drvdata(dev, battmgr);
+ 
+ 	psy_cfg.drv_data = battmgr;
+ 	psy_cfg.fwnode = dev_fwnode(&adev->dev);
+@@ -1737,7 +1963,9 @@
+ 		 */
+ 		battmgr->unit = QCOM_BATTMGR_UNIT_mAh;
+ 
+-		if (battmgr->variant == QCOM_BATTMGR_SM8550)
++		if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI)
++			psy_desc = &houji_bat_psy_desc;
++		else if (battmgr->variant == QCOM_BATTMGR_SM8550)
+ 			psy_desc = &sm8550_bat_psy_desc;
+ 		else
+ 			psy_desc = &sm8350_bat_psy_desc;
+@@ -1766,6 +1994,8 @@
+ 		return PTR_ERR(battmgr->client);
+ 
+ 	pmic_glink_client_register(battmgr->client);
++	if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI)
++		return devm_device_add_group(dev, &houji_charger_group);
+ 
+ 	return 0;
+ }

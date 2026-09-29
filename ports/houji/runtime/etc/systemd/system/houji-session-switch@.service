@@ -1,0 +1,6 @@
+[Unit]
+Description=Switch Houji desktop session
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/armada/houji-session-switch %i
+TimeoutStartSec=40

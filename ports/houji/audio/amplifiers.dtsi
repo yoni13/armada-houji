@@ -1,0 +1,86 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/* Addresses, resets, IRQs and boost passives from Xiaomi's Houji tree.
+ * VA/VP are not software-controlled in the stock description. Do not invent
+ * regulator connections: these rails still require board-level confirmation.
+ * Merely probing these devices does not enable their output stages.
+ */
+&qupv3_id_1 { status = "okay"; };
+&gpi_dma2 { status = "okay"; };
+
+&i2c8 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+	clock-frequency = <400000>;
+
+	houji_spk_b: amplifier@40 {
+		compatible = "cirrus,cs35l41";
+		reg = <0x40>;
+		#sound-dai-cells = <1>;
+		sound-name-prefix = "B";
+		cirrus,subsystem-id = "xiaomi-houji";
+		reset-gpios = <&tlmm 85 GPIO_ACTIVE_HIGH>;
+		interrupt-parent = <&tlmm>;
+		interrupts = <98 IRQ_TYPE_LEVEL_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&houji_spk_b_reset &houji_spk_b_irq>;
+		cirrus,boost-type = <0>;
+		cirrus,boost-peak-milliamp = <4000>;
+		cirrus,boost-ind-nanohenry = <1000>;
+		cirrus,boost-cap-microfarad = <15>;
+		cirrus,asp-sdout-hiz = <3>;
+		cirrus,gpio2-output-enable;
+		cirrus,gpio2-src-select = <4>;
+	};
+
+	houji_spk_t: amplifier@42 {
+		compatible = "cirrus,cs35l41";
+		reg = <0x42>;
+		#sound-dai-cells = <1>;
+		sound-name-prefix = "T";
+		cirrus,subsystem-id = "xiaomi-houji";
+		reset-gpios = <&tlmm 111 GPIO_ACTIVE_HIGH>;
+		interrupt-parent = <&tlmm>;
+		interrupts = <99 IRQ_TYPE_LEVEL_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&houji_spk_t_reset &houji_spk_t_irq>;
+		cirrus,boost-type = <0>;
+		cirrus,boost-peak-milliamp = <4000>;
+		cirrus,boost-ind-nanohenry = <1000>;
+		cirrus,boost-cap-microfarad = <15>;
+		cirrus,asp-sdout-hiz = <3>;
+		cirrus,gpio2-output-enable;
+		cirrus,gpio2-src-select = <4>;
+	};
+};
+
+&tlmm {
+	houji_spk_b_reset: houji-spk-b-reset-state {
+		pins = "gpio85";
+		function = "gpio";
+		drive-strength = <10>;
+		bias-disable;
+		output-high;
+	};
+	houji_spk_t_reset: houji-spk-t-reset-state {
+		pins = "gpio111";
+		function = "gpio";
+		drive-strength = <10>;
+		bias-disable;
+		output-high;
+	};
+	houji_spk_b_irq: houji-spk-b-irq-state {
+		pins = "gpio98";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+		input-enable;
+	};
+	houji_spk_t_irq: houji-spk-t-irq-state {
+		pins = "gpio99";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+		input-enable;
+	};
+};

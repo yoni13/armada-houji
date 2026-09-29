@@ -1,0 +1,23 @@
+[Unit]
+Description=Houji conservative USB-PD charging
+After=systemd-modules-load.service
+Before=display-manager.service
+ConditionPathExists=/sys/firmware/devicetree/base
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/modprobe qcom_battmgr
+ExecStart=/usr/bin/python3 /usr/libexec/armada/houji-charge-policy
+ExecStopPost=/usr/bin/python3 /usr/libexec/armada/houji-charge-policy --finish-auth
+RuntimeDirectory=houji-charging
+RuntimeDirectoryMode=0700
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=5
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

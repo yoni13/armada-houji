@@ -11,6 +11,7 @@ WAKE_DEV=
 
 log() { logger -t "$LOG_TAG" -- "$*"; echo "$LOG_TAG: $*" >&2; }
 source /usr/lib/armada/input-lib
+eval "$(/usr/libexec/armada/device-env)"
 
 SESSION_USER="${ARMADA_SESSION_USER:-armada}"
 SESSION_UID="$(id -u "$SESSION_USER" 2>/dev/null || echo 1000)"
@@ -51,6 +52,22 @@ each_gamescope() {
 }
 
 display_off() {
+    if [[ "${ARMADA_FAKE_SUSPEND_DISPLAY_MODE:-drm}" == backlight ]]; then
+        # Keep scanout and the panel's DSC state alive on devices whose full
+        # display power cycle is not yet reliable. bl_power blanks the OLED
+        # through its backlight callback without a DRM modeset.
+        local bl="/sys/class/backlight/${ARMADA_PRIMARY_BACKLIGHT:-}/bl_power" previous
+        [[ -n "${ARMADA_PRIMARY_BACKLIGHT:-}" && -w "$bl" ]] || {
+            log "primary backlight unavailable; aborting fake suspend"
+            return 1
+        }
+        previous="$(cat "$bl")" || return 1
+        [[ "$previous" =~ ^[0-4]$ ]] || return 1
+        printf '%s\t%s\n' "$bl" "$previous" > "$SAVE_DIR/backlight-power" || return 1
+        echo 4 > "$bl" || return 1
+        log "display blanked (backlight; scanout retained)"
+        return 0
+    fi
     if each_gamescope gamescopectl drm_sleep_internal_screen 1; then
         log "display off (gamescope)"
     else
@@ -59,6 +76,19 @@ display_off() {
     fi
 }
 display_on() {
+    if [[ "${ARMADA_FAKE_SUSPEND_DISPLAY_MODE:-drm}" == backlight ]]; then
+        local bl previous
+        if [[ -r "$SAVE_DIR/backlight-power" ]]; then
+            IFS=$'\t' read -r bl previous < "$SAVE_DIR/backlight-power"
+            if echo "$previous" > "$bl"; then
+                log "display restored (backlight; scanout retained)"
+            else
+                log "failed to restore backlight ${bl}"
+                return 1
+            fi
+        fi
+        return 0
+    fi
     if each_gamescope gamescopectl drm_sleep_internal_screen 0; then
         log "display on (gamescope)"
     else
@@ -112,20 +142,21 @@ runtime_pm_devices() {
 suspend_runtime_pm() {
     : > "$SAVE_DIR/power-controls"
 
-    local dev control previous count=0
+    local dev control previous count=0 policy="${ARMADA_FAKE_SUSPEND_USB_RUNTIME_PM:-auto}"
+    case "$policy" in auto|on) ;; *) log "invalid USB runtime PM policy: ${policy}"; return 1 ;; esac
     while IFS= read -r dev; do
         control="${dev}/power/control"
         [[ -w "$control" ]] || continue
         previous="$(cat "$control" 2>/dev/null)" || continue
         printf '%s\t%s\n' "$control" "$previous" >> "$SAVE_DIR/power-controls"
-        if echo auto > "$control" 2>/dev/null; then
+        if echo "$policy" > "$control" 2>/dev/null; then
             count=$((count + 1))
         else
-            log "failed to enable runtime PM for ${dev}"
+            log "failed to set runtime PM to ${policy} for ${dev}"
         fi
     done < <(runtime_pm_devices)
 
-    log "enabled runtime PM for ${count} devices"
+    log "set USB runtime PM to ${policy} for ${count} devices"
 }
 
 resume_runtime_pm() {
@@ -267,7 +298,10 @@ do_suspend() {
     mute_audio
     WAKE_DEV="$(power_device || true)"
     block_input
-    display_off   # gamescope drm_sleep (game) / bl_power (desktop); after Steam's animation
+    if ! display_off; then
+        do_resume
+        exit 1
+    fi
     freeze_processes
     # Radio suspend disabled until we can improve resume speed (currently takes 30+ seconds)
     # suspend_radios

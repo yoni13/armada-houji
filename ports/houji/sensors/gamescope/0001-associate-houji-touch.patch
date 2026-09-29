@@ -1,0 +1,23 @@
+diff --git a/src/wlserver.cpp b/src/wlserver.cpp
+index 8899b74..3652124 100644
+--- a/src/wlserver.cpp
++++ b/src/wlserver.cpp
+@@ -75,6 +75,7 @@
+ #endif
+ 
+ #include "gpuvis_trace_utils.h"
++#include <cfloat>
+ 
+ #include <algorithm>
+ #include <list>
+@@ -500,6 +501,10 @@ static void wlserver_touch_associate_connector(struct wlserver_touch *touch)
+ 		}
+ 		parent = udev_device_get_parent(parent);
+ 	}
++	// Houji's stock touch core uses uinput, so it has no physical I2C
++	// ancestor. Bind this specific built-in touchscreen to the panel.
++	if (!connector && strcmp(libinput_device_get_name(lidev), "Houji stock touch core") == 0)
++		connector = GetBackend()->GetConnector(gamescope::GAMESCOPE_SCREEN_TYPE_INTERNAL);
+ 	udev_device_unref(dev);
+ 	if (connector != nullptr) {
+ 		touch->connector = connector;

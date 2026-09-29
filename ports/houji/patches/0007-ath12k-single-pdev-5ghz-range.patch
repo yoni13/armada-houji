@@ -1,0 +1,16 @@
+--- a/drivers/net/wireless/ath/ath12k/reg.c
++++ b/drivers/net/wireless/ath/ath12k/reg.c
+@@ -310,7 +310,12 @@
+ 		ath12k_mac_update_freq_range(ar, freq_low, freq_high);
+ 	}
+ 
+-	if (supported_bands & WMI_HOST_WLAN_5GHZ_CAP && !ar->supports_6ghz) {
++	/* A single-pdev device combines 5 and 6 GHz on the same radio. Its
++	 * 6 GHz capability must not exclude 5 GHz from the firmware channel
++	 * list, including countries where there are no permitted 6 GHz rules.
++	 */
++	if (supported_bands & WMI_HOST_WLAN_5GHZ_CAP &&
++	    (!ar->supports_6ghz || ab->hw_params->single_pdev_only)) {
+ 		if (ab->hw_params->single_pdev_only) {
+ 			phy_id = ar->pdev->cap.band[WMI_HOST_WLAN_5GHZ_CAP].phy_id;
+ 			reg_cap = &ab->hal_reg_cap[phy_id];

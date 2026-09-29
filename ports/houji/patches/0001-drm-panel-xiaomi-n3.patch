@@ -1,0 +1,655 @@
+From: Armada Houji bring-up
+Subject: [PATCH] drm/panel: add experimental Xiaomi 14 N3 command panel
+
+Use the pinned downstream N3 120 Hz sequence with Linux DRM power and DSC
+handling. Kept local to the Houji build until hardware validation.
+
+---
+diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
+--- a/drivers/gpu/drm/panel/Kconfig
++++ b/drivers/gpu/drm/panel/Kconfig
+@@ -1478,4 +1478,12 @@
+ 	  XPP055C272 controller for 720x1280 LCD panels with MIPI/RGB/SPI
+ 	  system interfaces.
+ 
++config DRM_PANEL_XIAOMI_N3
++	tristate "Xiaomi 14 N3 AMOLED panel (experimental)"
++	depends on OF && DRM_MIPI_DSI && BACKLIGHT_CLASS_DEVICE
++	select DRM_DISPLAY_DSC_HELPER
++	help
++	  Fixed 1200x2670 at 120 Hz support for the N3 42-0d-0a panel
++	  used in Xiaomi 14 (houji). Not yet tested on hardware.
++
+ endmenu
+diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
+--- a/drivers/gpu/drm/panel/Makefile
++++ b/drivers/gpu/drm/panel/Makefile
+@@ -143,3 +143,4 @@
+ obj-$(CONFIG_DRM_PANEL_AYANEO_WT0600_2K) += panel-wt0600-2k.o
+ obj-$(CONFIG_DRM_PANEL_AYANEO_WT0600_1K) += panel-wt0600-1k.o
+ obj-$(CONFIG_DRM_PANEL_XINPENG_XPP055C272) += panel-xinpeng-xpp055c272.o
++obj-$(CONFIG_DRM_PANEL_XIAOMI_N3) += panel-xiaomi-n3.o
+diff --git a/drivers/gpu/drm/panel/panel-xiaomi-n3.c b/drivers/gpu/drm/panel/panel-xiaomi-n3.c
+new file mode 100644
+--- /dev/null
++++ b/drivers/gpu/drm/panel/panel-xiaomi-n3.c
+@@ -0,0 +1,619 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Xiaomi 14 N3 42-0d-0a panel, experimental fixed 120 Hz support.
++ * Panel commands and timings: lolipuru/kernel_xiaomi_sm8650-devicetrees,
++ * revision 25446a168427695fed4adecb61fd63926f12bc17,
++ * qcom/display/display/dsi-panel-n3-42-0d-0a-dsc-cmd{,-common}.dtsi.
++ * Bootloader gamma uses the downstream SMEM 499 layout; SPR, AOD and HBM
++ * are not implemented.
++ */
++
++#include <linux/backlight.h>
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/regulator/consumer.h>
++#include <linux/soc/qcom/smem.h>
++
++#include <drm/display/drm_dsc.h>
++#include <drm/display/drm_dsc_helper.h>
++#include <drm/drm_mipi_dsi.h>
++#include <drm/drm_modes.h>
++#include <drm/drm_panel.h>
++#include <drm/drm_probe_helper.h>
++
++struct xiaomi_n3 {
++	struct drm_panel panel;
++	struct mipi_dsi_device *dsi;
++	struct drm_dsc_config dsc;
++	struct gpio_desc *reset;
++	struct regulator_bulk_data supplies[3];
++	struct mutex lock; /* Serialize backlight I/O with power transitions. */
++	bool powered;
++};
++
++struct n3_cmd {
++	u8 delay_ms;
++	u8 len;
++	u8 data[95];
++};
++
++/* 120 Hz on-sequence, in vendor order. The DCS helper preserves packet types. */
++static const struct n3_cmd n3_on_cmds[] = {
++	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
++	{ 0, 2, { 0x65, 0x08 } },
++	{ 0, 2, { 0xd0, 0x1f } },
++	{ 0, 2, { 0x65, 0x14 } },
++	{ 0, 4, { 0xd0, 0x1f, 0x1f, 0x1f } },
++	{ 0, 2, { 0x65, 0x20 } },
++	{ 0, 11, { 0xd3, 0x88, 0x88, 0x88, 0x99, 0x96, 0x31, 0x00, 0x00, 0xff, 0xe0 } },
++	{ 0, 2, { 0x65, 0x20 } },
++	{ 0, 11, { 0xd4, 0x88, 0x88, 0x88, 0x99, 0x96, 0x31, 0x10, 0x00, 0xff, 0xe0 } },
++	{ 0, 2, { 0x65, 0x20 } },
++	{ 0, 11, { 0xd5, 0x66, 0x66, 0x66, 0x99, 0x96, 0x31, 0x00, 0x00, 0xff, 0xe0 } },
++	{ 0, 2, { 0x65, 0x20 } },
++	{ 0, 11, { 0xd6, 0x66, 0x66, 0x66, 0x99, 0x96, 0x31, 0x10, 0x00, 0xff, 0xe0 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x12 } },
++	{ 0, 2, { 0x65, 0x1c } },
++	{ 0, 5, { 0xbf, 0x43, 0x43, 0x43, 0x43 } },
++	{ 0, 2, { 0x65, 0x4c } },
++	{ 0, 5, { 0xbf, 0x43, 0x43, 0x43, 0x43 } },
++	{ 0, 2, { 0x65, 0x1c } },
++	{ 0, 5, { 0xdf, 0x43, 0x43, 0x43, 0x43 } },
++	{ 0, 2, { 0x65, 0x4c } },
++	{ 0, 5, { 0xdf, 0x43, 0x43, 0x43, 0x43 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x13 } },
++	{ 0, 2, { 0xbf, 0x0c } },
++	{ 0, 17, {
++		0xb0, 0x00, 0x00, 0x00, 0xd6, 0x01, 0x22, 0x01, 0x6e, 0x01, 0xb8, 0x02,
++		0x36, 0x02, 0x9b, 0x02, 0xf2,
++	} },
++	{ 0, 17, {
++		0xb1, 0x03, 0x3e, 0x03, 0x81, 0x03, 0xbe, 0x03, 0xf7, 0x04, 0x2a, 0x04,
++		0x89, 0x04, 0xe0, 0x05, 0x30,
++	} },
++	{ 0, 17, {
++		0xb2, 0x05, 0x7a, 0x05, 0xbf, 0x06, 0x44, 0x06, 0xc1, 0x07, 0x38, 0x08,
++		0x20, 0x09, 0x08, 0x09, 0xf6,
++	} },
++	{ 0, 3, { 0xb3, 0x0b, 0x0d } },
++	{ 0, 17, {
++		0xb4, 0x00, 0x00, 0x00, 0xf1, 0x01, 0x3a, 0x01, 0x69, 0x01, 0x9c, 0x02,
++		0x02, 0x02, 0x5c, 0x02, 0xac,
++	} },
++	{ 0, 17, {
++		0xb5, 0x02, 0xf1, 0x03, 0x2f, 0x03, 0x69, 0x03, 0x9d, 0x03, 0xcd, 0x04,
++		0x25, 0x04, 0x77, 0x04, 0xc1,
++	} },
++	{ 0, 17, {
++		0xb6, 0x05, 0x05, 0x05, 0x46, 0x05, 0xc0, 0x06, 0x33, 0x06, 0xa0, 0x07,
++		0x70, 0x08, 0x3c, 0x09, 0x11,
++	} },
++	{ 0, 3, { 0xb7, 0x0a, 0x25 } },
++	{ 0, 17, {
++		0xb8, 0x00, 0x00, 0x01, 0x60, 0x01, 0xc0, 0x02, 0x11, 0x02, 0x62, 0x02,
++		0xed, 0x03, 0x5d, 0x03, 0xbe,
++	} },
++	{ 0, 17, {
++		0xb9, 0x04, 0x11, 0x04, 0x5b, 0x04, 0x9f, 0x04, 0xde, 0x05, 0x17, 0x05,
++		0x84, 0x05, 0xe6, 0x06, 0x42,
++	} },
++	{ 0, 17, {
++		0xba, 0x06, 0x97, 0x06, 0xea, 0x07, 0x85, 0x08, 0x15, 0x08, 0xa1, 0x09,
++		0xb1, 0x0a, 0xc0, 0x0b, 0xda,
++	} },
++	{ 0, 3, { 0xbb, 0x0d, 0x17 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
++	{ 0, 2, { 0xd0, 0x84 } },
++	{ 0, 2, { 0x65, 0x02 } },
++	{ 0, 7, { 0xd2, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } },
++	{ 0, 2, { 0x65, 0x08 } },
++	{ 0, 8, { 0xd2, 0x24, 0x29, 0x2b, 0x2e, 0x2f, 0x2f, 0x2f } },
++	{ 0, 3, { 0xf0, 0xaa, 0x12 } },
++	{ 0, 6, { 0xe1, 0x00, 0x73, 0x75, 0x7f, 0x93 } },
++	{ 0, 2, { 0x65, 0x05 } },
++	{ 0, 6, { 0xe1, 0x3f, 0x3f, 0x3d, 0x33, 0x1f } },
++	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
++	{ 0, 2, { 0x65, 0x01 } },
++	{ 0, 2, { 0xd2, 0x93 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x12 } },
++	{ 0, 15, {
++		0xb7, 0x62, 0x58, 0x62, 0x58, 0x62, 0x58, 0x62, 0x58, 0x62, 0x58, 0x62,
++		0x58, 0x62, 0x58,
++	} },
++	{ 0, 29, {
++		0xb8, 0x00, 0xa4, 0x00, 0xa0, 0x00, 0xa4, 0x00, 0xa0, 0x00, 0xa4, 0x00,
++		0xa0, 0x00, 0xa4, 0x00, 0xa0, 0x00, 0xa4, 0x00, 0xa0, 0x00, 0xa4, 0x00,
++		0xa0, 0x00, 0xa4, 0x00, 0xa0,
++	} },
++	{ 0, 43, {
++		0xb9, 0x37, 0x37, 0x37, 0x37, 0x37, 0x37, 0x37, 0x05, 0x05, 0x05, 0x05,
++		0x05, 0x05, 0x05, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x37, 0x37,
++		0x37, 0x37, 0x37, 0x37, 0x37, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05, 0x05,
++		0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41,
++	} },
++	{ 0, 3, { 0xf0, 0xaa, 0x14 } },
++	{ 0, 23, {
++		0xb5, 0x04, 0x10, 0x00, 0x00, 0x29, 0x29, 0x29, 0x29, 0x29, 0x29, 0x29,
++		0x29, 0x02, 0x16, 0x0a, 0x22, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++	} },
++	{ 0, 2, { 0x59, 0x09 } },
++	{ 0, 2, { 0x03, 0x01 } },
++	{ 0, 2, { 0x35, 0x00 } },
++	{ 0, 2, { 0x53, 0x20 } },
++	{ 0, 2, { 0x5e, 0x00 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x13 } },
++	{ 0, 3, { 0xc8, 0x08, 0xd0 } },
++	{ 0, 2, { 0xd0, 0x08 } },
++	{ 0, 2, { 0xe0, 0x08 } },
++	{ 0, 2, { 0xe8, 0x08 } },
++	{ 0, 3, { 0xff, 0x5a, 0x81 } },
++	{ 0, 2, { 0x65, 0x1b } },
++	{ 0, 2, { 0xf8, 0x04 } },
++	{ 0, 2, { 0x65, 0x1a } },
++	{ 0, 2, { 0xf8, 0x0f } },
++	{ 0, 2, { 0x65, 0x0a } },
++	{ 0, 2, { 0xf8, 0xfb } },
++	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
++	{ 0, 2, { 0x65, 0x01 } },
++	{ 0, 2, { 0xd0, 0x04 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x1b } },
++	{ 0, 2, { 0xd0, 0x00 } },
++	{ 0, 2, { 0x75, 0x00 } },
++	{ 0, 2, { 0x6c, 0x00 } },
++	{ 0, 2, { 0x71, 0x00 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
++	{ 0, 2, { 0xcf, 0x16 } },
++	{ 0, 2, { 0x6d, 0x00 } },
++	{ 0, 2, { 0x6f, 0x02 } },
++	{ 0, 95, {
++		0x70, 0x11, 0x00, 0x00, 0xab, 0x30, 0x80, 0x0a, 0x6e, 0x04, 0xb0, 0x00,
++		0x1e, 0x02, 0x58, 0x02, 0x58, 0x02, 0x00, 0x01, 0x19, 0x00, 0x20, 0x05,
++		0xd0, 0x00, 0x08, 0x00, 0x01, 0x00, 0x47, 0x03, 0x0d, 0x18, 0x00, 0x10,
++		0xf0, 0x07, 0x10, 0x20, 0x00, 0x06, 0x0f, 0x0f, 0x33, 0x0e, 0x1c, 0x2a,
++		0x38, 0x46, 0x54, 0x62, 0x69, 0x70, 0x77, 0x79, 0x7b, 0x7d, 0x7e, 0x02,
++		0x02, 0x22, 0x00, 0x2a, 0x40, 0x2a, 0xbe, 0x3a, 0xfc, 0x3a, 0xfa, 0x3a,
++		0xf8, 0x3b, 0x38, 0x3b, 0x78, 0x3b, 0xb6, 0x4b, 0xb6, 0x4b, 0xf4, 0x4b,
++		0xf4, 0x6c, 0x34, 0x84, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++	} },
++	{ 0, 2, { 0x75, 0x00 } },
++	{ 0, 2, { 0x72, 0x00 } },
++	{ 0, 3, { 0xff, 0x5a, 0x80 } },
++	{ 0, 2, { 0x65, 0x0a } },
++	{ 0, 3, { 0xf9, 0x9e, 0x8f } },
++	{ 0, 2, { 0x65, 0x0f } },
++	{ 0, 2, { 0xf9, 0x14 } },
++	{ 0, 3, { 0xff, 0x5a, 0x81 } },
++	{ 0, 2, { 0x65, 0x02 } },
++	{ 0, 4, { 0xfb, 0xb3, 0xb3, 0xb3 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x12 } },
++	{ 0, 15, {
++		0xbc, 0x7d, 0x67, 0x7d, 0x67, 0x7d, 0x6d, 0x7d, 0x7d, 0x67, 0x7d, 0x67,
++		0x7d, 0x6d, 0x7d,
++	} },
++	{ 0, 2, { 0x65, 0x0a } },
++	{ 0, 2, { 0xe9, 0x00 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x16 } },
++	{ 0, 2, { 0x65, 0x01 } },
++	{ 0, 2, { 0xb1, 0x2c } },
++	{ 0, 2, { 0x65, 0x01 } },
++	{ 0, 2, { 0xb6, 0x2c } },
++	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
++	{ 0, 2, { 0x65, 0x03 } },
++	{ 0, 2, { 0xcf, 0xa4 } },
++	{ 0, 2, { 0x65, 0x02 } },
++	{ 0, 3, { 0xc7, 0xfd, 0xb9 } },
++	{ 0, 3, { 0xff, 0x5a, 0x80 } },
++	{ 0, 2, { 0x65, 0x11 } },
++	{ 0, 2, { 0xfa, 0x02 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
++	{ 0, 14, {
++		0xbd, 0x10, 0x02, 0x31, 0x46, 0x75, 0x8a, 0xb9, 0x01, 0x32, 0x45, 0x76,
++		0x89, 0xba,
++	} },
++	{ 0, 3, { 0xf0, 0xaa, 0x17 } },
++	{ 0, 2, { 0xb0, 0x11 } },
++	{ 0, 7, { 0xc0, 0x21, 0x00, 0x34, 0x20, 0x31, 0x04 } },
++	{ 0, 2, { 0x65, 0x06 } },
++	{ 0, 2, { 0xbf, 0xff } },
++	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
++	{ 0, 2, { 0xb6, 0x00 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x11 } },
++	{ 0, 2, { 0xd5, 0x73 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x12 } },
++	{ 0, 5, { 0xb1, 0xf0, 0xf0, 0xf0, 0x30 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x12 } },
++	{ 0, 2, { 0xd6, 0x00 } },
++	{ 0, 2, { 0x65, 0x02 } },
++	{ 0, 2, { 0xd1, 0x00 } },
++	{ 0, 3, { 0x5f, 0x04, 0x7e } },
++	{ 0, 3, { 0xf0, 0xaa, 0x12 } },
++	{ 0, 32, {
++		0xc3, 0xe1, 0x20, 0x30, 0x01, 0xdc, 0x01, 0xdc, 0x01, 0xdc, 0x01, 0xdc,
++		0x03, 0xb9, 0x03, 0xb9, 0x03, 0xb9, 0x00, 0x64, 0x00, 0x64, 0x00, 0x64,
++		0x00, 0x64, 0x00, 0x64, 0x00, 0x64, 0x00, 0x64,
++	} },
++	{ 0, 3, { 0xff, 0x5a, 0x81 } },
++	{ 0, 2, { 0x65, 0x15 } },
++	{ 0, 2, { 0xfc, 0x79 } },
++	{ 0, 3, { 0xff, 0x5a, 0x82 } },
++	{ 0, 2, { 0x65, 0x04 } },
++	{ 0, 2, { 0xf8, 0x10 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
++	{ 0, 2, { 0x65, 0x09 } },
++	{ 0, 2, { 0xd0, 0x19 } },
++	{ 0, 2, { 0x65, 0x0e } },
++	{ 0, 2, { 0xd0, 0x19 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x12 } },
++	{ 0, 2, { 0x65, 0x0b } },
++	{ 0, 2, { 0xd2, 0x10 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x12 } },
++	{ 0, 5, { 0xb1, 0x50, 0x50, 0x50, 0x10 } },
++	{ 0, 29, {
++		0xb8, 0x00, 0xb4, 0x00, 0xac, 0x00, 0xb4, 0x00, 0xac, 0x00, 0xb4, 0x00,
++		0xac, 0x00, 0xb4, 0x00, 0xac, 0x00, 0xb4, 0x00, 0xac, 0x00, 0xb4, 0x00,
++		0xac, 0x00, 0xb4, 0x00, 0xac,
++	} },
++	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
++	{ 0, 3, { 0xb1, 0x01, 0x70 } },
++	{ 0, 2, { 0x65, 0x0e } },
++	{ 0, 3, { 0xb1, 0x01, 0x70 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x00 } },
++	{ 0, 3, { 0xff, 0x5a, 0x00 } },
++	{ 120, 1, { 0x11 } },
++	{ 0, 1, { 0x29 } },
++};
++
++static struct xiaomi_n3 *to_n3(struct drm_panel *panel)
++{
++	return container_of(panel, struct xiaomi_n3, panel);
++}
++
++/* Xiaomi ABL stores twelve page-0x13 gamma register payloads in SMEM 499.
++ * Each channel has three 16-byte payloads and a final 2-byte payload, with
++ * a register byte before each: 54 bytes per channel, 162 bytes in total.
++ * Check the complete layout and reject blank data before overriding defaults.
++ */
++static const u8 *n3_bootloader_gamma(struct device *dev)
++{
++	const u8 *gamma;
++	size_t size;
++	unsigned int channel, reg, off;
++	bool nonzero = false;
++
++	gamma = qcom_smem_get(QCOM_SMEM_HOST_ANY, 499, &size);
++	if (IS_ERR(gamma)) {
++		dev_info(dev, "Bootloader gamma unavailable (%ld); using defaults\n",
++			 PTR_ERR(gamma));
++		return NULL;
++	}
++	if (size < 162)
++		goto invalid;
++	for (channel = 0; channel < 3; channel++) {
++		for (reg = 0; reg < 4; reg++) {
++			off = channel * 54 + reg * 17;
++			if (gamma[off] != 0xb0 + channel * 4 + reg)
++				goto invalid;
++		}
++		/* The last control point must be populated for every color. */
++		off = channel * 54 + 52;
++		if ((!gamma[off] && !gamma[off + 1]) ||
++		    (gamma[off] == 0xff && gamma[off + 1] == 0xff))
++			goto invalid;
++		nonzero |= gamma[off] || gamma[off + 1];
++	}
++	if (!nonzero)
++		goto invalid;
++	dev_info(dev, "Using bootloader per-panel gamma (SMEM 499, %zu bytes)\n", size);
++	return gamma;
++invalid:
++	dev_warn(dev, "Invalid bootloader gamma layout (%zu bytes); using defaults\n", size);
++	return NULL;
++}
++
++static int n3_on(struct xiaomi_n3 *ctx)
++{
++	struct mipi_dsi_device *dsi = ctx->dsi;
++	struct drm_dsc_picture_parameter_set pps;
++	u8 pps_cmd[95] = { 0x70 };
++	const u8 *gamma = n3_bootloader_gamma(&dsi->dev);
++	u8 page = 0;
++	unsigned int i;
++	ssize_t ret;
++
++	/* MSM fills in RC parameters before preparing the panel. Use that same
++	 * PPS for the panel decoder, including its vendor 0x70 register write.
++	 * Otherwise a hard-coded vendor PPS can differ from the DPU encoder.
++	 */
++	drm_dsc_pps_payload_pack(&pps, &ctx->dsc);
++	memcpy(pps_cmd + 1, &pps, sizeof(pps_cmd) - 1);
++
++	for (i = 0; i < ARRAY_SIZE(n3_on_cmds); i++) {
++		const struct n3_cmd *cmd = &n3_on_cmds[i];
++		const u8 *data = cmd->data;
++
++		if (cmd->len == 3 && data[0] == 0xf0 && data[1] == 0xaa)
++			page = data[2];
++		if (gamma && page == 0x13 && data[0] >= 0xb0 && data[0] <= 0xbb) {
++			unsigned int reg = data[0] - 0xb0;
++			unsigned int len = reg % 4 == 3 ? 3 : 17;
++
++			if (cmd->len == len)
++				data = gamma + (reg / 4) * 54 + (reg % 4) * 17;
++		}
++
++		if (cmd->len == sizeof(pps_cmd) && data[0] == 0x70)
++			data = pps_cmd;
++
++		/* Configure DSC and keep brightness zero before leaving sleep. */
++		if (cmd->len == 1 && data[0] == 0x11) {
++			ret = mipi_dsi_picture_parameter_set(dsi, &pps);
++			if (ret < 0)
++				return ret;
++			ret = mipi_dsi_compression_mode(dsi, true);
++			if (ret < 0)
++				return ret;
++			ret = mipi_dsi_dcs_set_display_brightness_large(dsi, 0);
++			if (ret < 0)
++				return ret;
++		}
++
++		ret = mipi_dsi_dcs_write_buffer(dsi, data, cmd->len);
++		if (ret < 0) {
++			dev_err(&dsi->dev, "N3 init command %u (0x%02x) failed: %zd\n",
++				i, data[0], ret);
++			return ret;
++		}
++		if (cmd->delay_ms)
++			msleep(cmd->delay_ms);
++	}
++
++	return 0;
++}
++
++static void n3_power_off(struct xiaomi_n3 *ctx)
++{
++	int i, ret;
++
++	gpiod_set_value_cansleep(ctx->reset, 1);
++	/* Reverse vendor power order: VDDD, VCI, VDDIO. */
++	for (i = ARRAY_SIZE(ctx->supplies) - 1; i >= 0; i--) {
++		usleep_range(1000, 2000);
++		ret = regulator_disable(ctx->supplies[i].consumer);
++		if (ret)
++			dev_warn(&ctx->dsi->dev, "Failed to disable %s: %d\n",
++				 ctx->supplies[i].supply, ret);
++	}
++	ctx->powered = false;
++}
++
++static int n3_prepare(struct drm_panel *panel)
++{
++	struct xiaomi_n3 *ctx = to_n3(panel);
++	unsigned long flags;
++	int i, ret;
++
++	mutex_lock(&ctx->lock);
++	for (i = 0; i < ARRAY_SIZE(ctx->supplies); i++) {
++		ret = regulator_enable(ctx->supplies[i].consumer);
++		if (ret)
++			goto disable_supplies;
++		/* Vendor post-on delays: VDDIO 2 ms, VCI 1 ms, VDDD 1 ms. */
++		usleep_range(i ? 1000 : 2000, i ? 2000 : 3000);
++	}
++
++	/* Active-low reset: physical low for 15 ms, high for 20 ms. */
++	gpiod_set_value_cansleep(ctx->reset, 1);
++	usleep_range(15000, 16000);
++	gpiod_set_value_cansleep(ctx->reset, 0);
++	msleep(20);
++
++	flags = ctx->dsi->mode_flags;
++	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
++	ret = n3_on(ctx);
++	ctx->dsi->mode_flags = flags;
++	if (ret) {
++		n3_power_off(ctx);
++		goto unlock;
++	}
++	ctx->powered = true;
++	dev_info(&ctx->dsi->dev, "N3 initialized: 1200x2670 120 Hz, DSC 10 bpc / 8 bpp\n");
++	goto unlock;
++
++disable_supplies:
++	gpiod_set_value_cansleep(ctx->reset, 1);
++	while (--i >= 0) {
++		usleep_range(1000, 2000);
++		regulator_disable(ctx->supplies[i].consumer);
++	}
++unlock:
++	mutex_unlock(&ctx->lock);
++	return ret;
++}
++
++static int n3_disable(struct drm_panel *panel)
++{
++	struct xiaomi_n3 *ctx = to_n3(panel);
++	unsigned long flags;
++	int ret;
++
++	mutex_lock(&ctx->lock);
++	flags = ctx->dsi->mode_flags;
++	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
++	ret = mipi_dsi_dcs_set_display_off(ctx->dsi);
++	if (ret)
++		dev_warn(&ctx->dsi->dev, "Display off failed: %d\n", ret);
++	usleep_range(10000, 11000);
++	ctx->dsi->mode_flags = flags;
++	mutex_unlock(&ctx->lock);
++	return 0;
++}
++
++static int n3_unprepare(struct drm_panel *panel)
++{
++	struct xiaomi_n3 *ctx = to_n3(panel);
++	unsigned long flags;
++	int ret;
++
++	mutex_lock(&ctx->lock);
++	flags = ctx->dsi->mode_flags;
++	ctx->dsi->mode_flags |= MIPI_DSI_MODE_LPM;
++	ret = mipi_dsi_dcs_enter_sleep_mode(ctx->dsi);
++	if (ret)
++		dev_warn(&ctx->dsi->dev, "Enter sleep failed: %d\n", ret);
++	/* Honor the vendor off delay even when the DCS transfer fails. */
++	msleep(120);
++	ctx->dsi->mode_flags = flags;
++	n3_power_off(ctx);
++	mutex_unlock(&ctx->lock);
++	return 0;
++}
++
++static const struct drm_display_mode n3_mode = {
++	.clock = (1200 + 16 + 16 + 32) * (2670 + 45 + 8 + 37) * 120 / 1000,
++	.hdisplay = 1200,
++	.hsync_start = 1200 + 16,
++	.hsync_end = 1200 + 16 + 16,
++	.htotal = 1200 + 16 + 16 + 32,
++	.vdisplay = 2670,
++	.vsync_start = 2670 + 45,
++	.vsync_end = 2670 + 45 + 8,
++	.vtotal = 2670 + 45 + 8 + 37,
++	.width_mm = 66,
++	.height_mm = 147,
++};
++
++static int n3_get_modes(struct drm_panel *panel, struct drm_connector *connector)
++{
++	struct drm_display_mode *mode;
++
++	mode = drm_mode_duplicate(connector->dev, &n3_mode);
++	if (!mode)
++		return -ENOMEM;
++	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
++	drm_mode_set_name(mode);
++	drm_mode_probed_add(connector, mode);
++	connector->display_info.width_mm = n3_mode.width_mm;
++	connector->display_info.height_mm = n3_mode.height_mm;
++	connector->display_info.bpc = 10;
++	return 1;
++}
++
++static const struct drm_panel_funcs n3_panel_funcs = {
++	.prepare = n3_prepare,
++	.disable = n3_disable,
++	.unprepare = n3_unprepare,
++	.get_modes = n3_get_modes,
++};
++
++static int n3_bl_update_status(struct backlight_device *bl)
++{
++	struct xiaomi_n3 *ctx = bl_get_data(bl);
++	unsigned long flags;
++	int ret = 0;
++
++	mutex_lock(&ctx->lock);
++	if (ctx->powered) {
++		flags = ctx->dsi->mode_flags;
++		/* Stock backlight transfers use HS and send the high byte first. */
++		ctx->dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
++		ret = mipi_dsi_dcs_set_display_brightness_large(ctx->dsi,
++						backlight_get_brightness(bl));
++		ctx->dsi->mode_flags = flags;
++	}
++	mutex_unlock(&ctx->lock);
++	return ret;
++}
++
++static const struct backlight_ops n3_bl_ops = {
++	.update_status = n3_bl_update_status,
++};
++
++static int n3_probe(struct mipi_dsi_device *dsi)
++{
++	const struct backlight_properties props = {
++		.type = BACKLIGHT_RAW,
++		.brightness = 307, /* Vendor initial brightness; avoid HBM. */
++		.max_brightness = 2047,
++	};
++	struct device *dev = &dsi->dev;
++	struct xiaomi_n3 *ctx;
++	int ret;
++
++	ctx = devm_drm_panel_alloc(dev, struct xiaomi_n3, panel,
++				   &n3_panel_funcs, DRM_MODE_CONNECTOR_DSI);
++	if (IS_ERR(ctx))
++		return PTR_ERR(ctx);
++	ctx->dsi = dsi;
++	mutex_init(&ctx->lock);
++	ctx->supplies[0].supply = "vddio";
++	ctx->supplies[1].supply = "vci";
++	ctx->supplies[2].supply = "vddd";
++	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(ctx->supplies), ctx->supplies);
++	if (ret)
++		return dev_err_probe(dev, ret, "Failed to get panel supplies\n");
++	ctx->reset = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(ctx->reset))
++		return dev_err_probe(dev, PTR_ERR(ctx->reset), "Failed to get reset GPIO\n");
++
++	mipi_dsi_set_drvdata(dsi, ctx);
++	dsi->lanes = 4;
++	/* Match the 10-bpc DSC stream and the stock 30-bpp DSI interface. */
++	dsi->format = MIPI_DSI_FMT_RGB101010;
++	dsi->mode_flags = MIPI_DSI_CLOCK_NON_CONTINUOUS;
++	ctx->panel.prepare_prev_first = true; /* Vendor lp11-init requirement. */
++
++	/* The embedded vendor 0x70 PPS is DSC 1.1, despite its DT's 1.2 label.
++	 * Use the same RGB pre-SCR encoding that the MSM driver supports.
++	 */
++	ctx->dsc.dsc_version_major = 1;
++	ctx->dsc.dsc_version_minor = 1;
++	ctx->dsc.slice_height = 30;
++	ctx->dsc.slice_width = 600;
++	ctx->dsc.slice_count = 2;
++	ctx->dsc.bits_per_component = 10;
++	ctx->dsc.bits_per_pixel = 8 << 4;
++	ctx->dsc.block_pred_enable = true;
++	dsi->dsc = &ctx->dsc;
++
++	ctx->panel.backlight = devm_backlight_device_register(dev, "houji-n3",
++					dev, ctx, &n3_bl_ops, &props);
++	if (IS_ERR(ctx->panel.backlight))
++		return dev_err_probe(dev, PTR_ERR(ctx->panel.backlight),
++				     "Failed to register backlight\n");
++
++	drm_panel_add(&ctx->panel);
++	ret = devm_mipi_dsi_attach(dev, dsi);
++	if (ret) {
++		drm_panel_remove(&ctx->panel);
++		return dev_err_probe(dev, ret, "Failed to attach DSI\n");
++	}
++	return 0;
++}
++
++static void n3_remove(struct mipi_dsi_device *dsi)
++{
++	struct xiaomi_n3 *ctx = mipi_dsi_get_drvdata(dsi);
++
++	drm_panel_remove(&ctx->panel);
++}
++
++static const struct of_device_id n3_of_match[] = {
++	{ .compatible = "xiaomi,n3-42-0d-0a" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, n3_of_match);
++
++static struct mipi_dsi_driver n3_driver = {
++	.probe = n3_probe,
++	.remove = n3_remove,
++	.driver = {
++		.name = "panel-xiaomi-n3",
++		.of_match_table = n3_of_match,
++	},
++};
++module_mipi_dsi_driver(n3_driver);
++
++MODULE_DESCRIPTION("Xiaomi 14 N3 AMOLED panel, experimental 120 Hz support");
++MODULE_LICENSE("GPL");

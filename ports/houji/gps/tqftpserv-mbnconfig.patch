@@ -1,0 +1,25 @@
+diff --git a/translate.c b/translate.c
+index 409ff95..94a551f 100644
+--- a/translate.c
++++ b/translate.c
+@@ -25,6 +25,8 @@
+ #define READONLY_MODEM_PATH	READONLY_FW_BASE "modem_pr"
+ #define READONLY_VENDOR_PATH		"/readonly/vendor/firmware/"
+ #define READONLY_VENDOR_MNT_PATH	"/readonly/vendor/firmware_mnt/image/"
++#define READONLY_MBNCONFIG_BASE	"/readonly/mbnconfig/image/"
++#define READONLY_MBNCONFIG_PATH	READONLY_MBNCONFIG_BASE "modem_pr/mcfg/"
+ 
+ #ifndef ANDROID
+ #define FIRMWARE_BASE	"/lib/firmware/"
+@@ -228,6 +230,11 @@ int translate_open(const char *path, int flags)
+ 		return translate_readonly(path + strlen(READONLY_VENDOR_MNT_PATH));
+ 	else if (!strncmp(path, READONLY_VENDOR_PATH, strlen(READONLY_VENDOR_PATH)))
+ 		return translate_readonly(path + strlen(READONLY_VENDOR_PATH));
++	/* HyperOS mbnota copies the stock MCFG tree here when there is no
++	 * newer OTA configuration. Serve the same files directly, read-only.
++	 */
++	else if (!strncmp(path, READONLY_MBNCONFIG_PATH, strlen(READONLY_MBNCONFIG_PATH)))
++		return translate_readonly(path + strlen(READONLY_MBNCONFIG_BASE));
+ 
+ 	fprintf(stderr, "invalid path %s, rejecting\n", path);
+ 	errno = ENOENT;

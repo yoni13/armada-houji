@@ -220,6 +220,10 @@ if [ -f "${KCONFIG_OVERRIDES}" ]; then
     rm -f "${frag}" "${merge_log}"
 fi
 
+# kernelrelease is a no-sync-config target. Refresh generated configuration
+# first, otherwise a fragment's CONFIG_LOCALVERSION can leave the staged
+# vmlinuz/DTBs under a different release from modules_install.
+make "${MAKE_ARGS[@]}" prepare >/dev/null
 KVER=$(make "${MAKE_ARGS[@]}" -s kernelrelease)
 echo "==> Kernel version: ${KVER}"
 echo "==> Compiler: $(sed -n 's/^CONFIG_CC_VERSION_TEXT="\(.*\)"$/\1/p' .config)"

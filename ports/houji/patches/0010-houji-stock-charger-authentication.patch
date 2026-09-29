@@ -1,0 +1,742 @@
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -16,6 +16,32 @@
+ #include <linux/soc/qcom/pmic_glink.h>
+ #include <linux/math.h>
+ #include <linux/units.h>
++#include <linux/unaligned.h>
++#include <linux/hex.h>
++
++/* Staging ceiling for measured bring-up. Raising this ceiling does not itself
++ * vote for more current. Every higher vote still needs live authentication,
++ * fresh board reporting and the ten-second renewal below. Stock's highest
++ * normal-mode FCC vote is 15.6 A; never accept the unrestricted -1 sentinel.
++ */
++static unsigned int houji_max_fcc_ua = 1000000;
++static int houji_set_fcc_cap(const char *val, const struct kernel_param *kp)
++{
++	unsigned int value;
++	int ret = kstrtouint(val, 10, &value);
++	if (ret)
++		return ret;
++	if (value < 1000000 || value > 15600000)
++		return -ERANGE;
++	WRITE_ONCE(*(unsigned int *)kp->arg, value);
++	return 0;
++}
++static const struct kernel_param_ops houji_fcc_cap_ops = {
++	.set = houji_set_fcc_cap,
++	.get = param_get_uint,
++};
++module_param_cb(houji_max_fcc_ua, &houji_fcc_cap_ops, &houji_max_fcc_ua, 0600);
++MODULE_PARM_DESC(houji_max_fcc_ua, "Houji staged FCC ceiling in microamps (1000000..15600000)");
+ 
+ #define BATTMGR_CHEMISTRY_LEN	4
+ #define BATTMGR_STRING_LEN	128
+@@ -327,6 +353,14 @@
+ 	u32 pending_property;
+ 	u32 houji_fcc;
+ 	u32 houji_xm_value;
++	u8 houji_xm_payload[32];
++	u32 pending_size;
++	u32 houji_fcc_vote;
++	u32 houji_thermal_level;
++	u32 houji_wireless_type;
++	u32 houji_board_temp;
++	unsigned long houji_board_updated;
++	bool houji_board_valid;
+ 	int error;
+ 	struct completion ack;
+ 
+@@ -339,6 +373,9 @@
+ 	struct qcom_battmgr_wireless wireless;
+ 
+ 	struct work_struct enable_work;
++	struct delayed_work houji_fcc_work;
++	unsigned long houji_fcc_deadline;
++	bool houji_fcc_stopping;
+ 
+ 	/*
+ 	 * @lock is used to prevent concurrent power supply requests to the
+@@ -353,8 +390,13 @@
+ 	unsigned long left;
+ 	int ret;
+ 
+-	WRITE_ONCE(battmgr->pending_property, len == sizeof(*req) ?
+-		   le32_to_cpu(req->property) : U32_MAX);
++	WRITE_ONCE(battmgr->pending_size, len);
++	if ((le32_to_cpu(req->hdr.opcode) == 0x50 ||
++	     le32_to_cpu(req->hdr.opcode) == 0x51) && (len == 32 || len == 52))
++		WRITE_ONCE(battmgr->pending_property, get_unaligned_le32(data + 12));
++	else
++		WRITE_ONCE(battmgr->pending_property, len == sizeof(*req) ?
++			   le32_to_cpu(req->property) : U32_MAX);
+ 	WRITE_ONCE(battmgr->pending_opcode, le32_to_cpu(req->hdr.opcode));
+ 	reinit_completion(&battmgr->ack);
+ 
+@@ -925,40 +967,98 @@
+ };
+ 
+ /* Stock HyperOS thermal_fcc_override writes BAT_SET property 12.
+- * This bring-up interface permits at most 1 A battery current. Firmware
++ * The bring-up ceiling defaults to 1 A and can be staged up to 15.6 A. Firmware
+  * adapter, authentication, JEITA and other thermal votes remain in place.
+  */
++/* A higher host FCC vote is a lease. If its userspace owner disappears, do
++ * not leave that vote in ADSP indefinitely. Retain the conservative 500 mA
++ * baseline and the independent firmware thermal/authentication limits.
++ */
++static void houji_fcc_watchdog(struct work_struct *work)
++{
++	struct qcom_battmgr *b = container_of(to_delayed_work(work),
++					    struct qcom_battmgr, houji_fcc_work);
++	int ret;
++	mutex_lock(&b->lock);
++	if (READ_ONCE(b->houji_fcc_stopping) || b->houji_fcc_vote <= 500000)
++		goto out;
++	if (time_before(jiffies, b->houji_fcc_deadline)) {
++		mod_delayed_work(system_wq, &b->houji_fcc_work,
++				 b->houji_fcc_deadline - jiffies);
++		goto out;
++	}
++	if (!b->service_up) {
++		mod_delayed_work(system_wq, &b->houji_fcc_work, HZ);
++		goto out;
++	}
++	ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_SET,
++					    HOUJI_BATT_FCC, 500000);
++	if (ret) {
++		dev_warn_ratelimited(b->dev, "expired FCC lease: fallback failed: %d\n", ret);
++		mod_delayed_work(system_wq, &b->houji_fcc_work, HZ);
++	} else {
++		b->houji_fcc = 500000;
++		b->houji_fcc_vote = 500000;
++		dev_info(b->dev, "host FCC lease expired; reduced to 500 mA\n");
++	}
++out:
++	mutex_unlock(&b->lock);
++}
++
++static void houji_fcc_stop(void *data)
++{
++	struct qcom_battmgr *b = data;
++	WRITE_ONCE(b->houji_fcc_stopping, true);
++	cancel_delayed_work_sync(&b->houji_fcc_work);
++	mutex_lock(&b->lock);
++	if (b->service_up && b->houji_fcc_vote > 500000)
++		qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_SET,
++					     HOUJI_BATT_FCC, 500000);
++	mutex_unlock(&b->lock);
++}
++/* Caller holds the serialized GLINK lock. Wired PD takes precedence when both
++ * supplies report online; otherwise use the stock wireless receiver state.
++ */
++static int houji_charging_source_locked(struct qcom_battmgr *b)
++{
++	int ret;
++	ret = qcom_battmgr_request_property(b, BATTMGR_USB_PROPERTY_GET, USB_ONLINE, 0);
++	if (ret)
++		return ret;
++	if (b->usb.online) {
++		ret = qcom_battmgr_request_property(b, BATTMGR_USB_PROPERTY_GET, USB_ADAP_TYPE, 0);
++		if (ret)
++			return ret;
++		if (b->usb.usb_type == POWER_SUPPLY_USB_TYPE_PD ||
++		    b->usb.usb_type == POWER_SUPPLY_USB_TYPE_PD_PPS)
++			return 1;
++	}
++	ret = qcom_battmgr_request_property(b, BATTMGR_WLS_PROPERTY_GET, WLS_ONLINE, 0);
++	if (ret)
++		return ret;
++	return b->wireless.online ? 2 : -ENODEV;
++}
++
+ static int houji_bat_set_property(struct power_supply *psy,
+ 				  enum power_supply_property psp,
+ 				  const union power_supply_propval *val)
+ {
+ 	struct qcom_battmgr *b = power_supply_get_drvdata(psy);
+-	int ret;
++	int ret, source = 0;
+ 	if (b->variant != QCOM_BATTMGR_XIAOMI_HOUJI ||
+ 	    psp != POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT)
+ 		return -EOPNOTSUPP;
+-	if (val->intval < 0 || val->intval > 1000000)
++	if (val->intval < 0 || val->intval > READ_ONCE(houji_max_fcc_ua))
+ 		return -ERANGE;
+ 	if (!b->service_up)
+ 		return -EAGAIN;
+ 	mutex_lock(&b->lock);
+-	/* A positive request requires a detected USB-PD supply and sane battery
++	/* A positive request requires a detected PD or wireless supply and sane battery
+   * temperature. Zero remains available for reducing the host vote. */
+ 	if (val->intval) {
+-		ret = qcom_battmgr_request_property(b, BATTMGR_USB_PROPERTY_GET,
+-						    USB_ONLINE, 0);
+-		if (ret)
+-			goto out;
+-		if (!b->usb.online) {
+-			ret = -ENODEV;
+-			goto out;
+-		}
+-		ret = qcom_battmgr_request_property(b, BATTMGR_USB_PROPERTY_GET,
+-						    USB_ADAP_TYPE, 0);
+-		if (ret)
+-			goto out;
+-		if (b->usb.usb_type != POWER_SUPPLY_USB_TYPE_PD) {
+-			ret = -EOPNOTSUPP;
++		source = houji_charging_source_locked(b);
++		if (source < 0) {
++			ret = source;
+ 			goto out;
+ 		}
+ 		ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_GET,
+@@ -971,8 +1071,51 @@
+ 			goto out;
+ 		}
+ 	}
++	/* High current requires successful battery authentication and a fresh
++	 * measured virtual-skin report. Never raise it from stale host telemetry.
++	 */
++	if (val->intval > 1000000) {
++		if (!b->houji_board_valid ||
++		    time_after(jiffies, b->houji_board_updated + 10 * HZ) ||
++		    b->houji_board_temp >= 450 || b->status.temperature < 150 ||
++		    b->status.temperature > 380) {
++			ret = -EAGAIN;
++			goto out;
++		}
++		ret = qcom_battmgr_request_property(b, 0x50, 5, 0);
++		if (ret || b->houji_xm_value != 1) {
++			ret = ret ?: -EACCES;
++			goto out;
++		}
++		if (source == 2) {
++			/* Stock EPP50/HPP firmware table tops out at 10 A battery FCC. */
++			if (val->intval > 10000000) {
++				ret = -ERANGE;
++				goto out;
++			}
++		} else {
++			ret = qcom_battmgr_request_property(b, 0x50, 32, 0);
++			/* The stock ADSP permits up to 5350 mA in non-FFC mode. Standard
++			 * PD/QC4 does not need Xiaomi identity; higher FCC does.
++			 */
++			if (ret || (b->houji_xm_value != 1 && val->intval > 5350000)) {
++				ret = ret ?: -EACCES;
++				goto out;
++			}
++		}
++	}
+ 	ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_SET,
+ 					    HOUJI_BATT_FCC, val->intval);
++	if (!ret) {
++		b->houji_fcc = val->intval;
++		b->houji_fcc_vote = val->intval;
++		if (val->intval > 500000) {
++			b->houji_fcc_deadline = jiffies + 10 * HZ;
++			mod_delayed_work(system_wq, &b->houji_fcc_work, 10 * HZ);
++		} else {
++			cancel_delayed_work(&b->houji_fcc_work);
++		}
++	}
+ 	if (!ret)
+ 		ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_GET,
+ 						    HOUJI_BATT_FCC, 0);
+@@ -1560,6 +1703,9 @@
+ 		}
+ 
+ 		switch (property) {
++		case BATT_CHG_CTRL_LIM:
++			battmgr->houji_thermal_level = le32_to_cpu(resp->intval.value);
++			break;
+ 		case BATT_STATUS:
+ 			battmgr->status.status = le32_to_cpu(resp->intval.value);
+ 			break;
+@@ -1697,6 +1843,10 @@
+ 			goto out_complete;
+ 
+ 		switch (property) {
++		case 9: /* HyperOS wireless type; mainline WLS_TYPE is unrelated. */
++			if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI)
++				battmgr->houji_wireless_type = le32_to_cpu(resp->intval.value);
++			break;
+ 		case WLS_ONLINE:
+ 			battmgr->wireless.online = le32_to_cpu(resp->intval.value);
+ 			break;
+@@ -1758,17 +1908,28 @@
+ 			return;
+ 	}
+ 
+-	/* Only accept the matching fixed Xiaomi status/cancellation request. */
++	/* Scalar, VDM and fuel-gauge packets have distinct layouts. Do not let
++	 * an unrelated property or unsolicited notification complete a request.
++	 */
+ 	if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI &&
+ 	    (opcode == 0x50 || opcode == 0x51)) {
+-		if (len != sizeof(*hdr) + sizeof(resp->intval))
++		u32 expected = READ_ONCE(battmgr->pending_size);
++		if (len < sizeof(*hdr) + sizeof(__le32) ||
++		    le32_to_cpu(resp->intval.property) != READ_ONCE(battmgr->pending_property))
++			return;
++		if (len == 24) {
++			if (le32_to_cpu(resp->intval.result))
++				battmgr->error = -EIO;
++			else if (opcode == 0x50 && expected != 24)
++				battmgr->error = -ENODATA;
++			else
++				battmgr->houji_xm_value = le32_to_cpu(resp->intval.value);
++		} else if ((expected == 32 || expected == 52) && len == expected) {
++			if (opcode == 0x50)
++				memcpy(battmgr->houji_xm_payload, data + 16, expected == 32 ? 16 : 32);
++		} else {
+ 			battmgr->error = -ENODATA;
+-		else if (le32_to_cpu(resp->intval.property) != READ_ONCE(battmgr->pending_property))
+-			return;
+-		else if (le32_to_cpu(resp->intval.result))
+-			battmgr->error = -EIO;
+-		else
+-			battmgr->houji_xm_value = le32_to_cpu(resp->intval.value);
++		}
+ 		complete(&battmgr->ack);
+ 		return;
+ 	}
+@@ -1884,6 +2045,412 @@
+ 	.attrs = houji_charger_attrs,
+ };
+ 
++/* Houji HyperOS batterysecret ABI, mapped to the existing serialized client.
++ * Authentication stays in the hash-pinned vendor agent. These are firmware
++ * properties, not direct PMIC register accesses or replacements for JEITA.
++ */
++static int houji_xm_extended(struct qcom_battmgr *b, u32 opcode,
++			     u32 property, const void *payload, size_t size)
++{
++	struct {
++		struct pmic_glink_hdr hdr;
++		__le32 property;
++		u8 payload[32];
++		__le32 slave;
++	} req = {
++		.hdr.owner = cpu_to_le32(PMIC_GLINK_OWNER_BATTMGR),
++		.hdr.type = cpu_to_le32(PMIC_GLINK_REQ_RESP),
++		.hdr.opcode = cpu_to_le32(opcode),
++		.property = cpu_to_le32(property),
++	};
++	if (size != 16 && size != 32)
++		return -EINVAL;
++	if (payload)
++		memcpy(req.payload, payload, size);
++	return qcom_battmgr_request(b, &req, size == 16 ? 32 : 52);
++}
++
++struct houji_xm_attribute {
++	struct device_attribute attr;
++	u32 property;
++	bool hex;
++};
++
++static ssize_t houji_xm_show(struct device *dev, struct device_attribute *attr,
++			     char *buf)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	struct houji_xm_attribute *a = container_of(attr, struct houji_xm_attribute, attr);
++	int ret;
++	u32 value;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	ret = qcom_battmgr_request_property(b, 0x50, a->property, 0);
++	value = b->houji_xm_value;
++	mutex_unlock(&b->lock);
++	if (ret)
++		return ret;
++	return sysfs_emit(buf, a->hex ?
++		(a->property == 31 ? "%04x\n" : "%08x\n") : "%u\n", value);
++}
++
++static ssize_t houji_xm_bool_store(struct device *dev,
++		struct device_attribute *attr, const char *buf, size_t count)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	struct houji_xm_attribute *a = container_of(attr, struct houji_xm_attribute, attr);
++	bool value;
++	int ret;
++	if (kstrtobool(buf, &value))
++		return -EINVAL;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	ret = qcom_battmgr_request_property(b, 0x51, a->property, value);
++	mutex_unlock(&b->lock);
++	return ret ? ret : count;
++}
++
++static ssize_t houji_board_temp_store(struct device *dev,
++		struct device_attribute *attr, const char *buf, size_t count)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	u32 value;
++	int ret;
++	/* Stock mi_thermal_interface reports the virtual skin sensor in deci-C. */
++	if (kstrtou32(buf, 10, &value) || value > 800)
++		return -EINVAL;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	ret = qcom_battmgr_request_property(b, 0x51, 10, value);
++	if (!ret) {
++		b->houji_board_temp = value;
++		b->houji_board_updated = jiffies;
++		b->houji_board_valid = true;
++	}
++	mutex_unlock(&b->lock);
++	return ret ? ret : count;
++}
++
++#define HOUJI_XM_RO(_name, _prop, _hex) \
++	static struct houji_xm_attribute houji_attr_##_name = { \
++		.attr = __ATTR(_name, 0400, houji_xm_show, NULL), \
++		.property = _prop, .hex = _hex, \
++	}
++#define HOUJI_XM_BOOL(_name, _prop) \
++	static struct houji_xm_attribute houji_attr_##_name = { \
++		.attr = __ATTR(_name, 0600, houji_xm_show, houji_xm_bool_store), \
++		.property = _prop, \
++	}
++
++HOUJI_XM_BOOL(authentic, 5);
++HOUJI_XM_BOOL(verify_process, 20);
++/* Preserve HyperOS's ABI spelling. Only the vendor digest comparison writes it. */
++HOUJI_XM_BOOL(pd_verifed, 32);
++HOUJI_XM_RO(adapter_id, 30, true);
++HOUJI_XM_RO(adapter_svid, 31, true);
++HOUJI_XM_RO(pdo2, 33, true);
++HOUJI_XM_RO(apdo_max, 61, false);
++HOUJI_XM_RO(connector_temp, 2, false);
++static struct houji_xm_attribute houji_attr_thermal_board_temp = {
++	.attr = __ATTR(thermal_board_temp, 0600, houji_xm_show, houji_board_temp_store),
++	.property = 10,
++};
++HOUJI_XM_RO(fastchg_mode, 55, false);
++HOUJI_XM_RO(tx_adapter, 77, false);
++HOUJI_XM_RO(wls_die_temp, 79, false);
++
++static ssize_t current_state_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	u32 value;
++	int ret;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	ret = qcom_battmgr_request_property(b, 0x50, 29, 0);
++	value = b->houji_xm_value;
++	mutex_unlock(&b->lock);
++	if (ret)
++		return ret;
++	return sysfs_emit(buf, "%s\n", value == 32 ? "SNK_Ready" :
++		value == 26 ? "SNK_Startup" : value == 5 ? "SRC_Ready" : "UNKNOWN");
++}
++static DEVICE_ATTR_RO(current_state);
++
++static ssize_t verify_slave_flag_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	/* Houji has a single authenticated pack; do not expose a slave selector. */
++	return sysfs_emit(buf, "0\n");
++}
++
++static ssize_t verify_slave_flag_store(struct device *dev,
++		struct device_attribute *attr, const char *buf, size_t count)
++{
++	bool value;
++	return kstrtobool(buf, &value) || value ? -EINVAL : count;
++}
++static DEVICE_ATTR(verify_slave_flag, 0600, verify_slave_flag_show,
++		   verify_slave_flag_store);
++
++static ssize_t verify_digest_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	int ret;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	ret = houji_xm_extended(b, 0x50, 1, NULL, 32);
++	if (!ret) {
++		bin2hex(buf, b->houji_xm_payload, 32);
++		buf[64] = '\n';
++		ret = 65;
++	}
++	mutex_unlock(&b->lock);
++	return ret;
++}
++
++static size_t houji_text_length(const char *buf, size_t count)
++{
++	/* Vendor writes include either one NUL or a newline. Reject other tails. */
++	if (count && (buf[count - 1] == '\n' || !buf[count - 1]))
++		count--;
++	return count;
++}
++
++static ssize_t verify_digest_store(struct device *dev,
++		struct device_attribute *attr, const char *buf, size_t count)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	u8 challenge[32];
++	int ret;
++	if (houji_text_length(buf, count) != 64 || hex2bin(challenge, buf, 32))
++		return -EINVAL;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	ret = houji_xm_extended(b, 0x51, 1, challenge, 32);
++	mutex_unlock(&b->lock);
++	memzero_explicit(challenge, sizeof(challenge));
++	return ret ? ret : count;
++}
++static DEVICE_ATTR(verify_digest, 0600, verify_digest_show, verify_digest_store);
++
++static ssize_t request_vdm_cmd_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	u32 state;
++	int ret;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	ret = qcom_battmgr_request_property(b, 0x50, 34, 0);
++	if (ret)
++		goto out;
++	state = b->houji_xm_value;
++	if (state >= 1 && state <= 3) {
++		ret = qcom_battmgr_request_property(b, 0x50, 20 + state, 0);
++		if (!ret)
++			ret = sysfs_emit(buf, "%u,%u\n", state, b->houji_xm_value);
++	} else if (state == 5) {
++		ret = houji_xm_extended(b, 0x50, 25, NULL, 16);
++		if (!ret)
++			ret = sysfs_emit(buf, "5,%08x%08x%08x%08x\n",
++				get_unaligned_le32(b->houji_xm_payload),
++				get_unaligned_le32(b->houji_xm_payload + 4),
++				get_unaligned_le32(b->houji_xm_payload + 8),
++				get_unaligned_le32(b->houji_xm_payload + 12));
++	} else if (state <= 9) {
++		ret = sysfs_emit(buf, "%u,Null\n", state);
++	} else {
++		ret = -EPROTO;
++	}
++out:
++	mutex_unlock(&b->lock);
++	return ret;
++}
++
++static ssize_t request_vdm_cmd_store(struct device *dev,
++		struct device_attribute *attr, const char *buf, size_t count)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	size_t size = houji_text_length(buf, count);
++	u8 payload[16] = {};
++	unsigned int cmd, i;
++	u32 value = 0;
++	int ret;
++	if (size < 3 || buf[0] < '1' || buf[0] > '8' || buf[1] != ',')
++		return -EINVAL;
++	cmd = buf[0] - '0';
++	if (cmd <= 3) {
++		if (size != 6 || memcmp(buf + 2, "null", 4))
++			return -EINVAL;
++	} else if (cmd == 6 || cmd == 7) {
++		if (size != 10 || hex2bin(payload, buf + 2, 4))
++			return -EINVAL;
++		value = get_unaligned_le32(payload);
++		if (value > 1)
++			return -EINVAL;
++	} else {
++		if (size != 34 || hex2bin(payload, buf + 2, 16))
++			return -EINVAL;
++		/* Match Xiaomi's StringToHex followed by swab32 for each VDO. */
++		for (i = 0; i < 16; i += 4)
++			put_unaligned_le32(get_unaligned_be32(payload + i), payload + i);
++	}
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	if (cmd == 4 || cmd == 5 || cmd == 8)
++		ret = houji_xm_extended(b, 0x51, 20 + cmd, payload, 16);
++	else
++		ret = qcom_battmgr_request_property(b, 0x51, 20 + cmd, value);
++	mutex_unlock(&b->lock);
++	memzero_explicit(payload, sizeof(payload));
++	return ret ? ret : count;
++}
++static DEVICE_ATTR(request_vdm_cmd, 0600, request_vdm_cmd_show, request_vdm_cmd_store);
++
++static ssize_t fcc_lease_seconds_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	return sysfs_emit(buf, "10\n");
++}
++static DEVICE_ATTR_RO(fcc_lease_seconds);
++
++static ssize_t fcc_max_ua_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	return sysfs_emit(buf, "%u\n", READ_ONCE(houji_max_fcc_ua));
++}
++static DEVICE_ATTR_RO(fcc_max_ua);
++
++/* Houji's stock driver initializes sixteen mitigation levels. BAT10 is the
++ * wired thermal vote; XM81/82 are the two wireless thermal votes. They retain
++ * firmware tables and do not disable JEITA or remove any thermal client.
++ */
++static ssize_t wired_thermal_level_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	int ret;
++	u32 value;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_GET,
++					    BATT_CHG_CTRL_LIM, 0);
++	value = b->houji_thermal_level;
++	mutex_unlock(&b->lock);
++	return ret ? ret : sysfs_emit(buf, "%u\n", value);
++}
++
++static ssize_t wired_thermal_level_store(struct device *dev,
++		struct device_attribute *attr, const char *buf, size_t count)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	u32 value;
++	int ret;
++	if (kstrtou32(buf, 10, &value) || value > 15)
++		return -EINVAL;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_SET,
++					    BATT_CHG_CTRL_LIM, value);
++	mutex_unlock(&b->lock);
++	return ret ? ret : count;
++}
++static DEVICE_ATTR(wired_thermal_level, 0600, wired_thermal_level_show,
++		   wired_thermal_level_store);
++
++static ssize_t wireless_thermal_level_store(struct device *dev,
++		struct device_attribute *attr, const char *buf, size_t count)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	struct houji_xm_attribute *a = container_of(attr, struct houji_xm_attribute, attr);
++	u32 value;
++	int ret;
++	if (kstrtou32(buf, 10, &value) || value > 15)
++		return -EINVAL;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	ret = qcom_battmgr_request_property(b, BATTMGR_WLS_PROPERTY_GET,
++					    WLS_ONLINE, 0);
++	if (!ret && !b->wireless.online)
++		ret = -ENODEV;
++	if (!ret)
++		ret = qcom_battmgr_request_property(b, 0x51, a->property, value);
++	mutex_unlock(&b->lock);
++	return ret ? ret : count;
++}
++
++static struct houji_xm_attribute houji_attr_wireless_thermal_level = {
++	.attr = __ATTR(wireless_thermal_level, 0600, houji_xm_show, wireless_thermal_level_store),
++	.property = 81,
++};
++static struct houji_xm_attribute houji_attr_wireless_quick_thermal_level = {
++	.attr = __ATTR(wireless_quick_thermal_level, 0600, houji_xm_show, wireless_thermal_level_store),
++	.property = 82,
++};
++
++static ssize_t wireless_type_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	struct qcom_battmgr *b = dev_get_drvdata(dev);
++	const char * const names[] = { "Unknown", "BPP", "EPP", "HPP" };
++	u32 value;
++	int ret;
++	if (!b->service_up)
++		return -EAGAIN;
++	mutex_lock(&b->lock);
++	/* Stock wireless_type_show uses wire property 9, not mainline WLS_TYPE. */
++	ret = qcom_battmgr_request_property(b, BATTMGR_WLS_PROPERTY_GET, 9, 0);
++	value = b->houji_wireless_type;
++	mutex_unlock(&b->lock);
++	if (ret)
++		return ret;
++	return sysfs_emit(buf, "%s\n", value < ARRAY_SIZE(names) ? names[value] : "Unknown");
++}
++static DEVICE_ATTR_RO(wireless_type);
++
++static struct attribute *houji_auth_attrs[] = {
++	&dev_attr_fcc_lease_seconds.attr,
++	&dev_attr_fcc_max_ua.attr,
++	&dev_attr_wired_thermal_level.attr,
++	&houji_attr_wireless_thermal_level.attr.attr,
++	&houji_attr_wireless_quick_thermal_level.attr.attr,
++	&dev_attr_wireless_type.attr,
++	&houji_attr_authentic.attr.attr,
++	&houji_attr_verify_process.attr.attr,
++	&houji_attr_pd_verifed.attr.attr,
++	&houji_attr_adapter_id.attr.attr,
++	&houji_attr_adapter_svid.attr.attr,
++	&houji_attr_pdo2.attr.attr,
++	&houji_attr_apdo_max.attr.attr,
++	&houji_attr_connector_temp.attr.attr,
++	&houji_attr_thermal_board_temp.attr.attr,
++	&houji_attr_fastchg_mode.attr.attr,
++	&houji_attr_tx_adapter.attr.attr,
++	&houji_attr_wls_die_temp.attr.attr,
++	&dev_attr_current_state.attr,
++	&dev_attr_verify_slave_flag.attr,
++	&dev_attr_verify_digest.attr,
++	&dev_attr_request_vdm_cmd.attr,
++	NULL,
++};
++static const struct attribute_group houji_auth_group = {
++	.name = "houji_charger",
++	.attrs = houji_auth_attrs,
++};
++
+ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 			      const struct auxiliary_device_id *id)
+ {
+@@ -1911,6 +2478,7 @@
+ 	psy_cfg_supply.num_supplicants = 1;
+ 
+ 	INIT_WORK(&battmgr->enable_work, qcom_battmgr_enable_worker);
++	INIT_DELAYED_WORK(&battmgr->houji_fcc_work, houji_fcc_watchdog);
+ 	mutex_init(&battmgr->lock);
+ 	init_completion(&battmgr->ack);
+ 
+@@ -1994,8 +2562,15 @@
+ 		return PTR_ERR(battmgr->client);
+ 
+ 	pmic_glink_client_register(battmgr->client);
+-	if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI)
+-		return devm_device_add_group(dev, &houji_charger_group);
++	if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI) {
++		ret = devm_add_action_or_reset(dev, houji_fcc_stop, battmgr);
++		if (ret)
++			return ret;
++		ret = devm_device_add_group(dev, &houji_charger_group);
++		if (ret)
++			return ret;
++		return devm_device_add_group(dev, &houji_auth_group);
++	}
+ 
+ 	return 0;
+ }

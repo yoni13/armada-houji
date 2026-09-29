@@ -1,0 +1,18 @@
+[Unit]
+Description=Houji sensor orientation for Steam Game Mode
+After=iio-sensor-proxy.service systemd-user-sessions.service
+Wants=iio-sensor-proxy.service
+ConditionPathExists=/usr/libexec/armada/houji-gamescope-rotate
+
+[Service]
+User=armada
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=/usr/bin/python3 /usr/libexec/armada/houji-gamescope-orientation
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

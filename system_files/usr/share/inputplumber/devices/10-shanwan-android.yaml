@@ -1,0 +1,26 @@
+# SHANWAN 0079:181c puts Home on a separate Consumer Control interface.
+version: 1
+kind: CompositeDevice
+name: SHANWAN Android USB Gamepad
+matches: []
+single_source: false
+source_devices:
+  - group: gamepad
+    evdev:
+      name: SHANWAN Android Gamepad
+      vendor_id: "0079"
+      product_id: "181c"
+      handler: event*
+    capability_map_id: shanwan_android_axes
+  - group: keyboard
+    evdev:
+      name: SHANWAN Android Gamepad Consumer Control
+      vendor_id: "0079"
+      product_id: "181c"
+      handler: event*
+    capability_map_id: shanwan_android_home
+options:
+  auto_manage: true
+target_devices:
+  - xb360
+  - keyboard

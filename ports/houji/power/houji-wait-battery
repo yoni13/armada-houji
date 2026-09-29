@@ -1,0 +1,29 @@
+#!/usr/bin/python3
+"""Wait for live gauge data before UPower caches the supply's attributes."""
+from pathlib import Path
+import sys
+import time
+
+BATTERY = Path('/sys/class/power_supply/qcom-battmgr-bat')
+
+
+def ready(battery=BATTERY):
+    try:
+        full = int((battery / 'charge_full').read_text())
+        design = int((battery / 'charge_full_design').read_text())
+        voltage = int((battery / 'voltage_now').read_text())
+        # Zero remaining charge is valid on an empty battery. EAGAIN/ENODATA
+        # must not be mistaken for a supply without charge-unit attributes.
+        remaining = int((battery / 'charge_now').read_text())
+        return full > 0 and design > 0 and voltage > 1_000_000 and remaining >= 0
+    except (OSError, ValueError):
+        return False
+
+
+if __name__ == '__main__':
+    deadline = time.monotonic() + 45
+    while not ready():
+        if time.monotonic() >= deadline:
+            print('Houji battery telemetry not ready', file=sys.stderr)
+            sys.exit(1)
+        time.sleep(0.5)

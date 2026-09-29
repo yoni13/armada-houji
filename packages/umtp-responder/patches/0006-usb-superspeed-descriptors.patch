@@ -1,0 +1,53 @@
+diff --git a/inc/buildconf.h b/inc/buildconf.h
+index 8d110b2..3635d4d 100644
+--- a/inc/buildconf.h
++++ b/inc/buildconf.h
+@@ -5,7 +5,7 @@
+ 
+ #define CONFIG_USB_FS_SUPPORT 1      // USB 1.1 Full speed
+ #define CONFIG_USB_HS_SUPPORT 1      // USB 2.0 High speed
+-//#define CONFIG_USB_SS_SUPPORT 1    // USB 3.0 SuperSpeed
++#define CONFIG_USB_SS_SUPPORT 1    // USB 3.0 SuperSpeed
+ 
+ #define CONFIG_READ_FILE_BUFFER_SIZE  (1024*1024) // Must be a 2^x value.
+ #define CONFIG_MAX_TX_USB_BUFFER_SIZE (16*512)    // Must be a multiple of 512 and be less than CONFIG_READ_FILE_BUFFER_SIZE
+diff --git a/src/usb_gadget.c b/src/usb_gadget.c
+index 74d9d2a..798e148 100644
+--- a/src/usb_gadget.c
++++ b/src/usb_gadget.c
+@@ -251,6 +251,8 @@ void fill_ep_descriptor(mtp_ctx * ctx, usb_gadget * usbctx,struct usb_endpoint_d
+ 
+ 		ss_descriptor->ep_desc_comp.bLength = sizeof(struct usb_ss_ep_comp_descriptor);
+ 		ss_descriptor->ep_desc_comp.bDescriptorType = USB_DT_SS_ENDPOINT_COMP;
++		if (!(flags & EP_BULK_MODE))
++			ss_descriptor->ep_desc_comp.wBytesPerInterval = desc->wMaxPacketSize;
+ 	}
+ #endif
+ 
+@@ -812,6 +814,26 @@ int handle_ffs_ep0(usb_gadget * ctx)
+ 				else
+ 					status = 0;
+ 
++				if (!status)
++				{
++					struct usb_endpoint_descriptor descriptor;
++
++					/* Packet boundaries follow the negotiated speed, not the
++					 * configuration's high-speed fallback. Refresh on reconnect.
++					 */
++					status = ioctl(ctx->ep_handles[EP_DESCRIPTOR_IN], FUNCTIONFS_ENDPOINT_DESC, &descriptor);
++					if (!status)
++					{
++						mtp_context->max_packet_size = le16toh(descriptor.wMaxPacketSize) & 0x7ff;
++						if (!mtp_context->max_packet_size)
++							status = -1;
++						else
++							PRINT_MSG("Negotiated bulk packet size: %u", mtp_context->max_packet_size);
++					}
++					if (status)
++						PRINT_ERROR("Cannot determine FunctionFS endpoint packet size");
++				}
++
+ 				if (!status)
+ 				{
+ 					ctx->stop = 0;

@@ -1,0 +1,13 @@
+0001-drm-panel-xiaomi-n3.patch
+0002-ath12k-parse-nested-dbs-sbs.patch
+0003-qcom-battmgr-houji-property-ids.patch
+0004-houji-rgb-panel-rendering.patch
+0005-haptics-periodic-feedback.patch
+0006-houji-usb-charger-type.patch
+0007-ath12k-single-pdev-5ghz-range.patch
+0008-rpmsg-glink-detach-deadlock.patch
+0009-houji-charger-verification-completion.patch
+0010-houji-stock-charger-authentication.patch
+0011-houji-audioreach-tdm.patch
+0012-houji-battery-current-polarity.patch
+0013-ath12k-houji-stock-qmi-mlo.patch

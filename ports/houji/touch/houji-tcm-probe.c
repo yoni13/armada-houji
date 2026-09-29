@@ -1,0 +1,630 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Experimental S3910P SPI input driver. No firmware download or flash commands.
+ * Protocol/wiring reference: lolipuru/kernel_xiaomi_sm8650-modules,
+ * 4a31d6ee77b27c1b93d329de7bf4cbe16e699599, synaptics_tcm2.
+ */
+#include <linux/delay.h>
+#include <linux/debugfs.h>
+#include <linux/ktime.h>
+#include <linux/mutex.h>
+#include <linux/seq_file.h>
+#include <linux/gpio/consumer.h>
+#include <linux/module.h>
+#include <linux/input/mt.h>
+#include <linux/interrupt.h>
+#include <linux/regulator/consumer.h>
+#include <linux/spi/spi.h>
+#include <linux/unaligned.h>
+#include <linux/kfifo.h>
+#include <linux/kref.h>
+#include <linux/miscdevice.h>
+#include <linux/poll.h>
+#include <linux/slab.h>
+#include <linux/uaccess.h>
+
+struct houji_stream_record {
+	u16 length;
+	u8 bytes[24 + 4096];
+};
+
+struct houji_tcm_probe {
+	struct spi_device *spi;
+	struct regulator *avdd, *iovdd;
+	struct gpio_desc *reset, *irq;
+	u8 tx[4096], rx[4096];
+	struct input_dev *input;
+	u16 max_x, max_y, max_objects, max_write;
+	unsigned int frames, reports;
+	struct mutex raw_lock;
+	u8 raw[4096];
+	u16 raw_len;
+	u32 raw_sequence;
+	u64 raw_timestamp;
+	struct kref refs;
+	struct miscdevice stream_device;
+	DECLARE_KFIFO_PTR(stream_fifo, struct houji_stream_record);
+	struct houji_stream_record producer;
+	wait_queue_head_t stream_wait;
+	bool stream_open, stream_dead;
+	int stream_error;
+};
+
+struct houji_stream_reader {
+	struct houji_tcm_probe *touch;
+	struct mutex read_lock;
+	struct houji_stream_record record;
+};
+
+static void houji_stream_free(struct kref *refs)
+{
+	struct houji_tcm_probe *t = container_of(refs, struct houji_tcm_probe, refs);
+
+	kfifo_free(&t->stream_fifo);
+	kfree(t);
+}
+
+static void houji_touch_put(void *data)
+{
+	struct houji_tcm_probe *t = data;
+
+	kref_put(&t->refs, houji_stream_free);
+}
+
+static int houji_stream_open(struct inode *inode, struct file *file)
+{
+	struct miscdevice *misc = file->private_data;
+	struct houji_tcm_probe *t = container_of(misc, struct houji_tcm_probe, stream_device);
+	struct houji_stream_reader *reader;
+	int ret = 0;
+
+	reader = kzalloc(sizeof(*reader), GFP_KERNEL);
+	if (!reader)
+		return -ENOMEM;
+	mutex_lock(&t->raw_lock);
+	if (t->stream_dead)
+		ret = -ENODEV;
+	else if (t->stream_open)
+		ret = -EBUSY;
+	else {
+		t->stream_open = true;
+		t->stream_error = 0;
+		kfifo_reset(&t->stream_fifo);
+		kref_get(&t->refs);
+	}
+	mutex_unlock(&t->raw_lock);
+	if (ret) {
+		kfree(reader);
+		return ret;
+	}
+	reader->touch = t;
+	mutex_init(&reader->read_lock);
+	file->private_data = reader;
+	return nonseekable_open(inode, file);
+}
+
+static int houji_stream_release(struct inode *inode, struct file *file)
+{
+	struct houji_stream_reader *reader = file->private_data;
+	struct houji_tcm_probe *t = reader->touch;
+
+	mutex_lock(&t->raw_lock);
+	t->stream_open = false;
+	mutex_unlock(&t->raw_lock);
+	kfree(reader);
+	kref_put(&t->refs, houji_stream_free);
+	return 0;
+}
+
+static ssize_t houji_stream_read_locked(struct file *file, char __user *buffer,
+				size_t count, loff_t *position)
+{
+	struct houji_stream_reader *reader = file->private_data;
+	struct houji_tcm_probe *t = reader->touch;
+	int ret;
+
+	if (!count)
+		return 0;
+	for (;;) {
+		ret = mutex_lock_interruptible(&t->raw_lock);
+		if (ret)
+			return ret;
+		if (t->stream_dead || t->stream_error) {
+			ret = t->stream_dead ? -ENODEV : t->stream_error;
+			mutex_unlock(&t->raw_lock);
+			return ret;
+		}
+		if (kfifo_out_peek(&t->stream_fifo, &reader->record, 1)) {
+			if (count < reader->record.length) {
+				mutex_unlock(&t->raw_lock);
+				return -EMSGSIZE;
+			}
+			kfifo_skip(&t->stream_fifo);
+			mutex_unlock(&t->raw_lock);
+			if (copy_to_user(buffer, reader->record.bytes, reader->record.length))
+				return -EFAULT;
+			return reader->record.length;
+		}
+		mutex_unlock(&t->raw_lock);
+		if (file->f_flags & O_NONBLOCK)
+			return -EAGAIN;
+		ret = wait_event_interruptible(t->stream_wait,
+			READ_ONCE(t->stream_dead) || READ_ONCE(t->stream_error) ||
+			!kfifo_is_empty(&t->stream_fifo));
+		if (ret)
+			return ret;
+	}
+}
+
+static ssize_t houji_stream_read(struct file *file, char __user *buffer,
+				size_t count, loff_t *position)
+{
+	struct houji_stream_reader *reader = file->private_data;
+	ssize_t ret = mutex_lock_interruptible(&reader->read_lock);
+
+	if (ret)
+		return ret;
+	ret = houji_stream_read_locked(file, buffer, count, position);
+	mutex_unlock(&reader->read_lock);
+	return ret;
+}
+
+static __poll_t houji_stream_poll(struct file *file, poll_table *wait)
+{
+	struct houji_stream_reader *reader = file->private_data;
+	struct houji_tcm_probe *t = reader->touch;
+	__poll_t events = 0;
+
+	poll_wait(file, &t->stream_wait, wait);
+	mutex_lock(&t->raw_lock);
+	if (t->stream_dead)
+		events = EPOLLHUP | EPOLLERR;
+	else if (t->stream_error)
+		events = EPOLLERR;
+	else if (!kfifo_is_empty(&t->stream_fifo))
+		events = EPOLLIN | EPOLLRDNORM;
+	mutex_unlock(&t->raw_lock);
+	return events;
+}
+
+static const struct file_operations houji_stream_fops = {
+	.owner = THIS_MODULE,
+	.open = houji_stream_open,
+	.release = houji_stream_release,
+	.read = houji_stream_read,
+	.poll = houji_stream_poll,
+};
+
+static void houji_stream_unregister(void *data)
+{
+	struct houji_tcm_probe *t = data;
+
+	mutex_lock(&t->raw_lock);
+	t->stream_dead = true;
+	mutex_unlock(&t->raw_lock);
+	wake_up_interruptible(&t->stream_wait);
+	misc_deregister(&t->stream_device);
+}
+
+/* Caller holds raw_lock. Overflow is explicit and terminal for this reader;
+ * the stock temporal algorithm must not silently receive a broken sequence. */
+static void houji_stream_enqueue(struct houji_tcm_probe *t)
+{
+	u8 *p = t->producer.bytes;
+
+	if (!t->stream_open || t->stream_error || t->stream_dead)
+		return;
+	memset(p, 0, 24);
+	memcpy(p, "HTRF", 4);
+	put_unaligned_le32(t->raw_sequence, p + 4);
+	put_unaligned_le64(t->raw_timestamp, p + 8);
+	put_unaligned_le16(t->raw_len, p + 16);
+	memcpy(p + 24, t->raw, t->raw_len);
+	t->producer.length = 24 + t->raw_len;
+	if (kfifo_in(&t->stream_fifo, &t->producer, 1) != 1)
+		t->stream_error = -EOVERFLOW;
+}
+
+/* Read-only diagnostic snapshot. The mutex makes each record atomic;
+ * the seq_file buffer keeps partial userspace reads from mixing frames.
+ * HTRF record: magic, LE32 sequence, LE64 monotonic ns, LE16 size,
+ * six reserved zero bytes, then the exact controller payload.
+ */
+static int houji_tcm_raw_show(struct seq_file *s, void *unused)
+{
+	struct houji_tcm_probe *t = s->private;
+	u8 header[24] = { 'H', 'T', 'R', 'F' };
+
+	mutex_lock(&t->raw_lock);
+	if (t->raw_len) {
+		put_unaligned_le32(t->raw_sequence, header + 4);
+		put_unaligned_le64(t->raw_timestamp, header + 8);
+		put_unaligned_le16(t->raw_len, header + 16);
+		seq_write(s, header, sizeof(header));
+		seq_write(s, t->raw, t->raw_len);
+	}
+	mutex_unlock(&t->raw_lock);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(houji_tcm_raw);
+
+static void houji_tcm_debug_remove(void *data)
+{
+	debugfs_remove_recursive(data);
+}
+
+static void houji_tcm_power_off(void *data)
+{
+	struct houji_tcm_probe *t = data;
+
+	gpiod_set_value_cansleep(t->reset, 1);
+	regulator_disable(t->iovdd);
+	usleep_range(3000, 3100);
+	regulator_disable(t->avdd);
+}
+
+static int houji_tcm_read(struct houji_tcm_probe *t, size_t len)
+{
+	struct spi_transfer xfer = {
+		.tx_buf = t->tx, .rx_buf = t->rx, .len = len,
+	};
+
+	if (len > sizeof(t->rx))
+		return -EINVAL;
+	memset(t->tx, 0xff, len);
+	return spi_sync_transfer(t->spi, &xfer, 1);
+}
+
+/* Message reads and setup commands run before the IRQ is registered. */
+static int houji_tcm_message(struct houji_tcm_probe *t, u8 *code, u16 *len)
+{
+	int ret;
+
+	ret = houji_tcm_read(t, 4);
+	if (ret)
+		return ret;
+	if (t->rx[0] != 0xa5)
+		return -EPROTO;
+	*code = t->rx[1];
+	*len = get_unaligned_le16(t->rx + 2);
+	if (!*len)
+		return 0;
+	if (*len > sizeof(t->rx) - 3)
+		return -EMSGSIZE;
+	usleep_range(100, 200);
+	ret = houji_tcm_read(t, *len + 3);
+	if (ret)
+		return ret;
+	if (t->rx[0] != 0xa5 || t->rx[1] != 0x03 || t->rx[*len + 2] != 0x5a)
+		return -EPROTO;
+	return 0;
+}
+
+/* Compare the controller's full-duplex transfer path with TX-only writes.
+ * RX bytes during writes are discarded; command bytes and CS framing match.
+ */
+static int houji_tcm_write(struct houji_tcm_probe *t, size_t len)
+{
+	struct spi_transfer xfer = {
+		.tx_buf = t->tx, .rx_buf = t->rx, .len = len,
+	};
+
+	return spi_sync_transfer(t->spi, &xfer, 1);
+}
+
+static int houji_tcm_command(struct houji_tcm_probe *t, u8 cmd,
+			     const u8 *data, u16 len, u16 *reply_len)
+{
+	u8 code;
+	u16 received;
+	int ret, i;
+
+	if (len > sizeof(t->tx) - 3 || len + 3 > t->max_write)
+		return -EMSGSIZE;
+	t->tx[0] = cmd;
+	put_unaligned_le16(len, t->tx + 1);
+	if (len)
+		memcpy(t->tx + 3, data, len);
+	ret = houji_tcm_write(t, len + 3);
+	if (ret)
+		return ret;
+	for (i = 0; i < 100; i++) {
+		msleep(20);
+		ret = houji_tcm_message(t, &code, &received);
+		if (ret)
+			return ret;
+		if (!i || code == 0x01)
+			dev_info(&t->spi->dev, "TCM command %02x reply %02x length %u\n", cmd, code, received);
+		if (code == 0x01) {
+			*reply_len = received;
+			return 0;
+		}
+		/* Idle/ACK and asynchronous reports are not command replies. */
+		if (!code || code == 0x04 || code == 0x07 || code >= 0x10)
+			continue;
+		dev_err(&t->spi->dev, "TCM command %02x status %02x\n", cmd, code);
+		return -EIO;
+	}
+	return -ETIMEDOUT;
+}
+
+static int houji_tcm_report(struct houji_tcm_probe *t, u16 len)
+{
+	const u8 *data = t->rx + 2;
+	u32 seen = 0;
+	unsigned int count, i, slot, x, y;
+	bool active;
+
+	if (len < 18)
+		return -EPROTO;
+	/* Verified stock format: 18-byte header and 9 bytes per object. */
+	count = data[17];
+	if (count > t->max_objects || len != 18 + 9 * count)
+		return -EPROTO;
+	/* Validate the complete frame before emitting any input events. */
+	for (i = 0; i < count; i++) {
+		const u8 *obj = data + 18 + 9 * i;
+
+		slot = obj[0] & 0x0f;
+		x = get_unaligned_le16(obj + 1);
+		y = get_unaligned_le16(obj + 3);
+		if (slot >= t->max_objects || seen & BIT(slot) ||
+		    x > t->max_x || y > t->max_y)
+			return -EPROTO;
+		seen |= BIT(slot);
+	}
+	for (i = 0; i < count; i++) {
+		const u8 *obj = data + 18 + 9 * i;
+
+		active = (obj[0] >> 4) == 1 || (obj[0] >> 4) == 2;
+		input_mt_slot(t->input, obj[0] & 0x0f);
+		input_mt_report_slot_state(t->input, MT_TOOL_FINGER, active);
+		if (active) {
+			input_report_abs(t->input, ABS_MT_POSITION_X,
+					 get_unaligned_le16(obj + 1));
+			input_report_abs(t->input, ABS_MT_POSITION_Y,
+					 get_unaligned_le16(obj + 3));
+		}
+	}
+	input_mt_sync_frame(t->input);
+	input_sync(t->input);
+	if (t->frames++ < 6)
+		dev_info(&t->spi->dev, "Houji TCM input frame %u: %u objects\n", t->frames, count);
+	return 0;
+}
+
+static irqreturn_t houji_tcm_irq(int irq, void *data)
+{
+	struct houji_tcm_probe *t = data;
+	u8 code;
+	u16 len;
+	int ret;
+
+	ret = houji_tcm_message(t, &code, &len);
+	if (!ret && t->reports++ < 6)
+		dev_info(&t->spi->dev, "TCM interrupt report %02x length %u\n", code, len);
+	if (!ret && code == 0xc0) {
+		mutex_lock(&t->raw_lock);
+		memcpy(t->raw, t->rx + 2, len);
+		t->raw_len = len;
+		t->raw_sequence++;
+		t->raw_timestamp = ktime_get_ns();
+		houji_stream_enqueue(t);
+		mutex_unlock(&t->raw_lock);
+		wake_up_interruptible(&t->stream_wait);
+	}
+	if (!ret && code == 0x11)
+		ret = houji_tcm_report(t, len);
+	if (ret) {
+		/* Stop an invalid level-triggered stream, preserving the test timer. */
+		dev_err(&t->spi->dev, "Touch stream stopped after packet error %d\n", ret);
+		disable_irq_nosync(irq);
+		mutex_lock(&t->raw_lock);
+		t->stream_error = ret;
+		mutex_unlock(&t->raw_lock);
+		wake_up_interruptible(&t->stream_wait);
+		input_mt_sync_frame(t->input);
+		input_sync(t->input);
+	}
+	return IRQ_HANDLED;
+}
+
+static int houji_tcm_setup_input(struct houji_tcm_probe *t)
+{
+	/* Exact stock format read back from firmware build 4323384. It has
+	 * an 18-byte header (count last), then packed slot/class, X/Y/Z and
+	 * widths. Sensor/gesture header fields and Z/widths are not reported.
+	 */
+	static const u8 format[] = {
+		0x10, 8, 0x1b, 48, 0x16, 4, 0x1e, 4, 0x12, 16,
+		0x20, 16, 0x21, 16, 0x22, 4, 0x23, 4, 0x25, 16,
+		0x18, 8, 0x01, 0x06, 4, 0x07, 4, 0x08, 16, 0x09, 16,
+		0x0a, 16, 0x0b, 8, 0x0c, 8, 0x03, 0x00,
+	};
+	struct device *dev = &t->spi->dev;
+	u8 touch_report = 0x11, raw_report = 0xc0;
+	u16 len, config_size;
+	int ret, irq;
+	struct dentry *debug;
+
+	/* Stock firmware starts in host-processing (THP) mode. Switch to
+	 * the native-coordinate path, as in Xiaomi's enable_touch_raw(0).
+	 * Drain bounded pending raw reports while waiting for its response.
+	 */
+	ret = houji_tcm_command(t, 0x06, &raw_report, 1, &len);
+	if (ret)
+		return dev_err_probe(dev, ret, "disable THP reports\n");
+	ret = houji_tcm_command(t, 0x20, NULL, 0, &len);
+	if (ret)
+		return dev_err_probe(dev, ret, "get application info\n");
+	/* Only fields through max_objects are consumed; trailing fields are optional. */
+	if (len < 38 || get_unaligned_le16(t->rx + 4))
+		return dev_err_probe(dev, -EPROTO, "application status or length\n");
+	config_size = get_unaligned_le16(t->rx + 14);
+	t->max_x = get_unaligned_le16(t->rx + 34);
+	t->max_y = get_unaligned_le16(t->rx + 36);
+	t->max_objects = get_unaligned_le16(t->rx + 38);
+	dev_info(dev, "Houji TCM application: max=%ux%u objects=%u config-size=%u\n",
+		 t->max_x, t->max_y, t->max_objects, config_size);
+	if (!t->max_x || !t->max_y || !t->max_objects || t->max_objects > 32 ||
+	    config_size < sizeof(format) || config_size > sizeof(t->rx) - 3)
+		return -EINVAL;
+	ret = houji_tcm_command(t, 0x06, &touch_report, 1, &len);
+	if (ret)
+		return dev_err_probe(dev, ret, "disable report before setup\n");
+	ret = houji_tcm_command(t, 0x25, NULL, 0, &len);
+	if (ret || len != config_size || len < sizeof(format) || memcmp(t->rx + 2, format, sizeof(format)))
+		return dev_err_probe(dev, ret ?: -EPROTO, "verify stock touch format\n");
+	t->input = devm_input_allocate_device(dev);
+	if (!t->input)
+		return -ENOMEM;
+	t->input->name = "Xiaomi 14 Synaptics Touchscreen";
+	t->input->id.bustype = BUS_SPI;
+	input_set_abs_params(t->input, ABS_MT_POSITION_X, 0, t->max_x, 0, 0);
+	input_set_abs_params(t->input, ABS_MT_POSITION_Y, 0, t->max_y, 0, 0);
+	ret = input_mt_init_slots(t->input, t->max_objects, INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED);
+	if (ret)
+		return ret;
+	ret = input_register_device(t->input);
+	if (ret)
+		return ret;
+	ret = houji_tcm_command(t, 0x05, &touch_report, 1, &len);
+	if (ret)
+		return dev_err_probe(dev, ret, "enable touch reports\n");
+	irq = gpiod_to_irq(t->irq);
+	if (irq < 0)
+		return irq;
+	debug = debugfs_create_dir("houji-touch", NULL);
+	if (IS_ERR(debug))
+		return PTR_ERR(debug);
+	debugfs_create_file("raw_frame", 0400, debug, t, &houji_tcm_raw_fops);
+	ret = devm_add_action_or_reset(dev, houji_tcm_debug_remove, debug);
+	if (ret)
+		return ret;
+	t->stream_device.minor = MISC_DYNAMIC_MINOR;
+	t->stream_device.name = "houji-touch-raw";
+	t->stream_device.fops = &houji_stream_fops;
+	t->stream_device.parent = dev;
+	t->stream_device.mode = 0400;
+	ret = misc_register(&t->stream_device);
+	if (ret)
+		return ret;
+	ret = devm_add_action_or_reset(dev, houji_stream_unregister, t);
+	if (ret)
+		return ret;
+	ret = devm_request_threaded_irq(dev, irq, NULL, houji_tcm_irq,
+					IRQF_ONESHOT | IRQF_TRIGGER_LOW,
+					dev_name(dev), t);
+	if (ret)
+		return dev_err_probe(dev, ret, "touch interrupt\n");
+	dev_info(dev, "Houji TCM Linux input ready on IRQ %d\n", irq);
+	return 0;
+}
+
+static int houji_tcm_probe(struct spi_device *spi)
+{
+	struct device *dev = &spi->dev;
+	struct houji_tcm_probe *t;
+	unsigned int len;
+	int ret;
+
+	t = kzalloc(sizeof(*t), GFP_KERNEL);
+	if (!t)
+		return -ENOMEM;
+	t->spi = spi;
+	mutex_init(&t->raw_lock);
+	kref_init(&t->refs);
+	init_waitqueue_head(&t->stream_wait);
+	ret = devm_add_action_or_reset(dev, houji_touch_put, t);
+	if (ret)
+		return ret;
+	ret = kfifo_alloc(&t->stream_fifo, 64, GFP_KERNEL);
+	if (ret)
+		return ret;
+	t->avdd = devm_regulator_get(dev, "avdd");
+	if (IS_ERR(t->avdd))
+		return dev_err_probe(dev, PTR_ERR(t->avdd), "avdd supply\n");
+	t->iovdd = devm_regulator_get(dev, "iovdd");
+	if (IS_ERR(t->iovdd))
+		return dev_err_probe(dev, PTR_ERR(t->iovdd), "iovdd supply\n");
+	t->reset = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
+	if (IS_ERR(t->reset))
+		return dev_err_probe(dev, PTR_ERR(t->reset), "reset GPIO\n");
+	t->irq = devm_gpiod_get(dev, "irq", GPIOD_IN);
+	if (IS_ERR(t->irq))
+		return dev_err_probe(dev, PTR_ERR(t->irq), "irq GPIO\n");
+	spi->mode = SPI_MODE_0;
+	spi->bits_per_word = 8;
+	ret = spi_setup(spi);
+	if (ret)
+		return dev_err_probe(dev, ret, "SPI setup\n");
+	ret = regulator_enable(t->avdd);
+	if (ret)
+		return ret;
+	usleep_range(3000, 3100);
+	ret = regulator_enable(t->iovdd);
+	if (ret) {
+		regulator_disable(t->avdd);
+		return ret;
+	}
+	ret = devm_add_action_or_reset(dev, houji_tcm_power_off, t);
+	if (ret)
+		return ret;
+	msleep(50);
+	gpiod_set_value_cansleep(t->reset, 1);
+	msleep(10);
+	gpiod_set_value_cansleep(t->reset, 0);
+	msleep(200);
+	dev_info(dev, "Houji TCM identity probe: avdd=%d iovdd=%d IRQ asserted=%d\n",
+		 regulator_get_voltage(t->avdd), regulator_get_voltage(t->iovdd),
+		 gpiod_get_value_cansleep(t->irq));
+	/* The vendor detection path sends this one-byte identification magic. */
+	t->tx[0] = 0x02;
+	ret = spi_write(spi, t->tx, 1);
+	if (ret)
+		return dev_err_probe(dev, ret, "identity magic\n");
+	usleep_range(1000, 2000);
+	ret = houji_tcm_read(t, 4);
+	if (ret)
+		return dev_err_probe(dev, ret, "startup header\n");
+	dev_info(dev, "Houji TCM startup header: %4ph\n", t->rx);
+	if (t->rx[0] != 0xa5 || t->rx[1] != 0x10) {
+		dev_info(dev, "Not a TCM v1 identify report; no further commands\n");
+		return 0;
+	}
+	len = get_unaligned_le16(t->rx + 2);
+	if (len < 24 || len > sizeof(t->rx) - 7)
+		return dev_err_probe(dev, -EINVAL, "unexpected identity length %u\n", len);
+	usleep_range(1000, 2000);
+	/* Marker/status + payload + EOM + optional CRC/RC/EOM trailer. */
+	ret = houji_tcm_read(t, len + 7);
+	if (ret)
+		return dev_err_probe(dev, ret, "identity payload\n");
+	dev_info(dev, "Houji TCM identity packet: %*ph\n", (int)min(len + 7, 64U), t->rx);
+	if (t->rx[0] != 0xa5 || t->rx[1] != 0x03)
+		return dev_err_probe(dev, -EPROTO, "unexpected continuation\n");
+	dev_info(dev, "Houji TCM v%u mode=0x%02x part=%16ph build=%u max-write=%u\n",
+		 t->rx[2], t->rx[3], t->rx + 4,
+		 get_unaligned_le32(t->rx + 20), get_unaligned_le16(t->rx + 24));
+	if (t->rx[3] != 1 || t->rx[len + 3] != 0x5a || t->rx[len + 4] != 0x5a)
+		return dev_err_probe(dev, -EPROTO, "untested firmware mode or CRC framing\n");
+	t->max_write = get_unaligned_le16(t->rx + 24);
+	return houji_tcm_setup_input(t);
+}
+
+static const struct of_device_id houji_tcm_of_match[] = {
+	{ .compatible = "synaptics,s3910p-houji-probe" },
+	{ }
+};
+MODULE_DEVICE_TABLE(of, houji_tcm_of_match);
+static const struct spi_device_id houji_tcm_id[] = {
+	{ "s3910p-houji-probe" }, { }
+};
+MODULE_DEVICE_TABLE(spi, houji_tcm_id);
+static struct spi_driver houji_tcm_driver = {
+	.driver = { .name = "houji-tcm-probe", .of_match_table = houji_tcm_of_match },
+	.probe = houji_tcm_probe,
+	.id_table = houji_tcm_id,
+};
+module_spi_driver(houji_tcm_driver);
+MODULE_DESCRIPTION("Temporary Houji TouchComm identity probe");
+MODULE_LICENSE("GPL");

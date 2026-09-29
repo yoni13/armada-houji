@@ -576,6 +576,10 @@ class ArmadaPower:
             write_text(path / "scaling_governor", "ondemand")
 
     def apply_profile(self):
+        # Record profile changes during sleep, but keep the suspend frequency
+        # limits until resume() applies the newly selected profile.
+        if self.suspended:
+            return
         settings = self.profile_settings()
         for policy in self.cpu_policies:
             freqs = self.cpu_available_freqs(policy)

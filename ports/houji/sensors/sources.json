@@ -1,0 +1,21 @@
+{
+  "libssc": {
+    "revision": "54dd13e36d65c21263cf5b0f4a70c230a77b26bc",
+    "source": "https://codeberg.org/DylanVanAssche/libssc.git"
+  },
+  "iio-sensor-proxy": {
+    "revision": "0085ddf8ecb173a1c5fcf2344aa40e561125354f",
+    "source": "https://gitlab.freedesktop.org/hadess/iio-sensor-proxy.git"
+  },
+  "hexagonrpc": {
+    "revision": "598b591ae9da6a6cfe2ca5ea78998019ca6395ea",
+    "source": "https://github.com/linux-msm/hexagonrpc.git",
+    "local_patch": "hexagonrpc-houji-registry.patch",
+    "patch_sha256": "d2f3e85f00ad04e687cd5d211e3172e7aae8221311ed5780821a017ddf6a45be"
+  },
+  "mount_matrix": "-1,0,0;0,-1,0;0,0,1",
+  "interfaces": {
+    "gyroscope": "libssc / ssccli",
+    "screen_rotation": "SSC accelerometer -> iio-sensor-proxy -> KWin"
+  }
+}

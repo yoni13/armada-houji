@@ -1,0 +1,21 @@
+[Unit]
+Description=Desktop power profiles backed by Armada
+Requires=armada-powerd.service
+After=armada-powerd.service
+PartOf=armada-powerd.service
+Conflicts=power-profiles-daemon.service tuned-ppd.service
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.UPower.PowerProfiles
+ExecStart=/usr/libexec/armada/armada-power-profiles
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

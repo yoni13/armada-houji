@@ -9,6 +9,7 @@ runtime=/run/armada-mtp
 role_state="$runtime/previous-role"
 sd_link="$runtime/sdcard"
 source /usr/lib/armada/storage-lib
+eval "$(/usr/libexec/armada/device-env)"
 
 unbind() {
     if [[ -e "$gadget/UDC" && -n "$(<"$gadget/UDC")" ]]; then
@@ -17,7 +18,7 @@ unbind() {
     if [[ -s "$role_state" ]]; then
         role_path="$(sed -n '1p' "$role_state" || true)"
         previous_role="$(sed -n '2p' "$role_state" || true)"
-        if [[ -w "$role_path" && -n "$previous_role" ]]; then
+        if [[ ${ARMADA_USB_ROLE_POLICY:-manual} != typec && -w "$role_path" && -n "$previous_role" ]]; then
             printf '%s' "$previous_role" > "$role_path" || :
         fi
         rm -f "$role_state" || :
@@ -108,7 +109,9 @@ case "${1:-}" in
             role_paths=(/sys/class/usb_role/*/role)
             role_path="${role_paths[0]:-}"
         fi
-        if [[ -n "$role_path" ]]; then
+        # UCSI owns both cable role and VBUS on Type-C managed devices.
+        # Registering a gadget must not steal an attached OTG host's role.
+        if [[ ${ARMADA_USB_ROLE_POLICY:-manual} != typec && -n "$role_path" ]]; then
             previous_role="$(<"$role_path")"
             printf '%s\n%s\n' "$role_path" "$previous_role" > "$role_state"
             printf 'device' > "$role_path"

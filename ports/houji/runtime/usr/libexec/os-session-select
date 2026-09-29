@@ -1,0 +1,8 @@
+#!/bin/bash
+set -euo pipefail
+case "${1:-gamescope}" in
+    gamescope) target=gamescope ;;
+    desktop|plasma) target=plasma ;;
+    *) echo "Unknown session: ${1}" >&2; exit 2 ;;
+esac
+exec sudo -n /usr/bin/systemctl --no-block start "houji-session-switch@${target}.service"

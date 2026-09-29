@@ -94,6 +94,9 @@ Issues and pull requests are welcome. For installation or device support, check
 the [troubleshooting documentation](https://armadaos.dev/troubleshooting/frequently-asked-questions/)
 or ask in the [Armada Discord community](https://discord.gg/HdmdSxTD5S).
 
+For the experimental Xiaomi 14 port, see the [Houji guide](ports/houji/README.md)
+for feature status and its stock-ABL build and installation instructions.
+
 ## Credits
 
 See the [project credits](https://armadaos.dev/project/credits/) for the upstream

@@ -1,0 +1,249 @@
+#!/usr/bin/python3
+"""Expose standard desktop profiles through Armada's existing power daemon.
+
+This adapter never writes CPU/GPU controls itself. Steam and Plasma therefore
+share profile state, frequency limits, and the existing suspend handling.
+"""
+import signal
+import sys
+from collections import deque
+
+import gi
+gi.require_version('Gio', '2.0')
+from gi.repository import Gio, GLib
+
+BACKEND = 'org.armada.Power'
+BACKEND_PATH = '/org/armada/Power'
+BACKEND_IFACE = 'org.armada.Power1'
+PROPS = 'org.freedesktop.DBus.Properties'
+PROFILES = ('power-saver', 'balanced', 'performance')
+ENDPOINTS = (
+    ('org.freedesktop.UPower.PowerProfiles', '/org/freedesktop/UPower/PowerProfiles'),
+    ('net.hadess.PowerProfiles', '/net/hadess/PowerProfiles'),
+)
+
+
+def xml(iface):
+    return f'''<node><interface name="{iface}">
+      <property name="ActiveProfile" type="s" access="readwrite"/>
+      <property name="Profiles" type="aa{{sv}}" access="read"/>
+      <property name="PerformanceInhibited" type="s" access="read"/>
+      <property name="PerformanceDegraded" type="s" access="read"/>
+      <property name="Actions" type="as" access="read"/>
+      <property name="ActionsInfo" type="aa{{sv}}" access="read"/>
+      <property name="ActiveProfileHolds" type="aa{{sv}}" access="read"/>
+      <property name="Version" type="s" access="read"/>
+      <method name="HoldProfile">
+        <arg type="s" direction="in"/><arg type="s" direction="in"/>
+        <arg type="s" direction="in"/><arg type="u" direction="out"/>
+      </method>
+      <method name="ReleaseProfile"><arg type="u" direction="in"/></method>
+      <signal name="ProfileReleased"><arg type="u"/></signal>
+    </interface></node>'''
+
+
+class Profiles:
+    def __init__(self, connection):
+        self.bus = connection
+        self.proxy = Gio.DBusProxy.new_sync(connection, Gio.DBusProxyFlags.NONE,
+            None, BACKEND, BACKEND_PATH, BACKEND_IFACE, None)
+        if not self.proxy.get_name_owner():
+            raise RuntimeError('Armada power daemon is unavailable')
+        labels = self.proxy.get_cached_property('AvailableProfiles').unpack()
+        if len(labels) != 3 or len(set(labels)) != 3:
+            raise RuntimeError('Expected Armada Eco/Balanced/Performance profiles')
+        self.labels = dict(zip(PROFILES, labels))
+        self.reverse = {value: key for key, value in self.labels.items()}
+        self.active = self.read_active()
+        self.base_profile = self.active
+        self.holds = {}
+        self.next_cookie = 1
+        self.pending_backend = deque()
+        self.proxy.connect('g-properties-changed', self.backend_changed)
+        self.bus.signal_subscribe('org.freedesktop.DBus', 'org.freedesktop.DBus',
+            'NameOwnerChanged', '/org/freedesktop/DBus', None,
+            Gio.DBusSignalFlags.NONE, self.owner_changed)
+        self.nodes = []
+        self.owners = []
+        for iface, path in ENDPOINTS:
+            node = Gio.DBusNodeInfo.new_for_xml(xml(iface))
+            self.nodes.append(node)
+            self.bus.register_object(path, node.interfaces[0], self.method,
+                                     self.get_property, self.set_property)
+            self.owners.append(Gio.bus_own_name_on_connection(self.bus, iface,
+                Gio.BusNameOwnerFlags.NONE, None, self.name_lost))
+
+    def name_lost(self, *_args):
+        raise SystemExit('Power profiles bus name unavailable')
+
+    def read_active(self):
+        label = self.proxy.get_cached_property('Profile').unpack()
+        return self.reverse[label]
+
+    def authorize(self, sender):
+        result = self.bus.call_sync('org.freedesktop.PolicyKit1',
+            '/org/freedesktop/PolicyKit1/Authority',
+            'org.freedesktop.PolicyKit1.Authority', 'CheckAuthorization',
+            GLib.Variant('((sa{sv})sa{ss}us)', (
+                ('system-bus-name', {'name': GLib.Variant('s', sender)}),
+                'org.armada.power-profiles.switch-profile', {}, 0, '')),
+            GLib.VariantType.new('((bba{ss}))'), Gio.DBusCallFlags.NONE, 5000, None)
+        if not result.unpack()[0][0]:
+            raise PermissionError('An active local session is required')
+
+    def write_profile(self, profile):
+        if profile not in self.labels:
+            raise ValueError('Unknown power profile')
+        self.pending_backend.append(profile)
+        try:
+            self.bus.call_sync(BACKEND, BACKEND_PATH, PROPS, 'Set',
+                GLib.Variant('(ssv)', (BACKEND_IFACE, 'Profile',
+                                      GLib.Variant('s', self.labels[profile]))),
+                None, Gio.DBusCallFlags.NONE, 5000, None)
+        except GLib.Error:
+            self.pending_backend.pop()
+            raise
+        self.active = profile
+        self.changed()
+
+    def changed(self):
+        for iface, path in ENDPOINTS:
+            self.bus.emit_signal(None, path, PROPS, 'PropertiesChanged',
+                GLib.Variant('(sa{sv}as)', (iface, {
+                    'ActiveProfile': GLib.Variant('s', self.active),
+                    'ActiveProfileHolds': self.holds_variant(),
+                }, [])))
+
+    def holds_variant(self):
+        return GLib.Variant('aa{sv}', [{
+            'Profile': GLib.Variant('s', h['profile']),
+            'Reason': GLib.Variant('s', h['reason']),
+            'ApplicationId': GLib.Variant('s', h['application_id']),
+        } for h in self.holds.values()])
+
+    def release_signal(self, cookie, hold):
+        for iface, path in ENDPOINTS:
+            self.bus.emit_signal(hold['owner'], path, iface, 'ProfileReleased',
+                                 GLib.Variant('(u)', (cookie,)))
+
+    def clear_holds(self):
+        for cookie, hold in self.holds.items():
+            self.release_signal(cookie, hold)
+        self.holds.clear()
+
+    def desired_profile(self):
+        requested = {h['profile'] for h in self.holds.values()}
+        if 'power-saver' in requested:
+            return 'power-saver'
+        if 'performance' in requested:
+            return 'performance'
+        return self.base_profile
+
+    def backend_changed(self, _proxy, changes, _invalidated):
+        values = changes.unpack()
+        if 'Profile' not in values:
+            return
+        profile = self.reverse[values['Profile']]
+        if self.pending_backend and profile == self.pending_backend[0]:
+            self.pending_backend.popleft()
+            return
+        self.pending_backend.clear()
+        if profile != self.active:
+            # A Steam-side manual selection has the same priority as Plasma.
+            self.clear_holds()
+            self.active = self.base_profile = profile
+            self.changed()
+
+    def owner_changed(self, _bus, _sender, _path, _iface, _signal, args):
+        name, _old, new = args.unpack()
+        if name == BACKEND and not new:
+            raise SystemExit('Armada power daemon disconnected')
+        removed = [c for c, h in self.holds.items() if h['owner'] == name and not new]
+        for cookie in removed:
+            del self.holds[cookie]
+        if removed:
+            self.write_profile(self.desired_profile())
+
+    def get_property(self, _bus, _sender, _path, _iface, prop):
+        if prop == 'ActiveProfile':
+            return GLib.Variant('s', self.active)
+        if prop == 'Profiles':
+            return GLib.Variant('aa{sv}', [{
+                'Profile': GLib.Variant('s', p),
+                'Driver': GLib.Variant('s', 'armada'),
+                'CpuDriver': GLib.Variant('s', 'armada'),
+                'PlatformDriver': GLib.Variant('s', 'armada'),
+            } for p in PROFILES])
+        if prop in ('PerformanceInhibited', 'PerformanceDegraded'):
+            return GLib.Variant('s', '')
+        if prop == 'Actions':
+            return GLib.Variant('as', [])
+        if prop == 'ActionsInfo':
+            return GLib.Variant('aa{sv}', [])
+        if prop == 'ActiveProfileHolds':
+            return self.holds_variant()
+        if prop == 'Version':
+            return GLib.Variant('s', 'armada-1')
+        return None
+
+    def set_property(self, _bus, sender, _path, _iface, prop, value):
+        try:
+            if prop != 'ActiveProfile' or value.unpack() not in PROFILES:
+                return False
+            self.authorize(sender)
+            profile = value.unpack()
+            self.write_profile(profile)
+            self.base_profile = profile
+            self.clear_holds()
+            self.changed()
+            return True
+        except (GLib.Error, PermissionError, ValueError) as exc:
+            print(f'Profile selection rejected: {exc}', file=sys.stderr)
+            return False
+
+    def method(self, _bus, sender, _path, _iface, method, args, invocation):
+        try:
+            self.authorize(sender)
+            if method == 'HoldProfile':
+                profile, reason, application_id = args.unpack()
+                if profile not in ('power-saver', 'performance'):
+                    raise ValueError('Only power-saver or performance may be held')
+                cookie = self.next_cookie
+                self.next_cookie += 1
+                self.holds[cookie] = dict(owner=sender, profile=profile,
+                    reason=reason, application_id=application_id)
+                try:
+                    self.write_profile(self.desired_profile())
+                except Exception:
+                    del self.holds[cookie]
+                    raise
+                invocation.return_value(GLib.Variant('(u)', (cookie,)))
+            elif method == 'ReleaseProfile':
+                cookie, = args.unpack()
+                if cookie not in self.holds or self.holds[cookie]['owner'] != sender:
+                    raise PermissionError('Profile hold belongs to another caller')
+                del self.holds[cookie]
+                self.write_profile(self.desired_profile())
+                invocation.return_value(None)
+        except PermissionError as exc:
+            invocation.return_dbus_error('org.freedesktop.DBus.Error.AccessDenied', str(exc))
+        except (ValueError, GLib.Error) as exc:
+            invocation.return_dbus_error('org.freedesktop.DBus.Error.Failed', str(exc))
+
+    def stop(self):
+        if self.holds:
+            self.clear_holds()
+            self.write_profile(self.base_profile)
+
+
+if __name__ == '__main__':
+    connection = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    service = Profiles(connection)
+    loop = GLib.MainLoop()
+    def stop():
+        service.stop()
+        loop.quit()
+        return False
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, stop)
+    loop.run()

@@ -1,0 +1,51 @@
+{
+  "repositories": {
+    "android_device_xiaomi_houji": {
+      "url": "https://github.com/lolipuru/android_device_xiaomi_houji.git",
+      "commit": "90f836ebc7b89a8dd22840b49db8c18cf7cabc2a"
+    },
+    "device_xiaomi_sm8650-common": {
+      "url": "https://github.com/lolipuru/device_xiaomi_sm8650-common.git",
+      "commit": "b79342c6ebd7ecbe132798cfeb383be9627d1f9b"
+    },
+    "kernel_xiaomi_sm8650-devicetrees": {
+      "url": "https://github.com/lolipuru/kernel_xiaomi_sm8650-devicetrees.git",
+      "commit": "25446a168427695fed4adecb61fd63926f12bc17"
+    },
+    "device_xiaomi_houji-kernel": {
+      "url": "https://github.com/lolipuru/device_xiaomi_houji-kernel.git",
+      "commit": "c9911a5ba8c206f25cc0c4e8a8b30dcfc88a4dce"
+    },
+    "audioreach-topology": {
+      "url": "https://git.codelinaro.org/linaro/qcomlt/audioreach-topology.git",
+      "commit": "1d4c4e337df6bad4d52c4f7b3e15fff3f485be62"
+    },
+    "qbootctl": {
+      "url": "https://github.com/linux-msm/qbootctl.git",
+      "commit": "39a6e6daaf029fb0a083777679a15ea2c18f72de"
+    }
+  },
+  "linux": {
+    "version": "7.2.3",
+    "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.3.tar.xz",
+    "sha256": "8ba259e8e7b13ec6ef0941c8a39ad90b24bd4a4d6c0010ba6bafb794550ecd03"
+  },
+  "busybox": {
+    "version": "1.37.0",
+    "url": "https://busybox.net/downloads/busybox-1.37.0.tar.bz2",
+    "sha256": "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4"
+  },
+  "firmware": {
+    "url": "https://bigota.d.miui.com/OS3.0.303.0.WNCTWXM/houji_tw_global_images_OS3.0.303.0.WNCTWXM_20260727.0000.00_16.0_tw_9ffae02e56.tgz",
+    "size": 7447487642,
+    "sha256": "a13aa43685901df51d86adc04ede25cbdc2ab03d501e0c0b5157775ba7b1ea40",
+    "bootloader_compatibility": {
+      "stock_boot_sha256": "5d8798fd4cae988be83cb471dd9622c88fe35e35f77fc09147a832ad3d25c5e2",
+      "os_version": "14.0.0",
+      "os_patch_level": "2026-02-01",
+      "source": "Stock boot.img AVB com.android.build.boot properties; compatibility metadata, not an Armada security-patch claim"
+    }
+  },
+  "armada_image": "ghcr.io/armada-os/armada@sha256:0822f9db1510c802c70795b10f5eb8ae4b2fe36f16b80a90fa7315e4f4baf208",
+  "armada_version": "20260926.939fb84"
+}

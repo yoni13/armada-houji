@@ -1,0 +1,70 @@
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -8,6 +8,7 @@
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/nvmem-consumer.h>
++#include <linux/of.h>
+ #include <linux/of_device.h>
+ #include <linux/power_supply.h>
+ #include <linux/property.h>
+@@ -23,6 +24,7 @@
+ 	QCOM_BATTMGR_SC8280XP,
+ 	QCOM_BATTMGR_SM8350,
+ 	QCOM_BATTMGR_SM8550,
++	QCOM_BATTMGR_XIAOMI_HOUJI,
+ 	QCOM_BATTMGR_X1E80100,
+ };
+ 
+@@ -462,6 +464,11 @@
+ 		return -EINVAL;
+ 
+ 	prop = sm8350_bat_prop_map[psp];
++	/* Xiaomi inserts CONSTANT_CHARGE_CURRENT at wire ID 12. */
++	if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI &&
++	    prop >= BATT_TEMP && prop <= BATT_POWER_AVG)
++		prop++;
++
+ 
+ 	mutex_lock(&battmgr->lock);
+ 	ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_GET, prop, 0);
+@@ -1384,6 +1391,16 @@
+ 	switch (opcode) {
+ 	case BATTMGR_BAT_PROPERTY_GET:
+ 		property = le32_to_cpu(resp->intval.property);
++		/* Normalize the Xiaomi wire IDs before decoding the payload. */
++		if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI) {
++			if (property <= BATT_CHG_CTRL_LIM_MAX) {
++				/* IDs 0..11 have the standard layout. */
++			} else if (property > BATT_TEMP && property <= BATT_POWER_AVG + 1) {
++				property--;
++			} else {
++				return;
++			}
++		}
+ 		if (property == BATT_MODEL_NAME) {
+ 			if (payload_len != sizeof(resp->strval)) {
+ 				dev_warn(battmgr->dev,
+@@ -1580,6 +1597,12 @@
+ 	struct qcom_battmgr *battmgr = priv;
+ 	unsigned int opcode = le32_to_cpu(hdr->opcode);
+ 
++	/* Xiaomi's 0x50 vendor reports are unsolicited, not replies to our
++	 * reads. Do not let them complete an unrelated pending request.
++	 */
++	if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI && opcode == 0x50)
++		return;
++
+ 	if (opcode == BATTMGR_NOTIFICATION)
+ 		qcom_battmgr_notification(battmgr, data, len);
+ 	else if (battmgr->variant == QCOM_BATTMGR_SC8280XP ||
+@@ -1663,6 +1686,9 @@
+ 		battmgr->variant = (unsigned long)match->data;
+ 	else
+ 		battmgr->variant = QCOM_BATTMGR_SM8350;
++
++	if (of_machine_is_compatible("xiaomi,houji"))
++		battmgr->variant = QCOM_BATTMGR_XIAOMI_HOUJI;
+ 
+ 	ret = qcom_battmgr_charge_control_thresholds_init(battmgr);
+ 	if (ret < 0)

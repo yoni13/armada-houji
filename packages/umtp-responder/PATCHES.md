@@ -14,3 +14,6 @@ to a commit, or `armada` if it is original; a URL source with no `notes` is verb
   source: armada
 - `patches/0005-inotify-synchronize-session-database-lifetime.patch`
   source: armada
+- `patches/0006-usb-superspeed-descriptors.patch`
+  source: armada
+  notes: Enable USB 3 descriptors, set interrupt interval payload size and use the negotiated endpoint packet size for transfer termination.

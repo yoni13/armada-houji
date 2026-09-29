@@ -16,6 +16,7 @@ Patch2:         0002-storage-use-configured-gid.patch
 Patch3:         0003-path-harden-object-path-containment.patch
 Patch4:         0004-unicode-support-full-utf8-utf16-conversion.patch
 Patch5:         0005-inotify-synchronize-session-database-lifetime.patch
+Patch6:         0006-usb-superspeed-descriptors.patch
 
 BuildRequires:  gcc
 BuildRequires:  make

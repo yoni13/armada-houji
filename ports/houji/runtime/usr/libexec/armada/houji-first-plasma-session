@@ -1,0 +1,14 @@
+#!/bin/sh
+# Set the phone's rotation default once; preserve later user preferences.
+set -eu
+config=${XDG_CONFIG_HOME:-"$HOME/.config"}
+[ ! -e "$config/houji-orientation-initialized" ] || exit 0
+for attempt in $(seq 1 30); do
+    if timeout 5 kscreen-doctor output.DSI-1.autoRotatePolicy.always; then
+        mkdir -p "$config"
+        : >"$config/houji-orientation-initialized"
+        exit 0
+    fi
+    sleep 1
+done
+exit 1

@@ -1,0 +1,82 @@
+{
+  "glib2-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/g/glib2-devel-2.88.0-1.fc44.aarch64.rpm",
+    "sha256": "1e14a151af8be24b5318ffb554dc7169bfaf6f5655db0a33601416989e0e3b3c",
+    "filename": "glib2-devel-2.88.0-1.fc44.aarch64.rpm"
+  },
+  "libqmi-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libqmi-devel-1.36.0-3.fc44.aarch64.rpm",
+    "sha256": "73bbe56523a32bb15ab72199fdffb6059f703ae0b95c2e39af43f9fb76658836",
+    "filename": "libqmi-devel-1.36.0-3.fc44.aarch64.rpm"
+  },
+  "libqrtr-glib-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libqrtr-glib-devel-1.2.2-9.fc44.aarch64.rpm",
+    "sha256": "980173f29a184631a70417fea694f319e60ff0cf38eae1b45aed92e4b4134aff",
+    "filename": "libqrtr-glib-devel-1.2.2-9.fc44.aarch64.rpm"
+  },
+  "protobuf-c-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/p/protobuf-c-devel-1.5.2-2.fc44.aarch64.rpm",
+    "sha256": "60d41ba5aabb056b9c6b903a77607556c7626429513adcddb8e1b0a145017584",
+    "filename": "protobuf-c-devel-1.5.2-2.fc44.aarch64.rpm"
+  },
+  "libgudev-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libgudev-devel-238-9.fc44.aarch64.rpm",
+    "sha256": "78cdf654480c9195a8d66a223eda6b2223cccc974d8c2035626dbacf62c0a523",
+    "filename": "libgudev-devel-238-9.fc44.aarch64.rpm"
+  },
+  "polkit-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/p/polkit-devel-127-2.fc44.2.aarch64.rpm",
+    "sha256": "6c014e63dcbb9278235b353d553e9a81514f56a11c529f6e1a2c81f369c3e0fc",
+    "filename": "polkit-devel-127-2.fc44.2.aarch64.rpm"
+  },
+  "libffi-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libffi-devel-3.5.2-2.fc44.aarch64.rpm",
+    "sha256": "bd0342e3fe6f7447362213dcd65ffd5857cbde3dac54ccc645a3d64916af352b",
+    "filename": "libffi-devel-3.5.2-2.fc44.aarch64.rpm"
+  },
+  "pcre2-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/p/pcre2-devel-10.47-1.fc44.1.aarch64.rpm",
+    "sha256": "bf80e3c9fb2263d53a5587dc767c73401b060fb182ffe44200801e78bf06627a",
+    "filename": "pcre2-devel-10.47-1.fc44.1.aarch64.rpm"
+  },
+  "libmount-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libmount-devel-2.41.3-12.fc44.aarch64.rpm",
+    "sha256": "1f51a5913595209658fc82978b428795f5804b35dfb210d441c02e7b95ec0c7d",
+    "filename": "libmount-devel-2.41.3-12.fc44.aarch64.rpm"
+  },
+  "zlib-ng-compat-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/z/zlib-ng-compat-devel-2.3.3-3.fc44.aarch64.rpm",
+    "sha256": "e0993882b7c6265cbb0cd12595a6612572592a551ad4d995b814a9aaaf0d9fde",
+    "filename": "zlib-ng-compat-devel-2.3.3-3.fc44.aarch64.rpm"
+  },
+  "libselinux-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libselinux-devel-3.10-1.fc44.aarch64.rpm",
+    "sha256": "efe1817c4d6cfc24499d5ffb607b913ed9869592fe104c14749310998f9f2d00",
+    "filename": "libselinux-devel-3.10-1.fc44.aarch64.rpm"
+  },
+  "libsepol-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libsepol-devel-3.10-1.fc44.aarch64.rpm",
+    "sha256": "2620095091345b7592aca805f73dbef2b60f9cb3272dd404b25000e4fe5419ca",
+    "filename": "libsepol-devel-3.10-1.fc44.aarch64.rpm"
+  },
+  "wayland-devel": {
+    "filename": "wayland-devel-1.24.0-3.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/w/wayland-devel-1.24.0-3.fc44.aarch64.rpm",
+    "sha256": "fc1b70a6bc9d44e8eec18d791b12610bcb57a5e2ce436d4b78e72a12c580d6b8"
+  },
+  "sysprof-capture-devel": {
+    "filename": "sysprof-capture-devel-50.0-1.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/s/sysprof-capture-devel-50.0-1.fc44.aarch64.rpm",
+    "sha256": "6335a25f45d95ee745aa6275410b1ace09a9cb0a03b6b235bcaad869a8983e29"
+  },
+  "libblkid-devel": {
+    "filename": "libblkid-devel-2.41.3-12.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libblkid-devel-2.41.3-12.fc44.aarch64.rpm",
+    "sha256": "3b7adaec959d2bcb471ef24fe19a10aa353877c44f61d225d14796c969fd1e34"
+  },
+  "libmbim-devel": {
+    "filename": "libmbim-devel-1.32.0-3.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libmbim-devel-1.32.0-3.fc44.aarch64.rpm",
+    "sha256": "c1be60ad3ced754ffcb2d2927ab43b4bf24a98fd3afcda94ae2cfabe54e13ab8"
+  }
+}

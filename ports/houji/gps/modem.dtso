@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Supervised bring-up candidate. This is not included in production images.
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "xiaomi,houji";
+	fragment@0 {
+		target-path = "/soc@0/remoteproc@4080000";
+		__overlay__ {
+			firmware-name = "qcom/houji/modem/modem.mdt",
+					"qcom/houji/modem/modem_dtb.mdt";
+			status = "okay";
+		};
+	};
+};

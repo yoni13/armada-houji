@@ -1,0 +1,23 @@
+#!/bin/bash
+set -euo pipefail
+case "${1:-}" in
+    gamescope) session=gamescope-session-steam.desktop ;;
+    plasma) session=armada-plasma-mobile.desktop ;;
+    *) exit 2 ;;
+esac
+# Serialize rapid repeated taps and run outside the session being stopped.
+exec 9>/run/houji-session-switch.lock
+flock -n 9 || exit 0
+userctl() {
+    timeout 20 runuser -u armada -- env XDG_RUNTIME_DIR=/run/user/1000 \
+        DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+        systemctl --user "$@"
+}
+trap 'systemctl --no-block start sddm' EXIT
+systemctl stop sddm
+userctl stop graphical-session.target
+userctl unset-environment WAYLAND_DISPLAY DISPLAY XAUTHORITY
+rm -f /etc/sddm.conf.d/zzt-holo-temp-login.conf /etc/sddm.conf.d/zzt-steamos-temp-login.conf
+printf '[Autologin]\nSession=%s\n' "$session" >/etc/sddm.conf.d/zz-holo-autologin.conf
+systemctl start sddm
+trap - EXIT

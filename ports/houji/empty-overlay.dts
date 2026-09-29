@@ -1,0 +1,15 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Replaces Android-specific overlays for the experimental Linux DTB only.
+/dts-v1/;
+/plugin/;
+/ {
+	qcom,msm-id = <557 0x10000>, <557 0x20000>;
+	qcom,board-id = <8 0>;
+	xiaomi,miboard-id = <2 0>;
+	/* Xiaomi's libufdt requires the node even with no external references. */
+	__fixups__ { };
+	fragment@0 {
+		target-path = "/";
+		__overlay__ { };
+	};
+};

@@ -1,0 +1,232 @@
+{
+  "expat-devel": {
+    "filename": "expat-devel-2.7.3-2.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/e/expat-devel-2.7.3-2.fc44.aarch64.rpm",
+    "sha256": "709b6cebb098998d2a11435d2f1b5fedade1f67c7c38b2ae3a1ab8f71d46faeb"
+  },
+  "libICE-devel": {
+    "filename": "libICE-devel-1.1.2-4.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libICE-devel-1.1.2-4.fc44.aarch64.rpm",
+    "sha256": "58cebf195ab9fcd73d709f372c0221e9f816d818822bca5c148037c33f77419c"
+  },
+  "libSM-devel": {
+    "filename": "libSM-devel-1.2.5-4.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libSM-devel-1.2.5-4.fc44.aarch64.rpm",
+    "sha256": "8a1d4a72f002a80eff735602f38842f326404e9df3f3b97347bb1ac6f456d563"
+  },
+  "libX11-devel": {
+    "filename": "libX11-devel-1.8.13-1.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libX11-devel-1.8.13-1.fc44.aarch64.rpm",
+    "sha256": "b44b4da3f0311fd7eda21e02176da6f0ca3f3e0d8e723e2b16c23e21f6a58c16"
+  },
+  "libXau-devel": {
+    "filename": "libXau-devel-1.0.12-4.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXau-devel-1.0.12-4.fc44.aarch64.rpm",
+    "sha256": "acaace101f83aed0f3f2251c7078d7db616e8477299eafaae34bf7a3816a2c62"
+  },
+  "libXcomposite-devel": {
+    "filename": "libXcomposite-devel-0.4.6-7.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXcomposite-devel-0.4.6-7.fc44.aarch64.rpm",
+    "sha256": "1c8f5d95add01bfec40c49c0bd85330626cb686b152cb06c4573799eb4265070"
+  },
+  "libXcursor-devel": {
+    "filename": "libXcursor-devel-1.2.3-4.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXcursor-devel-1.2.3-4.fc44.aarch64.rpm",
+    "sha256": "99cbe14d5a07e8ced0c42bdbece7c4e68ce69b0e77586d2ba80a3c029daf6f51"
+  },
+  "libXdamage-devel": {
+    "filename": "libXdamage-devel-1.1.6-7.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXdamage-devel-1.1.6-7.fc44.aarch64.rpm",
+    "sha256": "e7388670327732104c9ecb80bbf31439cd16333f281a7ba7676fbe825c46c58e"
+  },
+  "libXdmcp-devel": {
+    "filename": "libXdmcp-devel-1.1.5-5.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXdmcp-devel-1.1.5-5.fc44.aarch64.rpm",
+    "sha256": "ba41716d68cc0b649e2c2a3237502b220c0219b19ed69a9a9ea684681299d17a"
+  },
+  "libXext-devel": {
+    "filename": "libXext-devel-1.3.6-5.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXext-devel-1.3.6-5.fc44.aarch64.rpm",
+    "sha256": "73d49c48aa143c6c729c474016d79e2876add31580d819c52ca916818baa099f"
+  },
+  "libXfixes-devel": {
+    "filename": "libXfixes-devel-6.0.1-7.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXfixes-devel-6.0.1-7.fc44.aarch64.rpm",
+    "sha256": "1bd1b078add418d6d0bb73bdab134bb8b7f2c09b7956d7150cd89f149c44b8c1"
+  },
+  "libXi-devel": {
+    "filename": "libXi-devel-1.8.2-4.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXi-devel-1.8.2-4.fc44.aarch64.rpm",
+    "sha256": "faa04a997be47b1a4bafbdba010347beacf13fc40d82d361a59b5bf4116b43af"
+  },
+  "libXmu-devel": {
+    "filename": "libXmu-devel-1.2.1-5.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXmu-devel-1.2.1-5.fc44.aarch64.rpm",
+    "sha256": "06c0a34b8733c047d976784c943f905134ebf6096c12ce4fbba10566eec9f5bc"
+  },
+  "libXrandr-devel": {
+    "filename": "libXrandr-devel-1.5.4-7.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXrandr-devel-1.5.4-7.fc44.aarch64.rpm",
+    "sha256": "58ffb10771ef2c5f5bda98f6a6845866d759957d927be83011503f39443ebfd1"
+  },
+  "libXrender-devel": {
+    "filename": "libXrender-devel-0.9.12-4.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXrender-devel-0.9.12-4.fc44.aarch64.rpm",
+    "sha256": "4947c3df496b92c5f140d17a27b3e79884d584af3e5497ed1c6b4723dc6931da"
+  },
+  "libXres-devel": {
+    "filename": "libXres-devel-1.2.2-7.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXres-devel-1.2.2-7.fc44.aarch64.rpm",
+    "sha256": "610c4518ae8425335342ccafd2d4745f1869fe9f12210cab192e12205aab2825"
+  },
+  "libXt-devel": {
+    "filename": "libXt-devel-1.3.1-4.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXt-devel-1.3.1-4.fc44.aarch64.rpm",
+    "sha256": "e082de6a648c92c057637e40cf0f1d49dbcfb5d5d48f1aba14fe0a22fc475c1e"
+  },
+  "libXtst-devel": {
+    "filename": "libXtst-devel-1.2.5-4.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXtst-devel-1.2.5-4.fc44.aarch64.rpm",
+    "sha256": "8f7883c2cae774db51d98af512c5b2608e8ad21192da8ca66ccfb6da5dc86335"
+  },
+  "libXxf86vm-devel": {
+    "filename": "libXxf86vm-devel-1.1.6-4.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libXxf86vm-devel-1.1.6-4.fc44.aarch64.rpm",
+    "sha256": "048aa808c8cb8c0c53115abed29b108416ca1eeea0539cf150a7b5f7e0f9a979"
+  },
+  "libcap-devel": {
+    "filename": "libcap-devel-2.77-2.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libcap-devel-2.77-2.fc44.aarch64.rpm",
+    "sha256": "b660a7776d6c88e1bab3d5a3d20df39ad5d7ed31540f3f8365ccbe67c4b96116"
+  },
+  "libdecor-devel": {
+    "filename": "libdecor-devel-0.2.5-2.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libdecor-devel-0.2.5-2.fc44.aarch64.rpm",
+    "sha256": "db75b023da37847896c4d45d99632e5aa1d62d4ce8bd95204785f68c57ac9304"
+  },
+  "libdisplay-info-devel": {
+    "filename": "libdisplay-info-devel-0.3.0-1.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libdisplay-info-devel-0.3.0-1.fc44.aarch64.rpm",
+    "sha256": "7541d5f56f241ae2f47fcd3ac28d0b6441734d42223d6be29451815fce3819b3"
+  },
+  "libdrm-devel": {
+    "filename": "libdrm-devel-2.4.131-1.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libdrm-devel-2.4.131-1.fc44.aarch64.rpm",
+    "sha256": "3a5464de4a2e911774e84428b70488d40ae1d4a982ec02f4ef32ee9ce8e07a5d"
+  },
+  "libevdev-devel": {
+    "filename": "libevdev-devel-1.13.6-2.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libevdev-devel-1.13.6-2.fc44.aarch64.rpm",
+    "sha256": "3c387d33e44fe9c44e2e735fe6c021bed5f49e08734bd904ff5f1775c26c425f"
+  },
+  "libffi-devel": {
+    "filename": "libffi-devel-3.5.2-2.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libffi-devel-3.5.2-2.fc44.aarch64.rpm",
+    "sha256": "bd0342e3fe6f7447362213dcd65ffd5857cbde3dac54ccc645a3d64916af352b"
+  },
+  "libglvnd-devel": {
+    "filename": "libglvnd-devel-1.7.0-9.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libglvnd-devel-1.7.0-9.fc44.aarch64.rpm",
+    "sha256": "0d109654cdf1bc7be56a04ba237d83b13bcb5c5a5d9169f7dc4c3575c31b63a6"
+  },
+  "libinput-devel": {
+    "filename": "libinput-devel-1.31.0-1.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libinput-devel-1.31.0-1.fc44.aarch64.rpm",
+    "sha256": "9150d98632cff5cda6038593a7da0b02971dd0b8dcff44cf22d6943b6d66884a"
+  },
+  "libseat-devel": {
+    "filename": "libseat-devel-0.9.3-1.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libseat-devel-0.9.3-1.fc44.aarch64.rpm",
+    "sha256": "03db09c9d8dfbd44945539bd384ec84691dc9ce5e7b85f1bb2d268b1b2fec828"
+  },
+  "libuuid-devel": {
+    "filename": "libuuid-devel-2.41.3-12.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libuuid-devel-2.41.3-12.fc44.aarch64.rpm",
+    "sha256": "8d2161120feb1401c534e4873c651542fe7fb0fc1490f732911d25badb240420"
+  },
+  "libxcb-devel": {
+    "filename": "libxcb-devel-1.17.0-7.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libxcb-devel-1.17.0-7.fc44.aarch64.rpm",
+    "sha256": "2c79516d368acfce4ace6ce325fb2023cf765a381fe5cba66d5364cbb0dd2952"
+  },
+  "libxkbcommon-devel": {
+    "filename": "libxkbcommon-devel-1.13.1-2.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libxkbcommon-devel-1.13.1-2.fc44.aarch64.rpm",
+    "sha256": "2095d62977dc0003279a3d8d922f56a29fbbd1d002730648c8560d87872d7a6d"
+  },
+  "libxshmfence-devel": {
+    "filename": "libxshmfence-devel-1.3.2-8.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libxshmfence-devel-1.3.2-8.fc44.aarch64.rpm",
+    "sha256": "2ffdadaa97e084ae8ca965b9b09da8e875154372e3d9b15c2c7ad578787ac08e"
+  },
+  "luajit-devel": {
+    "filename": "luajit-devel-2.1.1767980792-1.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/luajit-devel-2.1.1767980792-1.fc44.aarch64.rpm",
+    "sha256": "c35a701939e43c1c26543cd75b9d03e00bf190917ee3af6dd350413992111696"
+  },
+  "mesa-libgbm-devel": {
+    "filename": "mesa-libgbm-devel-26.0.3-4.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/m/mesa-libgbm-devel-26.0.3-4.fc44.aarch64.rpm",
+    "sha256": "7e7c7f2a7d29d4d436ff9bb08dd905f9979fda4160ebc720f79a7feb58701836"
+  },
+  "mtdev-devel": {
+    "filename": "mtdev-devel-1.1.6-12.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/m/mtdev-devel-1.1.6-12.fc44.aarch64.rpm",
+    "sha256": "b33fb49114ea5d57cc864f1f150624ac2eaab14ea0f0f57d9cddf6a687ef5876"
+  },
+  "pixman-devel": {
+    "filename": "pixman-devel-0.46.2-3.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/p/pixman-devel-0.46.2-3.fc44.aarch64.rpm",
+    "sha256": "b9ac1bef1e4a6987fe88413b5c2fc5d44a6c91abb81f7e096d0a8eedd0837dd8"
+  },
+  "systemd-devel": {
+    "filename": "systemd-devel-259.5-1.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/s/systemd-devel-259.5-1.fc44.aarch64.rpm",
+    "sha256": "69c6a22d5240a0000b5863d0df9fbcdba9a1bc5eeaf6e3b9ffd1bae2dba353b8"
+  },
+  "vulkan-headers": {
+    "filename": "vulkan-headers-1.4.341.0-1.fc44.noarch.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/v/vulkan-headers-1.4.341.0-1.fc44.noarch.rpm",
+    "sha256": "b466a7e3525dbd55f12193b0b24ca913fc3f7c473bb02838af5adbc448c4cd8f"
+  },
+  "vulkan-loader-devel": {
+    "filename": "vulkan-loader-devel-1.4.341.0-1.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/v/vulkan-loader-devel-1.4.341.0-1.fc44.aarch64.rpm",
+    "sha256": "d21a6c2509c0879cdce4918bff37085744dcd987e3582c06027edbf64ae73a58"
+  },
+  "wayland-devel": {
+    "filename": "wayland-devel-1.24.0-3.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/w/wayland-devel-1.24.0-3.fc44.aarch64.rpm",
+    "sha256": "fc1b70a6bc9d44e8eec18d791b12610bcb57a5e2ce436d4b78e72a12c580d6b8"
+  },
+  "wayland-protocols-devel": {
+    "filename": "wayland-protocols-devel-1.47-2.fc44.noarch.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/w/wayland-protocols-devel-1.47-2.fc44.noarch.rpm",
+    "sha256": "f7b279071d56c69301ba9a2b10472dc964487b6af5ee642cac92ee557ec98a29"
+  },
+  "xcb-util-errors-devel": {
+    "filename": "xcb-util-errors-devel-1.0.1-7.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/x/xcb-util-errors-devel-1.0.1-7.fc44.aarch64.rpm",
+    "sha256": "e91915d48ff743db75035191dd9ee05101f597495d22e0981a8dc24c9e1d3514"
+  },
+  "xcb-util-renderutil-devel": {
+    "filename": "xcb-util-renderutil-devel-0.3.10-9.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/x/xcb-util-renderutil-devel-0.3.10-9.fc44.aarch64.rpm",
+    "sha256": "58280589682130bc8da8ab908585a7ede751c0cadde3c56b1039c5c2629ea821"
+  },
+  "xcb-util-wm-devel": {
+    "filename": "xcb-util-wm-devel-0.4.2-9.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/x/xcb-util-wm-devel-0.4.2-9.fc44.aarch64.rpm",
+    "sha256": "d29a61e18417ffb6d3c8370dfd54139a642be3b86fa4be0398a88af9c030c3a8"
+  },
+  "xorg-x11-proto-devel": {
+    "filename": "xorg-x11-proto-devel-2025.1-2.fc44.noarch.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/x/xorg-x11-proto-devel-2025.1-2.fc44.noarch.rpm",
+    "sha256": "54c1b06eb8fc190a4fb1f9b201ab69e62266937e6f3a6e92df1357209b87a286"
+  },
+  "xorg-x11-server-Xwayland-devel": {
+    "filename": "xorg-x11-server-Xwayland-devel-24.1.9-2.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/x/xorg-x11-server-Xwayland-devel-24.1.9-2.fc44.aarch64.rpm",
+    "sha256": "d3f7d9a5be2154d511d43af094e342f228c5c3a3a09cc02de29b25a5a3da9c97"
+  }
+}

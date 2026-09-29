@@ -1,0 +1,23 @@
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -997,6 +997,10 @@
+ 		return -EINVAL;
+ 
+ 	prop = sm8350_usb_prop_map[psp];
++	/* Xiaomi exports USB_TYPE through the adapter-type wire property. */
++	if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI &&
++	    psp == POWER_SUPPLY_PROP_USB_TYPE)
++		prop = USB_ADAP_TYPE;
+ 
+ 	mutex_lock(&battmgr->lock);
+ 	ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_GET, prop, 0);
+@@ -1504,6 +1508,9 @@
+ 		break;
+ 	case BATTMGR_USB_PROPERTY_GET:
+ 		property = le32_to_cpu(resp->intval.property);
++		if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI &&
++		    property == USB_ADAP_TYPE)
++			property = USB_TYPE;
+ 		if (payload_len != sizeof(resp->intval)) {
+ 			dev_warn(battmgr->dev,
+ 				 "invalid payload length for %#x request: %zd\n",
