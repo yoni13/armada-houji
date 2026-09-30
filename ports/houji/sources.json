@@ -26,9 +26,9 @@
     }
   },
   "linux": {
-    "version": "7.2.3",
-    "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.3.tar.xz",
-    "sha256": "8ba259e8e7b13ec6ef0941c8a39ad90b24bd4a4d6c0010ba6bafb794550ecd03"
+    "version": "7.2.6",
+    "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.6.tar.xz",
+    "sha256": "039aef84f2b0994aeda3f4fcfc3d02ec9d7a9bbb9020ea264c43f446c860f606"
   },
   "busybox": {
     "version": "1.37.0",
@@ -46,6 +46,12 @@
       "source": "Stock boot.img AVB com.android.build.boot properties; compatibility metadata, not an Armada security-patch claim"
     }
   },
-  "armada_image": "ghcr.io/armada-os/armada@sha256:0822f9db1510c802c70795b10f5eb8ae4b2fe36f16b80a90fa7315e4f4baf208",
-  "armada_version": "20260926.939fb84"
+  "armada_image": "ghcr.io/armada-os/armada@sha256:8ccff5e25bcea814b316624bf2f2f4cd2193cd1c87ecf7c0e98b6ca3e9f19193",
+  "armada_version": "20260926.c2fd048",
+  "armada_revision": "c2fd0485b4dbc4947319d4a512f8061bdc8e7660",
+  "neard": {
+    "version": "0.19-8.fc44",
+    "url": "https://kojipkgs.fedoraproject.org/packages/neard/0.19/8.fc44/aarch64/neard-0.19-8.fc44.aarch64.rpm",
+    "sha256": "4f8dafe05b6724cec8b64c04794f0bafbf3226ce5c6637131c1d7399dbc5c005"
+  }
 }

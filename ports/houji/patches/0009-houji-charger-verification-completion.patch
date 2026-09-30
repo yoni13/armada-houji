@@ -67,16 +67,15 @@
  	if (psp >= ARRAY_SIZE(sm8350_bat_prop_map))
  		return -EINVAL;
  
-@@ -536,6 +554,9 @@
- 		return ret;
- 
- 	switch (psp) {
-+	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
-+		val->intval = battmgr->houji_fcc;
-+		break;
- 	case POWER_SUPPLY_PROP_STATUS:
- 		val->intval = battmgr->status.status;
+@@ -641,6 +641,7 @@
  		break;
+ 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT:
+-		val->intval = battmgr->info.charge_current_limit;
++		val->intval = battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI ?
++			battmgr->houji_fcc : battmgr->info.charge_current_limit;
+ 		break;
+ 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
+ 		val->intval = battmgr->info.charge_current_limit_max;
 @@ -903,6 +924,107 @@
  	.get_property = qcom_battmgr_bat_get_property,
  };
@@ -202,21 +201,6 @@
  		/* Normalize the Xiaomi wire IDs before decoding the payload. */
  		if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI) {
  			if (property <= BATT_CHG_CTRL_LIM_MAX) {
-@@ -1585,6 +1717,14 @@
- 			break;
- 		}
- 		break;
-+	case BATTMGR_BAT_PROPERTY_SET:
-+		if (battmgr->variant != QCOM_BATTMGR_XIAOMI_HOUJI)
-+			return;
-+		if (payload_len != sizeof(resp->intval))
-+			battmgr->error = -ENODATA;
-+		else
-+			battmgr->error = le32_to_cpu(resp->intval.result) ? -EIO : 0;
-+		break;
- 	case BATTMGR_REQUEST_NOTIFICATION:
- 	case BATTMGR_CHG_CTRL_LIMIT_EN:
- 		battmgr->error = 0;
 @@ -1602,13 +1742,36 @@
  {
  	const struct pmic_glink_hdr *hdr = data;

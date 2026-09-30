@@ -1,12 +1,22 @@
 """Shared, host-side build helpers. Inputs are pinned; outputs stay under work/."""
 from pathlib import Path
 import hashlib
+import json
 import os
 import subprocess
 import urllib.request
 
 PORT = Path(__file__).resolve().parent
 REPO = PORT.parents[1]
+
+
+def kernel_source(work):
+    """Use the pinned kernel version consistently for all external modules."""
+    version = json.loads((PORT / 'sources.json').read_text())['linux']['version']
+    package = (REPO / 'packages/kernel/BASE.env').read_text().strip()
+    if package != 'VERSION=' + version:
+        raise ValueError('Houji Linux pin does not match packages/kernel/BASE.env')
+    return Path(work) / 'kernel' / ('linux-' + version)
 
 
 def run(*args, **kwargs):

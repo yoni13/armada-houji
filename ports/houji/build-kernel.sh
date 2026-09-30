@@ -9,15 +9,22 @@ mkdir -p "$work" "$out"
 work=$(realpath "$work")
 out=$(realpath "$out")
 source "$root/packages/kernel/BASE.env"
-[[ "$VERSION" == 7.2.3 ]] || { echo 'Houji bring-up currently targets Linux 7.2.3' >&2; exit 1; }
+pins=$(python3 - "$port/sources.json" <<'PYPINS'
+import json, sys
+pin = json.load(open(sys.argv[1]))['linux']
+print(pin['version'], pin['url'], pin['sha256'])
+PYPINS
+)
+read -r pinned_version source_url source_sha <<< "$pins"
+[[ "$VERSION" == "$pinned_version" ]] || { echo 'Houji Linux pin does not match packages/kernel/BASE.env' >&2; exit 1; }
 archive="$work/kernel/linux-$VERSION.tar.xz"
 mkdir -p "$work/kernel"
 if [[ ! -f "$archive" ]]; then
-    curl -fL --retry 3 "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$VERSION.tar.xz" -o "$archive.part"
-    echo "8ba259e8e7b13ec6ef0941c8a39ad90b24bd4a4d6c0010ba6bafb794550ecd03  $archive.part" | sha256sum -c -
+    curl -fL --retry 3 "$source_url" -o "$archive.part"
+    echo "$source_sha  $archive.part" | sha256sum -c -
     mv "$archive.part" "$archive"
 fi
-echo "8ba259e8e7b13ec6ef0941c8a39ad90b24bd4a4d6c0010ba6bafb794550ecd03  $archive" | sha256sum -c -
+echo "$source_sha  $archive" | sha256sum -c -
 
 # Do not edit the shared package or put Houji in supported-dtbs.
 package="$work/kernel-package"
@@ -30,6 +37,7 @@ while IFS= read -r patch; do
 done < "$port/patches/series"
 cp "$port/sm8650-xiaomi-houji.dts" "$package/dts/"
 cp "$port/bluetooth-haptics.dtsi" "$package/dts/"
+cp "$port/nfc.dtsi" "$package/dts/"
 cp "$port/charging/board-thermals.dtsi" "$package/dts/"
 cp "$port/usb/otg-usb3.dtsi" "$package/dts/"
 cp "$port/touch/touch.dtsi" "$package/dts/"

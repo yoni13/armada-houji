@@ -19,6 +19,7 @@
 #include <linux/kref.h>
 #include <linux/miscdevice.h>
 #include <linux/poll.h>
+#include <linux/pm.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
@@ -47,6 +48,7 @@ struct houji_tcm_probe {
 	wait_queue_head_t stream_wait;
 	bool stream_open, stream_dead;
 	int stream_error;
+	int irq_number;
 };
 
 struct houji_stream_reader {
@@ -516,6 +518,7 @@ static int houji_tcm_setup_input(struct houji_tcm_probe *t)
 					dev_name(dev), t);
 	if (ret)
 		return dev_err_probe(dev, ret, "touch interrupt\n");
+	t->irq_number = irq;
 	dev_info(dev, "Houji TCM Linux input ready on IRQ %d\n", irq);
 	return 0;
 }
@@ -531,6 +534,7 @@ static int houji_tcm_probe(struct spi_device *spi)
 	if (!t)
 		return -ENOMEM;
 	t->spi = spi;
+	spi_set_drvdata(spi, t);
 	mutex_init(&t->raw_lock);
 	kref_init(&t->refs);
 	init_waitqueue_head(&t->stream_wait);
@@ -611,6 +615,30 @@ static int houji_tcm_probe(struct spi_device *spi)
 	return houji_tcm_setup_input(t);
 }
 
+static int houji_tcm_suspend(struct device *dev)
+{
+	struct houji_tcm_probe *t = dev_get_drvdata(dev);
+
+	/* Quiesce the threaded reader before the parent SPI controller suspends.
+	 * Otherwise a report can return -ESHUTDOWN and permanently stop the stream.
+	 */
+	if (t->irq_number > 0)
+		disable_irq(t->irq_number);
+	return 0;
+}
+
+static int houji_tcm_resume(struct device *dev)
+{
+	struct houji_tcm_probe *t = dev_get_drvdata(dev);
+
+	if (t->irq_number > 0)
+		enable_irq(t->irq_number);
+	return 0;
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(houji_tcm_pm_ops, houji_tcm_suspend,
+			       houji_tcm_resume);
+
 static const struct of_device_id houji_tcm_of_match[] = {
 	{ .compatible = "synaptics,s3910p-houji-probe" },
 	{ }
@@ -621,7 +649,8 @@ static const struct spi_device_id houji_tcm_id[] = {
 };
 MODULE_DEVICE_TABLE(spi, houji_tcm_id);
 static struct spi_driver houji_tcm_driver = {
-	.driver = { .name = "houji-tcm-probe", .of_match_table = houji_tcm_of_match },
+	.driver = { .name = "houji-tcm-probe", .of_match_table = houji_tcm_of_match,
+		    .pm = pm_sleep_ptr(&houji_tcm_pm_ops) },
 	.probe = houji_tcm_probe,
 	.id_table = houji_tcm_id,
 };

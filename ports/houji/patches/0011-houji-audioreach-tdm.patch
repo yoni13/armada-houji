@@ -294,7 +294,7 @@
 --- a/sound/soc/qcom/qdsp6/q6apm-dai.c
 +++ b/sound/soc/qcom/qdsp6/q6apm-dai.c
 @@ -93,11 +93,12 @@
- 				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME |
+ 				 SNDRV_PCM_INFO_PAUSE |
  				 SNDRV_PCM_INFO_NO_REWINDS | SNDRV_PCM_INFO_SYNC_APPLPTR |
  				 SNDRV_PCM_INFO_BATCH),
 -	.formats =              (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_LE),
@@ -309,7 +309,7 @@
  	.buffer_bytes_max =     CAPTURE_MAX_NUM_PERIODS * CAPTURE_MAX_PERIOD_SIZE,
  	.period_bytes_min =	CAPTURE_MIN_PERIOD_SIZE,
 @@ -113,7 +114,8 @@
- 				 SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME |
+ 				 SNDRV_PCM_INFO_PAUSE |
  				 SNDRV_PCM_INFO_NO_REWINDS | SNDRV_PCM_INFO_SYNC_APPLPTR |
  				 SNDRV_PCM_INFO_BATCH),
 -	.formats =              (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S24_LE),

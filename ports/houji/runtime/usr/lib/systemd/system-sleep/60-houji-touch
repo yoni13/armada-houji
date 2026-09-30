@@ -1,0 +1,20 @@
+#!/bin/sh
+# The stock temporal decoder needs a fresh session after a suspended frame gap.
+# This hook runs only for native system sleep; light sleep keeps streaming.
+set -eu
+marker=/run/armada/houji-touch-resume
+case "${1:-}" in
+    pre)
+        if systemctl is-active --quiet houji-stock-touch.service; then
+            mkdir -p /run/armada
+            touch "$marker"
+            systemctl stop houji-stock-touch.service
+        fi
+        ;;
+    post)
+        if [ -e "$marker" ]; then
+            systemctl start houji-stock-touch.service
+            rm -f "$marker"
+        fi
+        ;;
+esac

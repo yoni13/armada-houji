@@ -23,7 +23,7 @@ log() { printf '%s\n' "$*" >>"$work/log"; }
 mkdir -p "$SAVE_DIR" "$work/backlight/houji-n3" "$work/soc/a600000.usb/power"
 bl="$work/backlight/houji-n3/bl_power"
 usb="$work/soc/a600000.usb/power/control"
-# Any accidental full display shutdown makes this test fail.
+# Explicit backlight-only mode must not issue a DRM power-down request.
 each_gamescope() { printf '%s\n' "$*" >>"$work/drm-calls"; return 0; }
 ARMADA_FAKE_SUSPEND_DISPLAY_MODE=backlight
 ARMADA_PRIMARY_BACKLIGHT=houji-n3
@@ -70,6 +70,26 @@ env ARMADA_DEVICE_DIR="$ROOT/system_files/usr/lib/armada/devices" \
     ARMADA_MODEL='Xiaomi 14' ARMADA_SLEEP_CONFIG="$work/no-config" \
     ARMADA_MEM_SLEEP_PATH="$work/no-mem-sleep" \
     bash "$ROOT/system_files/usr/libexec/armada/device-env" >"$work/profile"
-grep -qx 'ARMADA_FAKE_SUSPEND_DISPLAY_MODE=backlight' "$work/profile"
+grep -qx 'ARMADA_FAKE_SUSPEND_DISPLAY_MODE=drm' "$work/profile"
 grep -qx 'ARMADA_FAKE_SUSPEND_USB_RUNTIME_PM=on' "$work/profile"
+grep -qx 'ARMADA_SUSPEND_MODE=fake' "$work/profile"
+# Native sleep is the Houji default when the kernel advertises support.
+printf 's2idle [deep]\n' >"$work/mem-sleep"
+env ARMADA_DEVICE_DIR="$ROOT/system_files/usr/lib/armada/devices" \
+    ARMADA_MODEL='Xiaomi 14' ARMADA_SLEEP_CONFIG="$work/no-config" \
+    ARMADA_MEM_SLEEP_PATH="$work/mem-sleep" \
+    bash "$ROOT/system_files/usr/libexec/armada/device-env" >"$work/native-profile"
+grep -qx 'ARMADA_SUSPEND_MODE=s2idle' "$work/native-profile"
+# An explicit owner choice still selects the light-sleep fallback.
+printf 'suspend_mode=fake\n' >"$work/sleep.conf"
+env ARMADA_DEVICE_DIR="$ROOT/system_files/usr/lib/armada/devices" \
+    ARMADA_MODEL='Xiaomi 14' ARMADA_SLEEP_CONFIG="$work/sleep.conf" \
+    ARMADA_MEM_SLEEP_PATH="$work/mem-sleep" \
+    bash "$ROOT/system_files/usr/libexec/armada/device-env" >"$work/owner-profile"
+grep -qx 'ARMADA_SUSPEND_MODE=fake' "$work/owner-profile"
+# Exercise the selected Houji policy, not only the helper's default branch.
+source "$work/profile"
+: > "$work/drm-calls"
+display_off; display_on
+[[ $(cat "$work/drm-calls") == $'gamescopectl drm_sleep_internal_screen 1\ngamescopectl drm_sleep_internal_screen 0' ]]
 printf 'Houji fake suspend tests passed\n'

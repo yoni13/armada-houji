@@ -1,0 +1,69 @@
+From: Armada Houji port
+Subject: [PATCH] nfc: nci: honor RF technology parameter lengths
+
+Use the validated RF parameter block length to find the following fields.
+SN220 includes an extra NFC-A byte in its NCI 2.x notifications. Advancing
+only by the fields the parser understands reads that byte as the discovery
+notification type, reports targets before discovery finishes, and also
+misaligns the activation parameters.
+
+The existing checks of the decoded fields remain in place. Skip trailing
+fields only within the already validated parameter block.
+
+diff --git a/net/nfc/nci/ntf.c b/net/nfc/nci/ntf.c
+--- a/net/nfc/nci/ntf.c
++++ b/net/nfc/nci/ntf.c
+@@ -441,7 +441,7 @@
+ 				      const struct sk_buff *skb)
+ {
+ 	struct nci_rf_discover_ntf ntf = {};
+-	const __u8 *data;
++	const __u8 *data, *params_end;
+ 	bool add_target = true;
+ 
+ 	if (skb->len < offsetofend(struct nci_rf_discover_ntf, rf_tech_specific_params_len))
+@@ -464,6 +464,7 @@
+ 			ntf.rf_tech_specific_params_len + sizeof(ntf.ntf_type))
+ 		return -EINVAL;
+ 
++	params_end = data + ntf.rf_tech_specific_params_len;
+ 	if (ntf.rf_tech_specific_params_len > 0) {
+ 		switch (ntf.rf_tech_and_mode) {
+ 		case NCI_NFC_A_PASSIVE_POLL_MODE:
+@@ -505,6 +506,9 @@
+ 			add_target = false;
+ 		}
+ 	}
++
++	/* NCI 2.x can append fields beyond the parameters we decode. */
++	data = params_end;
+ 
+ 	ntf.ntf_type = *data++;
+ 	pr_debug("ntf_type %d\n", ntf.ntf_type);
+@@ -711,7 +715,7 @@
+ {
+ 	struct nci_conn_info *conn_info;
+ 	struct nci_rf_intf_activated_ntf ntf = {};
+-	const __u8 *data;
++	const __u8 *data, *params_end;
+ 	int err = NCI_STATUS_OK;
+ 
+ 	if (skb->len < offsetofend(struct nci_rf_intf_activated_ntf, rf_tech_specific_params_len))
+@@ -749,6 +753,7 @@
+ 	if (skb->len < (data - skb->data) + ntf.rf_tech_specific_params_len)
+ 		return -EINVAL;
+ 
++	params_end = data + ntf.rf_tech_specific_params_len;
+ 	if (ntf.rf_tech_specific_params_len > 0) {
+ 		switch (ntf.activation_rf_tech_and_mode) {
+ 		case NCI_NFC_A_PASSIVE_POLL_MODE:
+@@ -802,6 +807,9 @@
+ 			goto exit;
+ 		}
+ 	}
++
++	/* NCI 2.x can append fields beyond the parameters we decode. */
++	data = params_end;
+ 
+ 	if (skb->len < (data - skb->data) +
+ 			sizeof(ntf.data_exch_rf_tech_and_mode) +

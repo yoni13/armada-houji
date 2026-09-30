@@ -243,16 +243,17 @@
  	if (!ret)
  		ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_GET,
  						    HOUJI_BATT_FCC, 0);
-@@ -1560,6 +1703,9 @@
- 		}
- 
- 		switch (property) {
-+		case BATT_CHG_CTRL_LIM:
-+			battmgr->houji_thermal_level = le32_to_cpu(resp->intval.value);
-+			break;
- 		case BATT_STATUS:
- 			battmgr->status.status = le32_to_cpu(resp->intval.value);
+@@ -1516,6 +1516,9 @@
  			break;
+ 		case BATT_CHG_CTRL_LIM:
+-			battmgr->info.charge_current_limit = le32_to_cpu(resp->intval.value);
++			if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI)
++				battmgr->houji_thermal_level = le32_to_cpu(resp->intval.value);
++			else
++				battmgr->info.charge_current_limit = le32_to_cpu(resp->intval.value);
+ 			break;
+ 		case BATT_CHG_CTRL_LIM_MAX:
+ 			battmgr->info.charge_current_limit_max = le32_to_cpu(resp->intval.value);
 @@ -1697,6 +1843,10 @@
  			goto out_complete;
  
@@ -714,10 +715,9 @@
  static int qcom_battmgr_probe(struct auxiliary_device *adev,
  			      const struct auxiliary_device_id *id)
  {
-@@ -1911,6 +2478,7 @@
+@@ -1911,5 +2478,6 @@
  	psy_cfg_supply.num_supplicants = 1;
  
- 	INIT_WORK(&battmgr->enable_work, qcom_battmgr_enable_worker);
 +	INIT_DELAYED_WORK(&battmgr->houji_fcc_work, houji_fcc_watchdog);
  	mutex_init(&battmgr->lock);
  	init_completion(&battmgr->ack);

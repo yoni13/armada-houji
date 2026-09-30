@@ -13,6 +13,11 @@ p.add_argument('work', type=Path)
 a=p.parse_args(); work=a.work.resolve(); work.mkdir(parents=True,exist_ok=True)
 sysroot=work/'sysroot'; out=work/'bin';out.mkdir(exist_ok=True)
 pins=json.loads((PORT/'sources.json').read_text())
+# Use Fedora's NFC daemon, pinned like the other binary dependencies.
+pin=pins['neard']
+archive=fetch(pin['url'],work/'downloads/neard.rpm',pin['sha256'])
+neard=work/'neard';neard.mkdir(exist_ok=True)
+run('bsdtar','-xf',archive,'-C',neard)
 run('python3', PORT/'sensors/build.py','--work',work/'sensors','--sysroot',sysroot)
 run('python3', PORT/'sensors/gamescope/build.py','--work',work/'gamescope','--sysroot',sysroot)
 run('make','-C',PORT/'touch/native','OUT='+str(out))

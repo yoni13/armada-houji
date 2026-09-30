@@ -23,6 +23,8 @@ dnf5 -y install --setopt=install_weak_deps=False /packages/inputplumber/inputplu
 # Patched NetworkManager: /etc/NetworkManager/ignore-sleep keeps wifi up across fake-suspend.
 dnf5 -y install --setopt=install_weak_deps=False /packages/networkmanager/*.rpm
 
+dnf5 -y install --setopt=install_weak_deps=False /packages/wpa_supplicant/*.rpm
+
 dnf5 -y install --setopt=install_weak_deps=False /packages/armada-splash/*.rpm
 
 dnf5 -y install --setopt=install_weak_deps=False /packages/armada-rgb/*.rpm

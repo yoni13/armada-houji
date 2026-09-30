@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from buildlib import PORT, REPO, run, sha
+from buildlib import PORT, REPO, kernel_source, run, sha
 
 
 def main():
@@ -20,6 +20,7 @@ def main():
     p.add_argument('--inside',choices=['libraries','rootfs'],help=argparse.SUPPRESS)
     p.add_argument('--container',help=argparse.SUPPRESS)
     a=p.parse_args();output=a.output.resolve();work=output/'work';work.mkdir(parents=True,exist_ok=True)
+    kernel=kernel_source(work)
     pm=['podman']
     if bool(a.podman_root)!=bool(a.podman_runroot):p.error('Specify both Podman storage paths together')
     storage=[]
@@ -44,7 +45,8 @@ def main():
     if not a.skip_kernel:
         env=os.environ.copy();env.update(HOUJI_WORK_DIR=str(work),HOUJI_OUT_DIR=str(output/'build/kernel'))
         run('bash',PORT/'build-kernel.sh',env=env)
-    run('python3',PORT/'touch/native/build-module.py',work/'kernel/linux-7.2.3',work/'touch-module')
+    run('python3',PORT/'touch/native/build-module.py',kernel,work/'touch-module')
+    run('python3',PORT/'nfc/build-module.py',kernel,work/'nfc-module')
     run('python3',PORT/'prepare-sysroot.py',work/'userspace')
     image=a.image or json.loads((PORT/'sources.json').read_text())['armada_image']
     # An unstarted disposable container prevents any owner settings entering the image.
@@ -52,7 +54,7 @@ def main():
     try:
         run(*pm,'unshare','python3',Path(__file__),'--output',output,*storage,'--inside','libraries','--container',container)
         run('python3',PORT/'build-userspace.py',work/'userspace')
-        run('python3',PORT/'gps/build.py','--work',work/'gps','--sysroot',work/'userspace/sysroot','--kernel',work/'kernel/linux-7.2.3')
+        run('python3',PORT/'gps/build.py','--work',work/'gps','--sysroot',work/'userspace/sysroot','--kernel',kernel)
         run(*pm,'unshare','python3',Path(__file__),'--output',output,*storage,'--inside','rootfs','--container',container)
     finally:run(*pm,'rm',container)
     run('python3',PORT/'install/assemble.py','--kernel',output/'build/kernel','--rootfs',output/'rootfs.erofs',

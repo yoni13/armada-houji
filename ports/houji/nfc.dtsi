@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/* Wiring from the pinned Xiaomi houji-sm8650.dtsi and houji-pinctrl.dtsi. */
+&i2c0 {
+	status = "okay";
+	clock-frequency = <400000>;
+
+	nfc@28 {
+		compatible = "nxp,nxp-nci-i2c";
+		reg = <0x28>;
+		interrupt-parent = <&tlmm>;
+		interrupts = <75 IRQ_TYPE_LEVEL_HIGH>, <35 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "irq", "clkreq";
+		enable-gpios = <&tlmm 34 GPIO_ACTIVE_HIGH>;
+		vddio-supply = <&vreg_l3c>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&nfc_irq_default &nfc_enable_default &nfc_clkreq_default>;
+	};
+};
+
+&tlmm {
+	nfc_irq_default: nfc-irq-default-state {
+		pins = "gpio75";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
+		input-enable;
+	};
+
+	nfc_enable_default: nfc-enable-default-state {
+		pins = "gpio34";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	nfc_clkreq_default: nfc-clkreq-default-state {
+		pins = "gpio35";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		input-enable;
+	};
+};

@@ -1,0 +1,24 @@
+[Unit]
+Description=Armada NFC manager
+After=dbus.service
+
+[Service]
+Type=dbus
+BusName=org.armada.Nfc
+ExecStart=/usr/libexec/armada/nfc-manager/service.py
+ExecStopPost=/usr/libexec/armada/nfc-manager/service.py --recover
+RuntimeDirectory=armada-nfc
+RuntimeDirectoryMode=0700
+StateDirectory=armada-nfc
+StateDirectoryMode=0700
+TimeoutStopSec=90
+UMask=0077
+LimitCORE=0
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

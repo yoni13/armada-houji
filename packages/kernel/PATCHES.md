@@ -19,6 +19,10 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
 - `patches/0048-drm-msm-dsi-reparent-byte-pixel-src-to-xo-on-disable.patch`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8750/patches/linux/0048-drm-msm-dsi-reparent-byte-pixel-src-to-xo-on-disable.patch
   upstream: unknown
+- `patches/0048a-drm-msm-dsi-round-byte-clock-rate-after-reparenting-to-PLL.patch`
+  source: https://git.kernel.org/torvalds/c/2028280686f4fa78e2f1f6dede4b6c1fd782b9e3
+  upstream: https://lore.kernel.org/r/20260903-fix-eliza-dsi-v1-1-3474a6c9f2e0@oss.qualcomm.com
+  notes: Context of the struct msm_dsi_host hunk refreshed to apply after `0048`.
 - `patches/0049-drm-msm-dpu-panel-opt-in-8bpc-dither.patch`
   source: armada
   upstream: local
@@ -76,6 +80,10 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
 - `patches/0060-drm-panel-icna35xx-luminance-linear-backlight-scale.patch`
   source: armada
   upstream: not submitted
+- `patches/0060a-drm-panel-icna35xx-add-mangmi-pocket-max.patch`
+  source: https://github.com/ROCKNIX/distribution/blob/807c74fc46c124891d8aa9b57a68533d38e9a6b2/projects/ROCKNIX/devices/SM8250/patches/linux/0057_Chipone-ICNA35XX-panel.patch
+  upstream: unknown
+  notes: Ports the Pocket Max init sequence, four vendor modes and per-panel shutdown delays onto Armada's Linux 7.2 managed-panel driver while retaining Armada's luminance-linear backlight scale.
 - `patches/0106-drm-panel-il97680a-luminance-linear-backlight-scale.patch`
   source: armada
   upstream: not submitted
@@ -122,12 +130,6 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   upstream: unknown
 - `patches/0057-backlight-aw99706-konkr-cfg7.patch`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8750/patches/linux/0057-backlight-aw99706-konkr-cfg7.patch
-  upstream: unknown
-- `patches/0062-backlight-aw99706-honor-blank-power-state.patch`
-  source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8750/patches/linux/0062-backlight-aw99706-honor-blank-power-state.patch
-  upstream: unknown
-- `patches/0065-backlight-aw99706-use-dt-binding-property-names.patch`
-  source: https://github.com/mrdidit/distribution/blob/b14788a72b7399f03aad2cdcced2e3b91ae15810/projects/ROCKNIX/devices/SM8750/patches/linux/0065-backlight-aw99706-use-dt-binding-property-names.patch
   upstream: unknown
 - `patches/0066-regulator-add-qcom-pm8150l-lcdb.patch`
   source: https://github.com/ROCKNIX/distribution/blob/807c74fc46c124891d8aa9b57a68533d38e9a6b2/projects/ROCKNIX/devices/SM8250/patches/linux/0066-regulator-add-qcom-pm8150l-lcdb.patch
@@ -240,6 +242,9 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
 - `patches/1006-tty-serial-qcom-geni-mask-non-console-irq-on-suspend.patch`
   source: https://github.com/thorch-os/thorch/blob/2614a262d7de3f31bd47a0c92981461146663847/packages/linux-thorch/patches/0010-tty-serial-qcom-geni-mask-non-console-irq-on-suspend.patch
   upstream: unknown
+- `patches/1007-input-rsinput-drop-the-mcu-supply-across-system-sleep.patch`
+  source: armada
+  upstream: local
 - `patches/1300-input-rsinput-axis-deadzone.patch`
   source: armada
   upstream: local
@@ -303,6 +308,28 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   source: armada
   upstream: not submitted
   notes: On OPP-scaling platforms the OPP carries the only PCIe memory-path votes, so dropping it to NULL on non-S2RAM suspend leaves the RPMh sleep set with no DDR/LLCC contract and the AOP never resumes. Deliberately does not populate `pcie->icc_mem` on OPP platforms: `qcom_pcie_icc_opp_update()` prefers an `icc_mem` handle over the OPP branch, so providing one silently disables the post-link-training OPP update and pins the OPP at the probe-time maximum.
+- `patches/0522-PCI-host-common-let-only-endpoints-veto-d3cold.patch`
+  source: armada
+  upstream: local
+- `patches/0523-regulator-qcom-rpmh-add-suspend-state-support.patch`
+  source: https://github.com/thorch-os/thorch/blob/82e7472e6cad5c08a55c3aef92ef5be218621b2c/packages/linux-thorch/patches/0218-regulator-qcom-rpmh-add-suspend-state-support.patch
+  upstream: unknown
+  notes: Uses the PMIC's own bypass mode (`pmic_bypass_mode`) instead of `PMIC4_BOB_MODE_PASS`, which is wrong on PMIC5.
+- `patches/0524-regulator-core-apply-mem-state-for-s2idle.patch`
+  source: https://github.com/thorch-os/thorch/blob/82e7472e6cad5c08a55c3aef92ef5be218621b2c/packages/linux-thorch/patches/0219-regulator-core-apply-mem-state-for-s2idle.patch
+  upstream: unknown
+- `patches/0525-regulator-core-log-missing-suspend-configuration-at-debug.patch`
+  source: armada
+  upstream: local
+- `patches/0526-regulator-apply-state-mem-in-s2idle-only-for-opted-in-drivers.patch`
+  source: armada
+  upstream: local
+- `patches/0514-PCI-qcom-honor-iommu-map-cell-count.patch`
+  source: https://lkml.iu.edu/2609.0/16096.html
+  upstream: https://lore.kernel.org/r/20260907143349.317495-1-mani@kernel.org
+- `patches/0514a-of-property-honor-iommu-cells-in-iommu-map-devlinks.patch`
+  source: armada
+  upstream: local
 - `patches/0001-pcie-update-sm8550-dtsi.patch`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8550/patches/linux/0001-pcie-update-sm8550-dtsi.patch
   upstream: https://lore.kernel.org/r/20260611-wake-v2-33-2744251b1181@oss.qualcomm.com
@@ -310,6 +337,12 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   source: armada
   upstream: not submitted
   notes: Companion DT for 0513. `opp-hz` is synthetic and `opp-level` is omitted so the OPP can never be selected for a trained link by either match in `qcom_pcie_icc_opp_update()`. pcie1 is disabled in the SM8550 board DTS files that use this table and gets no suspend OPP.
+- `patches/0521-arm64-dts-qcom-sm8750-add-a-pcie-suspend-opp.patch`
+  source: armada
+  upstream: local
+- `patches/0527-arm64-dts-qcom-sm8650-add-a-pcie-suspend-opp.patch`
+  source: armada
+  upstream: local
 - `patches/0120-20250728_konradybcio_gpu_cc_power_requirements_reality_check.patch`
   source: https://github.com/ROCKNIX/distribution/blob/ef264a238d5e2ba960145e3fda663dc27de49a80/projects/ROCKNIX/devices/SM8550/patches/linux/0120-20250728_konradybcio_gpu_cc_power_requirements_reality_check.patch
   upstream: https://lore.kernel.org/r/20250728-topic-gpucc_power_plumbing-v1-22-09c2480fe3e6@oss.qualcomm.com
@@ -345,6 +378,9 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   source: https://lkml.iu.edu/2608.3/10890.html
   upstream: https://lkml.iu.edu/2608.3/10890.html
   notes: Carries the upstream SM8350/SM8550 mapping of the firmware remaining-charge counter to CHARGE_NOW.
+- `patches/0903-power-supply-qcom-battmgr-expose-the-charge-current-limit.patch`
+  source: armada
+  upstream: local
 - `patches/0900-power-supply-qcom-battmgr-log-usb-adapter-type.patch`
   source: armada
   upstream: local
@@ -472,9 +508,6 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
 - `patches/0049-drm-msm-a8xx-add-adreno-830-catalog.patch`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8750/patches/linux/0049-drm-msm-a8xx-add-adreno-830-catalog.patch
   upstream: unknown
-- `patches/0050-clk-qcom-gxclkctl-kaanapali-fix-gx-gdsc-collapse.patch`
-  source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8750/patches/linux/0050-clk-qcom-gxclkctl-kaanapali-fix-gx-gdsc-collapse.patch
-  upstream: https://lore.kernel.org/r/20260427-gfx-clk-fixes-v2-2-797e54b3d464@oss.qualcomm.com
 - `patches/0039-wifi-ath12k-add-initial-hardware-definition-for-WCN7.patch`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8750/patches/linux/0039-wifi-ath12k-add-initial-hardware-definition-for-WCN7.patch
   upstream: unknown
@@ -504,14 +537,14 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
 - `patches/0509-soc-qcom-pmic_glink_altmode-defer-until-mux-switch-ready.patch`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8750/patches/linux/0509-soc-qcom-pmic_glink_altmode-defer-until-mux-switch-ready.patch
   upstream: unknown
-  notes: Armada gates both deferrals on `qcom,sm8750`. ROCKNIX runs this only in its SM8750 kernel, where the mode-switch supplier registers late. Boards that declare no mode-switch at all (the AYANEO SM8550 family) would defer forever, which blocks the DP aux bridges, keeps the msm DRM aggregate from binding, and leaves the internal panel dark. Hardware-confirmed on the Pocket EVO. With `0517`, a declared-but-late provider already returns `-EPROBE_DEFER` through the `IS_ERR()` path ahead of these NULL checks, so the gated checks are ROCKNIX's SM8750 fallback on top of that distinction rather than the primary defer mechanism.
+  notes: Armada gates both deferrals on `qcom,sm8750`. ROCKNIX runs this only in its SM8750 kernel, where the mode-switch supplier registers late. Boards that declare no mode-switch at all (the AYANEO SM8550 family) would defer forever, which blocks the DP aux bridges, keeps the msm DRM aggregate from binding, and leaves the internal panel dark. Hardware-confirmed on the Pocket EVO. In Linux 7.2.6, a declared-but-late provider already returns `-EPROBE_DEFER` through the `IS_ERR()` path ahead of these NULL checks, so the gated checks are ROCKNIX's SM8750 fallback on top of that distinction rather than the primary defer mechanism.
 - `patches/0519-usb-typec-ucsi-clear-USB-role.patch`
   source: https://github.com/ROCKNIX/distribution/commit/c9629c95a5655dcfb68e8f3aaf75f9967a9e9656
   upstream: unknown
 - `patches/0517-usb-typec-mux-dont-swallow-EPROBE_DEFER.patch`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8750/patches/linux/0517-usb-typec-mux-dont-swallow-EPROBE_DEFER.patch
   upstream: unknown
-  notes: Armada rebased the ROCKNIX fix onto Linux 7.1.5, preserving its `-EPROBE_DEFER` handling and adapting it to the new duplicate-filter arrays.
+  notes: Retains only array initialization; Linux 7.2.6 includes the probe-deferral fixes.
 - `patches/0603-ASoC-codecs-wcd939x-keep-the-codec-resumed-while-a-ja.patch`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8750/patches/linux/0603-ASoC-codecs-wcd939x-keep-the-codec-resumed-while-a-ja.patch
   upstream: unknown
@@ -535,6 +568,15 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   source: armada
   upstream: local
   notes: Armada added this follow-up to limit `0612` to playback MI2S DAIs; without it, the ROCKNIX change would affect every playback DAI using the shared q6apm driver.
+- `patches/0528-ASoC-qcom-sc8280xp-suspend-the-card-and-its-streams.patch`
+  source: armada
+  upstream: local
+- `patches/0529-ASoC-qdsp6-q6apm-fail-the-graph-open-when-the-DSP-rejects-it.patch`
+  source: armada
+  upstream: local
+- `patches/0530-ASoC-qdsp6-release-AudioReach-graphs-across-system-suspend.patch`
+  source: armada
+  upstream: local
 - `patches/0618-drm-msm-dp-dont-fail-audio-prepare-when-display-off.patch`
   source: https://github.com/ROCKNIX/distribution/pull/3187
   upstream: unknown
@@ -586,6 +628,12 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
 - `dts/sm8250-mangmi-air-y-pro.dts`
   source: https://github.com/ROCKNIX/distribution/blob/807c74fc46c124891d8aa9b57a68533d38e9a6b2/projects/ROCKNIX/devices/SM8250/linux/dts/qcom/sm8250-mangmi-air-y-pro.dts
   notes: Imported verbatim from ROCKNIX; SHA-256 `d98f1104f4fe29f9bf8c94692beb491e840332a851f1f6994f015973ba24c018`.
+- `dts/sm8250-mangmi-pocket-max.dts`
+  source: https://github.com/ROCKNIX/distribution/blob/807c74fc46c124891d8aa9b57a68533d38e9a6b2/projects/ROCKNIX/devices/SM8250/linux/dts/qcom/sm8250-mangmi-pocket-max.dts
+  notes: Imported verbatim from ROCKNIX; SHA-256 `f6128a97cf510fcd9ecf568a2e512c3f6f4210ad43e4fb1f542740f4b140dfd2`.
+- `dts/sm8250-mangmi-pocket-max.dts.patch`
+  source: armada
+  notes: Drops ROCKNIX's kernel thermal-zone fan include after copying the DTS; Armada powerd owns the PWM fan curve and must not race a second controller.
 - `dts/sm8250-retroidpocket-flip2.dts`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8250/linux/dts/qcom/sm8250-retroidpocket-flip2.dts
 - `dts/sm8250-retroidpocket-flip2-visionox.dts`
@@ -604,7 +652,7 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8750/linux/dts/qcom/sm8750-konkr-pf-elite.dts
 - `dts/sm8750-konkr-pf-elite.dts.patch`
   source: armada
-  notes: Armada adapts the Elite touchscreen node to the full ROCKNIX Chipone fork shared with the SM8650 Pocket FIT, keeps volume-up from waking the system, and adds the DisplayPort playback link required for USB-C DP Alt Mode audio; the touchscreen driver is selected only by those two device-tree nodes.
+  notes: Armada adapts the Elite touchscreen node to the full ROCKNIX Chipone fork shared with the SM8650 Pocket FIT, keeps volume-up from waking the system, and adds the DisplayPort playback link required for USB-C DP Alt Mode audio; the touchscreen driver is selected only by those two device-tree nodes. Armada also marks PCIe WAKE# active-low and idles the codec rails in LPM during s2idle.
 - `dts/cq8725s-ayn-common.dtsi`
   source: https://github.com/ROCKNIX/distribution/blob/bcf3b5bc574990b96543484575b06f912153a715/projects/ROCKNIX/devices/SM8750/patches/linux/0046-arm64-dts-qcom-Add-AYN-CQ8725S-Common.patch
   notes: Armada extracted this DTS from the cited ROCKNIX patch and then applied later ROCKNIX DTS updates, including the Odin 3 haptics nodes from ROCKNIX commit `81a31e3d0f`.
@@ -613,13 +661,13 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   notes: Armada extracted this DTS from the cited ROCKNIX patch and then applied later ROCKNIX DTS updates.
 - `dts/cq8725s-ayn-odin3.dts.patch`
   source: armada
-  notes: Armada enables DPU dithering after copying `dts/cq8725s-ayn-odin3.dts`.
+  notes: Armada enables DPU dithering and codec-rail LPM sleep states after copying `dts/cq8725s-ayn-odin3.dts`.
 - `dts/cq8725s-ayn-common.dtsi.patch`
   source: armada
-  notes: Armada keeps volume-up from waking the system, marks Odin 3's RSInput node as connected to the Qualcomm haptics device, and supplies the device's 1024 range. The 70-count `axis-deadzone` (an unmeasured ROCKNIX bring-up value) was dropped; like the RP6 and every other RSInput device the Odin 3 now passes its stick value through, leaving deadzone policy to Steam Input and the game.
+  notes: Armada keeps volume-up from waking the system, marks Odin 3's RSInput node as connected to the Qualcomm haptics device, supplies the device's 1024 range, and marks PCIe WAKE# active-low. The 70-count `axis-deadzone` (an unmeasured ROCKNIX bring-up value) was dropped; like the RP6 and every other RSInput device the Odin 3 now passes its stick value through, leaving deadzone policy to Steam Input and the game.
 - `dts/qcs8550-ayaneo-pocket-common.dtsi.patch`
   source: armada
-  notes: Armada keeps volume-up from waking the system and removes the SDHCI capability mask after copying `dts/qcs8550-ayaneo-pocket-common.dtsi`.
+  notes: Armada keeps volume-up from waking the system, removes the SDHCI capability mask, marks PCIe WAKE# active-low, and idles the codec rail in LPM during s2idle after copying `dts/qcs8550-ayaneo-pocket-common.dtsi`.
 - `dts/qcs8550-ayaneo-pocketace.dts.patch`
   source: armada
   notes: Armada applies this local patch after copying `dts/qcs8550-ayaneo-pocketace.dts`.
@@ -640,7 +688,7 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   notes: Armada keeps the AYA Space, Menu, LC, and RC auxiliary keys from waking the system.
 - `dts/qcs8550-ayn-common.dtsi.patch`
   source: armada
-  notes: Armada keeps volume-up from waking the system, removes the SDHCI capability mask, and marks the shared RSInput node as connected to the PM8550B haptics device declared in the same common tree. This intentionally covers the AYN and Retroid products that inherit both nodes, including Pocket 6 and Nova.
+  notes: Armada keeps volume-up from waking the system, removes the SDHCI capability mask, and marks the shared RSInput node as connected to the PM8550B haptics device declared in the same common tree; this covers the AYN and Retroid products that inherit both nodes, including Pocket 6 and Nova. Armada also marks PCIe WAKE# active-low, idles the codec rails in LPM during s2idle, and powers RSInput from `vdd_mcu_3v3` instead of the shared `vreg_bob2`, without always-on, so the driver can cut the MCU in suspend.
 - `dts/qcs8550-ayn-odin2portal.dts.patch`
   source: armada
   notes: Adds the back buttons from the Odin 2 DTS into the Odin 2 Portal DTS
@@ -652,7 +700,7 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   notes: Armada fixes the hall-sensor pinctrl, makes only the lid-open edge wake, corrects touch orientation, and enables DPU dithering on the top panel after copying `dts/qcs8550-ayn-thor.dts`.
 - `dts/sm8650-ayaneo-common.dtsi.patch`
   source: armada
-  notes: Armada keeps volume-up from waking the system and wires the upstream SY7758 driver after copying `dts/sm8650-ayaneo-common.dtsi`.
+  notes: Armada keeps volume-up from waking the system, wires the upstream SY7758 driver, marks PCIe WAKE# active-low, and idles the codec rails in LPM during s2idle after copying `dts/sm8650-ayaneo-common.dtsi`.
 - `dts/sm8650-ayaneo-ps2.dts.patch`
   source: armada
   notes: Armada selects the accepted Pocket S2 WSA2 sound-card mapping after copying the ROCKNIX DTS.

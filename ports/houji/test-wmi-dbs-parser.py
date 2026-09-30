@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Replay the phone's DBS/SBS record through the patched C parser on the host.
 
-Pass an unpatched Linux 7.2.3 source directory. Only two files are copied to a
+Pass an unpatched source directory for the pinned Linux version. Only two files are copied to a
 temporary directory; the kernel worktree is never modified by this check.
 """
 import argparse

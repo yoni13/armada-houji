@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.neard
+Exec=/usr/libexec/nfc/neard -n --noplugin=p2p
+User=root
+SystemdService=neard.service

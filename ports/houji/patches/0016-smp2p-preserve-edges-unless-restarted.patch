@@ -1,0 +1,26 @@
+Subject: [PATCH] soc: qcom: smp2p: preserve edge history without a remote restart
+
+qcom_smp2p_check_ssr() clears every inbound entry's last_value even when
+RESTART_DONE has not changed. The next notification therefore presents
+unchanged high bits as new rising edges. On Houji this repeatedly delivers
+ADSP ready and handover interrupts during ordinary mailbox activity.
+
+Return before clearing the edge history unless an SSR acknowledgement is
+actually required. Keep the existing rescan after a real remote restart.
+This fixes duplicate DSP notifications; it is not a claimed display fix.
+
+The intended restart condition appeared in the earlier v2-support posting:
+https://lkml.iu.edu/2509.3/00011.html
+---
+--- a/drivers/soc/qcom/smp2p.c
++++ b/drivers/soc/qcom/smp2p.c
+@@ -194,6 +194,9 @@
+ 
+ 	restart_done = in->flags & BIT(SMP2P_FLAGS_RESTART_DONE_BIT);
+ 	restart = restart_done != smp2p->ssr_ack;
++	if (!restart)
++		return false;
++
+ 	list_for_each_entry(entry, &smp2p->inbound, node) {
+ 		if (!entry->value)
+ 			continue;

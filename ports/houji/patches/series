@@ -5,9 +5,11 @@
 0005-haptics-periodic-feedback.patch
 0006-houji-usb-charger-type.patch
 0007-ath12k-single-pdev-5ghz-range.patch
-0008-rpmsg-glink-detach-deadlock.patch
 0009-houji-charger-verification-completion.patch
 0010-houji-stock-charger-authentication.patch
 0011-houji-audioreach-tdm.patch
 0012-houji-battery-current-polarity.patch
 0013-ath12k-houji-stock-qmi-mlo.patch
+0014-nxp-nci-io-supply.patch
+0015-nci-rf-parameter-length.patch
+0016-smp2p-preserve-edges-unless-restarted.patch

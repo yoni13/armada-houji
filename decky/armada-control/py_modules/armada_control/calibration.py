@@ -7,10 +7,12 @@ import time
 from pathlib import Path
 
 from .privileged import call
+from .proc import clean_env
 from .system import read_text
 
 INPUT_CALIBRATION_CONFIG = Path("/etc/armada/input-calibration.json")
 CALIBRATION_BACKENDS = {
+    "mangmi": Path("/sys/module/mangmi_pocket_max/parameters"),
     "rsinput": Path("/sys/module/rsinput/parameters"),
     "retroid": Path("/sys/module/retroid/parameters"),
 }
@@ -25,6 +27,7 @@ ABS_CODES = {
 }
 TRIGGER_CODES = {
     "default": {"left_trigger": (2, 10), "right_trigger": (5, 9)},
+    "mangmi": {"left_trigger": (20,), "right_trigger": (21,)},
     "retroid": {"left_trigger": (20,), "right_trigger": (21,)},
 }
 CALIBRATION_PARAMS = (
@@ -92,6 +95,7 @@ def busctl_get_property(path, interface, prop):
             capture_output=True,
             text=True,
             timeout=1,
+            env=clean_env(),
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -120,6 +124,7 @@ def begin_calibration_intercept():
             capture_output=True,
             text=True,
             timeout=1,
+            env=clean_env(),
         )
         return True
     except (OSError, subprocess.SubprocessError):
@@ -139,6 +144,7 @@ def end_calibration_intercept():
             capture_output=True,
             text=True,
             timeout=1,
+            env=clean_env(),
         )
         return True
     except (OSError, subprocess.SubprocessError):
@@ -157,6 +163,7 @@ def inputplumber_source_events():
             capture_output=True,
             text=True,
             timeout=1,
+            env=clean_env(),
         )
     except (OSError, subprocess.SubprocessError):
         _inputplumber_events_cache.update({"time": now, "events": []})
@@ -172,6 +179,7 @@ def inputplumber_source_events():
             capture_output=True,
             text=True,
             timeout=1,
+            env=clean_env(),
         )
     except (OSError, subprocess.SubprocessError):
         _inputplumber_events_cache.update({"time": now, "events": []})
@@ -203,6 +211,8 @@ def calibration_event():
     if not events:
         events = input_events()
     preferred = (
+        lambda event: "mangmi-pocket-max" in event["phys"].casefold()
+        or "mangmi pocket max joypad" in event["name"].casefold(),
         lambda event: "rsinput-gamepad" in event["phys"].casefold() or "rsinput" in event["name"].casefold(),
         lambda event: "retroid-pocket-gamepad" in event["phys"].casefold()
         or "retroid pocket gamepad" in event["name"].casefold(),
@@ -250,6 +260,8 @@ def event_backend(event):
         return None
     name = str(event.get("name", "")).casefold()
     phys = str(event.get("phys", "")).casefold()
+    if "mangmi pocket max joypad" in name or "mangmi-pocket-max" in phys:
+        return "mangmi"
     if "rsinput" in name or "rsinput-gamepad" in phys:
         return "rsinput"
     if "retroid pocket gamepad" in name or "retroid-pocket-gamepad" in phys:

@@ -27,11 +27,13 @@ its own hardware validation; a successful build does not establish hardware supp
 | Speakers / microphone | Stereo playback and microphone recording tested, using the handset's factory speaker calibration. |
 | Battery / wired charging | Battery telemetry, Steam estimates and conservative USB-PD charging work. Computer USB may supply less than the running system consumes. Full Xiaomi 90 W charging is not supported or validated. |
 | Wireless charging | Starts and then stops in testing; unresolved. |
-| Sleep | OLED blanking workaround. Deep suspend/resume is unreliable, so standby power is higher than Android. |
+| Sleep | Native `s2idle` is the default. RTC and Power-button wake return to Steam with working touch on Linux 7.2.6. Light sleep remains selectable, with GPU/display runtime suspend and display-domain power-off verified in Plasma and Steam. Deeper SoC power collapse, battery savings and long-term reliability are not established. |
 | USB device | Charging by default; MTP on demand through Armada's switch. USB 3 at 5 Gb/s tested in both connector orientations, with USB 2 fallback. No USB shell or network gadget. |
 | USB host / OTG | Wired gamepad and Pixel webcam tested, including 5 Gb/s webcam transport. No USB 3 storage-drive test; USB4/DisplayPort support is not claimed. |
 | GPS | A satellite fix was verified with the opt-in development tools. No default GeoClue provider, navigation integration or location logger. Modem restart during testing remains unreliable. |
-| Cellular / internal cameras / NFC / fingerprint | Not implemented or validated. A GPS fix does not establish cellular service. |
+| NFC | Experimental reader support. Card discovery, ISO-DEP activation and a card response tested. The test card has no standard NDEF application; reading NDEF contents from physical tags, other tag families and writes are unverified. No payment integration. Off by default. |
+| NFC tag emulation | NFC Manager provides a read-only Type 4 text tag with an automatic or custom four-byte NFC-A serial. Text and a synthetic serial were verified with another phone. Other UID lengths and card protocols are not implemented. |
+| Cellular / internal cameras / fingerprint | Not implemented or validated. A GPS fix does not establish cellular service. |
 
 Only the development handset's N3 panel and storage variant were tested. Other
 panel revisions, capacities and regional firmware combinations need validation.
@@ -46,9 +48,15 @@ Required extracted firmware is included under [firmware/](firmware/README.md).
 It contains stock defaults, not another phone's calibration, saved connections,
 Bluetooth pairing keys or location data.
 
-The build uses Linux 7.2.3 plus the patches in `patches/series`, and a pinned
-Armada arm64 OCI image. It compiles the port's touch, sensor, charging, Gamescope,
+The build targets Armada **20260926** (`c2fd0485b4db`), with Linux **7.2.6** plus
+the patches in `patches/series` and the final release's pinned arm64 OCI image.
+It compiles the port's touch, sensor, charging, Gamescope,
 MTP, audio and GPS components from the supplied sources and pinned dependencies.
+Houji retains its separately pinned Gamescope build for touchscreen rotation.
+The release's native `s2idle` improvements are included in the kernel and
+`s2idle` is Houji's default sleep mode. Light sleep remains available through
+Armada's sleep-mode setting. Longer native-suspend validation is still pending;
+the release's reported battery savings are not a Houji measurement.
 
 `boot_b` holds the Linux kernel; `init_boot_b` holds the early-boot ramdisk;
 `vendor_boot_b` holds the mainline device tree. `dtbo_b` retains Xiaomi's
@@ -176,6 +184,9 @@ sudo python3 /path/to/update/stage-update.py /path/to/update \
 This verifies the root image, creates a clean system overlay, preserves the
 existing home and selected owner settings, and leaves the old root available
 for rollback. It does not transfer personal settings into the public bundle.
+NFC Manager settings are preserved locally with the other owner settings.
+Use this port's update procedure; Armada's generic bootc/rebase updater does
+not manage Houji's stock-ABL userdata layout.
 Copy its `staged-receipt.json` back to the host, then enter bootloader fastboot:
 
 ```sh
@@ -202,3 +213,72 @@ GPS is opt-in and is not started at boot. Its client reports fix validity and
 satellite counts without logging coordinates; position data is only sent through
 an explicitly requested private output channel. Do not publish runtime logs,
 recordings, modem NV, factory calibration, SSH keys or saved network profiles.
+
+## NFC Manager
+
+Open **NFC Manager** from KDE's application menu (under Settings). Enable
+**Read nearby tags**, then hold a tag against the upper back of the phone.
+The app shows scan status and a count of detected tags. Use **Scan again** for
+another discovery attempt. The app does not display or save card contents.
+
+To present a tag to another phone, enter text and tap **Emulate text tag**.
+Enable **Custom serial** to enter a four-byte NFC-A identifier, such as the
+synthetic test value `12:34:56:78`; leave it disabled for automatic selection.
+Emulation serves only a read-only NDEF text record, up to 200 UTF-8 bytes.
+Text, serial choice and reader/emulation mode are saved on the phone. Emulation
+continues when the app closes or the desktop session ends, and the selected mode
+is restored at boot. Reopen the app and tap **Stop emulation** to stop broadcasting
+and return to the saved reader setting. Editing tag settings saves them automatically.
+
+Settings live in `/var/lib/armada-nfc/settings.json`, readable only by root and
+through the authorized app interface. They are not written to logs or copied into
+build artifacts. Received card identifiers and contents are not saved. NFC starts
+off on a fresh installation; saved reader/emulation choices persist afterward.
+
+The interface runs as the desktop user. A background system service performs
+hardware operations; Polkit permits changes from the active local session.
+The ordinary build installs the app, desktop entry, policies and a small
+kernel module that holds the shared NFC supply during emulation. It uses the
+GTK4, libadwaita and PyGObject libraries already in the pinned Armada base.
+No private device files or Python package downloads are required.
+
+This app is a separate menu entry, not a KDE System Settings module. It does
+not implement payments, physical-card copying or other card applications.
+
+### Reader implementation and command-line use
+
+The port uses the stock controller firmware, the Linux NXP NCI driver and a
+hash-pinned Fedora `neard` package. No NFC firmware download or handset-specific
+card data is needed. The reader daemon is available on demand through D-Bus; the
+radio stays off until enabled or a saved enabled mode is restored. The app pauses
+this reader while emulating a text tag and restores it afterward.
+
+Stop emulation in NFC Manager before using the reader directly. For a single
+discovery/read attempt, run on the phone:
+
+```sh
+sudo systemctl start neard
+sudo busctl set-property org.neard /org/neard/nfc0 org.neard.Adapter Powered b true
+sudo busctl call org.neard /org/neard/nfc0 org.neard.Adapter StartPollLoop s Initiator
+sudo busctl tree org.neard
+```
+
+Hold the tag against the upper back. The object tree shows detected tags and
+any readable NDEF records without dumping their contents or identifiers. The
+built-in controller normally appears as `nfc0`; use the adapter path reported
+by `busctl tree org.neard` if it differs. NFC applications can use neard's
+`org.neard.Tag` and `org.neard.Record` interfaces. A detected card need not
+contain NDEF data, and detection does not grant access to protected sectors.
+
+To finish, stop polling and power down the radio before stopping the service.
+If polling has already stopped, continue with power-off. Restart the service
+before another attempt if an unsupported card left a stale tag object:
+
+```sh
+sudo busctl call org.neard /org/neard/nfc0 org.neard.Adapter StopPollLoop
+sudo busctl set-property org.neard /org/neard/nfc0 org.neard.Adapter Powered b false
+sudo systemctl stop neard
+```
+
+Debug packet logging is not enabled. Do not publish tag identifiers or card
+contents from separately enabled NFC diagnostic tools.

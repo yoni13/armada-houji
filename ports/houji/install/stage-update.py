@@ -49,6 +49,7 @@ def main():
     (target/'shared-home').write_text(str(home.relative_to(data.resolve()))+'\n')
     # Copy settings, not old executable/module hotfixes, into the clean system overlay.
     for name in ['etc/NetworkManager/system-connections','var/lib/bluetooth','etc/ssh',
+                 'var/lib/armada-nfc/settings.json',
                  'etc/passwd','etc/shadow','etc/group','etc/gshadow',
                  'etc/systemd/system/houji-ssh.service',
                  'etc/systemd/system/multi-user.target.wants/houji-ssh.service',

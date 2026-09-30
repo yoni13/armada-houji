@@ -5,12 +5,17 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
-from buildlib import PORT, REPO, run
+from buildlib import PORT, REPO, kernel_source, run
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('root',type=Path)
 p.add_argument('work',type=Path)
 a=p.parse_args(); root=a.root.resolve();work=a.work.resolve();users=work/'userspace'
-release=(work/'kernel/linux-7.2.3/include/config/kernel.release').read_text().strip()
+release=(kernel_source(work)/'include/config/kernel.release').read_text().strip()
+# The pinned Armada base provides these through python3-gobject and zenity.
+# Fail clearly when an alternative OCI image omits the NFC application's UI.
+for name in ['Gtk-4.0','Adw-1']:
+    if not (root/'usr/lib64/girepository-1.0'/(name+'.typelib')).is_file():
+        raise ValueError('NFC Manager needs GTK4/libadwaita in the Armada base: '+name)
 
 def target(name):
     path=root/name.lstrip('/')
@@ -38,6 +43,9 @@ for name in ['armada-powerd','device-env','fake-suspend','mtp-gadget']:
     rel='usr/libexec/armada/'+name;copy(REPO/'system_files'/rel,rel,0o755)
 for name in ['defaults.conf','xiaomi-14.conf']:
     rel='usr/lib/armada/devices/'+name;copy(REPO/'system_files'/rel,rel)
+# Native suspend lets NetworkManager disconnect before the radio powers down.
+# Armada's sleep-mode switch recreates this marker if the owner selects light sleep.
+target('etc/NetworkManager/ignore-sleep').unlink(missing_ok=True)
 for src in (REPO/'system_files/usr/share/inputplumber').rglob('*shanwan*'):
     if src.is_file():copy(src,str(src.relative_to(REPO/'system_files')))
 # Base kernels cannot load modules built for this kernel release.
@@ -45,6 +53,7 @@ modules=target('usr/lib/modules')
 shutil.rmtree(modules)
 shutil.copytree(work/('kernel/staging-'+release)/'lib/modules',modules,symlinks=True)
 copy(work/'touch-module/houji-tcm-probe.ko','usr/lib/modules/'+release+'/extra/houji-tcm-probe.ko')
+copy(work/'nfc-module/houji-nfc-power.ko','usr/lib/modules/'+release+'/extra/houji-nfc-power.ko')
 for linkpath in (modules/release).glob('*'):
     if linkpath.name in ['build','source'] and linkpath.is_symlink():linkpath.unlink()
 run('depmod','-b',root,release)
@@ -52,6 +61,16 @@ for name in ['houji-stock-core','houji-stock-auth']:
     copy(users/'bin'/name,'usr/libexec/armada/'+name,0o755)
 for name in ['qbootctl','umtprd']:
     copy(users/'bin'/name,'usr/bin/'+name,0o755)
+# NFC stays off until explicitly enabled through neard's D-Bus interface.
+for name in ['etc/dbus-1/system.d/org.neard.conf',
+             'usr/lib/systemd/system/neard.service',
+             'usr/share/licenses/neard/COPYING',
+             'usr/share/man/man5/neard.conf.5.gz',
+             'usr/share/man/man8/neard.8.gz']:
+    copy(users/'neard'/name,name)
+copy(users/'neard/usr/libexec/nfc/neard','usr/libexec/nfc/neard',0o755)
+for name in ['gui.py','service.py','controller.py','transport.py','protocol.py']:
+    copy(PORT/'nfc'/name,'usr/libexec/armada/nfc-manager/'+name)
 copy(users/'bin/Xiaomi-14-tplg.bin','usr/lib/firmware/qcom/houji/Xiaomi-14-tplg.bin')
 for name,path in {'ssccli':'libssc-build/src/ssccli', 'hexagonrpcd':'hexagon-build/hexagonrpcd/hexagonrpcd',
                   'monitor-sensor':'iio-build/src/monitor-sensor'}.items():
@@ -99,7 +118,7 @@ for name in ['sshd.service','sshd.socket']:
 wifi=root/'usr/lib/firmware/ath12k/WCN7850/hw2.0'
 for path in wifi.glob('board-2.bin*'):path.unlink()
 for name in ['houji-stock-touch','houji-sensors','houji-gamescope-orientation','houji-grow-data',
-             'houji-charging','armada-power-profiles','houji-steam-power']:
+             'houji-charging','armada-power-profiles','houji-steam-power','armada-nfc']:
     link('etc/systemd/system/multi-user.target.wants/'+name+'.service','../'+name+'.service')
 link('etc/systemd/system/graphical.target.wants/houji-boot-success.service','../houji-boot-success.service')
 for name in ['bluetooth','NetworkManager']:

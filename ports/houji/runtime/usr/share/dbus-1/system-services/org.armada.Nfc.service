@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.armada.Nfc
+Exec=/usr/libexec/armada/nfc-manager/service.py
+User=root
+SystemdService=armada-nfc.service

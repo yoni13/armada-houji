@@ -155,6 +155,12 @@ def require_ratio(parser, section, key):
     return clamp(parser.getfloat(section, key), 0.0, 1.0)
 
 
+def fan_enable_mode(hwmon):
+    # pwm-fan mode 3 also cuts the fan supply at duty 0 and in suspend; other
+    # hwmon drivers treat 2 and up as automatic control, so keep manual 1.
+    return "3" if read_text(hwmon / "name") == "pwmfan" else "1"
+
+
 def fan_safe_once():
     fan_hwmon = None
     for path in Path("/sys/class/hwmon").glob("hwmon*"):
@@ -170,7 +176,7 @@ def fan_safe_once():
         return
     enable = fan_hwmon / "pwm1_enable"
     if enable.exists():
-        write_text(enable, "1")
+        write_text(enable, fan_enable_mode(fan_hwmon))
     write_text(fan_hwmon / "pwm1", FAN_SAFE_PWM)
 
 
@@ -763,7 +769,7 @@ class ArmadaPower:
                 sd_notify("WATCHDOG=1")
                 return True
             if self.fan_enable and self.fan_enable.exists():
-                write_text(self.fan_enable, "1")
+                write_text(self.fan_enable, fan_enable_mode(self.fan_hwmon))
 
             if self.suspended:
                 temp = self.read_temp_max()
@@ -804,7 +810,7 @@ class ArmadaPower:
         if not self.fan_pwm:
             return
         if self.fan_enable and self.fan_enable.exists():
-            write_text(self.fan_enable, "1")
+            write_text(self.fan_enable, fan_enable_mode(self.fan_hwmon))
         write_text(self.fan_pwm, FAN_SAFE_PWM)
         self.last_pwm = FAN_SAFE_PWM
 

@@ -500,3 +500,4 @@ arch_timer: &{/timer} {
 &gpu_zap_shader { firmware-name = "qcom/sm8650/xiaomi/houji/gen70900_zap.mbn"; };
 #include "touch.dtsi"
 #include "audio.dtsi"
+#include "nfc.dtsi"

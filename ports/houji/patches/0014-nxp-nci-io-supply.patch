@@ -1,0 +1,93 @@
+From: Armada Houji port
+Subject: [PATCH] nfc: nxp-nci: support the I/O supply and CLKREQ routing
+
+The SN220 on Houji needs the GPIO clock-request route enabled before RF
+discovery. Without it, NCI commands succeed but the controller reports a
+clock error and cannot detect tags. Request the optional CLKREQ interrupt
+so the Qualcomm pin controller enables its always-on routing.
+
+Hold an optional I/O regulator vote, since Houji shares this rail with
+WCN7850. Boards without these resources retain their existing behavior.
+
+diff --git a/drivers/nfc/nxp-nci/i2c.c b/drivers/nfc/nxp-nci/i2c.c
+--- a/drivers/nfc/nxp-nci/i2c.c
++++ b/drivers/nfc/nxp-nci/i2c.c
+@@ -18,6 +18,8 @@
+ #include <linux/interrupt.h>
+ #include <linux/irq.h>
+ #include <linux/module.h>
++#include <linux/property.h>
++#include <linux/regulator/consumer.h>
+ #include <linux/nfc.h>
+ #include <linux/gpio/consumer.h>
+ #include <linux/unaligned.h>
+@@ -272,11 +274,21 @@
+ 	{ }
+ };
+ 
++static irqreturn_t nxp_nci_i2c_clkreq_irq(int irq, void *data)
++{
++	/*
++	 * The pin controller routes CLKREQ to the always-on domain. Merely
++	 * configuring the GPIO as an input does not enable that hardware path.
++	 */
++	return IRQ_HANDLED;
++}
++
+ static int nxp_nci_i2c_probe(struct i2c_client *client)
+ {
+ 	struct device *dev = &client->dev;
+ 	struct nxp_nci_i2c_phy *phy;
+ 	unsigned long irqflags;
++	int clkreq_irq;
+ 	int r;
+ 
+ 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
+@@ -306,6 +318,20 @@
+ 	if (IS_ERR(phy->gpiod_fw)) {
+ 		nfc_err(dev, "Failed to get FW gpio\n");
+ 		return PTR_ERR(phy->gpiod_fw);
++	}
++
++	r = devm_regulator_get_enable_optional(dev, "vddio");
++	if (r && r != -ENODEV)
++		return dev_err_probe(dev, r, "Failed to enable I/O supply\n");
++
++	if (device_property_match_string(dev, "interrupt-names", "clkreq") >= 0) {
++		clkreq_irq = fwnode_irq_get_byname(dev_fwnode(dev), "clkreq");
++		if (clkreq_irq < 0)
++			return dev_err_probe(dev, clkreq_irq, "Failed to get CLKREQ IRQ\n");
++		r = devm_request_irq(dev, clkreq_irq, nxp_nci_i2c_clkreq_irq,
++				     IRQF_TRIGGER_RISING, "nxp-nci-clkreq", phy);
++		if (r)
++			return dev_err_probe(dev, r, "Failed to route CLKREQ\n");
+ 	}
+ 
+ 	r = nxp_nci_probe(phy, &client->dev, &i2c_phy_ops,
+diff --git a/Documentation/devicetree/bindings/net/nfc/nxp,nci.yaml b/Documentation/devicetree/bindings/net/nfc/nxp,nci.yaml
+--- a/Documentation/devicetree/bindings/net/nfc/nxp,nci.yaml
++++ b/Documentation/devicetree/bindings/net/nfc/nxp,nci.yaml
+@@ -28,10 +28,22 @@
+     description: Output GPIO pin used to enter firmware download mode
+ 
+   interrupts:
+-    maxItems: 1
++    minItems: 1
++    items:
++      - description: NFC controller interrupt
++      - description: Optional clock request routed through the SoC wake controller
++
++  interrupt-names:
++    minItems: 1
++    items:
++      - const: irq
++      - const: clkreq
+ 
+   reg:
+     maxItems: 1
++
++  vddio-supply:
++    description: Optional I/O power supply
+ 
+ required:
+   - compatible

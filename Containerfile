@@ -44,6 +44,9 @@ FROM ${INPUTPLUMBER_REF} AS inputplumber
 ARG NETWORKMANAGER_REF
 FROM ${NETWORKMANAGER_REF} AS networkmanager
 
+ARG WPA_SUPPLICANT_REF
+FROM ${WPA_SUPPLICANT_REF} AS wpa_supplicant
+
 ARG JUPITER_HW_SUPPORT_REF
 FROM ${JUPITER_HW_SUPPORT_REF} AS jupiter-hw-support
 
@@ -101,6 +104,7 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=bind,from=kernel,source=/kernel,target=/packages/kernel \
     --mount=type=bind,from=inputplumber,source=/rpms,target=/packages/inputplumber \
     --mount=type=bind,from=networkmanager,source=/rpms,target=/packages/networkmanager \
+    --mount=type=bind,from=wpa_supplicant,source=/rpms,target=/packages/wpa_supplicant \
     --mount=type=bind,from=jupiter-hw-support,source=/rpms,target=/packages/jupiter-hw-support \
     --mount=type=bind,from=mesa-android,source=/,target=/packages/mesa-android \
     --mount=type=bind,from=mesa-x86,source=/,target=/packages/mesa-x86 \

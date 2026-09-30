@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=NFC Manager
+Comment=Manage NFC reading and emulate a text tag
+Exec=/usr/libexec/armada/nfc-manager/gui.py
+Icon=org.armada.NfcManager
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=NFC;tag;card;emulation;
+StartupNotify=true
+DBusActivatable=false
