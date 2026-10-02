@@ -39,6 +39,28 @@
 > back up your data, and read the complete [installation guide](https://armadaos.dev/getting-started/flashing-to-an-sd-card/)
 > before proceeding.
 
+> [!IMPORTANT]
+> ## This fork adds an unofficial, experimental Xiaomi 14 (houji) port
+>
+> **Not part of upstream Armada.** It is not on the
+> [supported-device list](https://armadaos.dev/devices/supported-devices/), and the
+> install guides above **do not apply** to it.
+>
+> - **Different install path.** It boots with the phone's **stock, unlocked Xiaomi
+>   bootloader**, not Armada's modified ABL, and installs to internal storage with
+>   its own tools.
+> - **A fresh install erases all data on the phone.** The bootloader must already
+>   be unlocked, and must never be relocked while this is installed.
+> - **Mostly AI-written, tested on one phone.** An AI coding agent did most of the
+>   porting while the owner tested on real hardware. Expect rough edges, and
+>   review the changes before flashing.
+> - **Not everything works.** Sleep is experimental, and cellular, cameras and
+>   fingerprint are missing.
+>
+> **Read the [Xiaomi 14 guide](ports/houji/README.md) before building or flashing.**
+> It has the feature status, known issues, and build and install steps. The
+> engineering history is in [HISTORY.md](ports/houji/HISTORY.md).
+
 ## About Armada
 
 Armada is a gaming-focused Linux distribution built on
@@ -94,8 +116,8 @@ Issues and pull requests are welcome. For installation or device support, check
 the [troubleshooting documentation](https://armadaos.dev/troubleshooting/frequently-asked-questions/)
 or ask in the [Armada Discord community](https://discord.gg/HdmdSxTD5S).
 
-For the experimental Xiaomi 14 port, see the [Houji guide](ports/houji/README.md)
-for feature status and its stock-ABL build and installation instructions.
+The experimental Xiaomi 14 port is documented in its own
+[guide](ports/houji/README.md); see the notice at the top of this page first.
 
 ## Credits
 
