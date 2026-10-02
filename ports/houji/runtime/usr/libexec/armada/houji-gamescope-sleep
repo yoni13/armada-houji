@@ -1,0 +1,58 @@
+#!/bin/bash
+# Hand the panel back to Gamescope after native sleep, rather than restoring
+# the kernel's saved scanout while Steam is still frozen.
+set -euo pipefail
+
+state=/run/armada/houji-gamescope-sleep
+session_user=${ARMADA_SESSION_USER:-armada}
+session_uid=$(id -u "$session_user")
+runtime=/run/user/$session_uid
+
+display() {
+    timeout 4 runuser -u "$session_user" -- env \
+        XDG_RUNTIME_DIR="$runtime" WAYLAND_DISPLAY="$1" \
+        GAMESCOPE_WAYLAND_DISPLAY="$1" \
+        gamescopectl houji_display_sleep "$2"
+}
+
+restore() {
+    [[ -r "$state" ]] || return 0
+    local socket
+    read -r socket <"$state"
+    [[ "$socket" =~ ^gamescope-[0-9]+$ ]] || return 1
+    if [[ -S "$runtime/$socket" ]]; then
+        # Keep the marker on failure so another stop/start can retry.
+        display "$socket" 0 || return 1
+    fi
+    rm -f -- "$state"
+}
+
+case "${1:-}" in
+    resume) restore ;;
+    suspend)
+        restore
+        eval "$(/usr/libexec/armada/device-env)"
+        [[ "${ARMADA_SUSPEND_MODE:-fake}" == s2idle ]] || exit 0
+        for connector in /sys/class/drm/card*-DSI-1; do
+            [[ -r "$connector/enabled" ]] || continue
+            [[ "$(<"$connector/enabled")" == enabled ]] || continue
+            for socket in "$runtime"/gamescope-*; do
+                [[ -S "$socket" && "${socket##*/}" =~ ^gamescope-[0-9]+$ ]] || continue
+                mkdir -p "${state%/*}"
+                # Record before sending: a client timeout can follow a
+                # successful request. ExecStopPost restores that case too.
+                printf '%s\n' "${socket##*/}" >"$state"
+                display "${socket##*/}" 1
+                # Let the compositor disable scanout before user.slice is
+                # frozen. A system-sleep/pre hook would already be too late.
+                for ((attempt=0; attempt<100; attempt++)); do
+                    [[ "$(<"$connector/enabled")" == disabled ]] && exit 0
+                    sleep .02
+                done
+                echo 'Houji: Gamescope did not disable the display before sleep' >&2
+                exit 1
+            done
+        done
+        ;;
+    *) echo "Usage: $0 {suspend|resume}" >&2; exit 2 ;;
+esac

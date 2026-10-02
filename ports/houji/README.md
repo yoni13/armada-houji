@@ -25,9 +25,9 @@ its own hardware validation; a successful build does not establish hardware supp
 | Bluetooth | Controller pairing and control tested. Audio profiles and other accessories untested. |
 | Haptics | Short and long vibration effects tested. Application integration varies. |
 | Speakers / microphone | Stereo playback and microphone recording tested, using the handset's factory speaker calibration. |
-| Battery / wired charging | Battery telemetry, Steam estimates and conservative USB-PD charging work. Computer USB may supply less than the running system consumes. Full Xiaomi 90 W charging is not supported or validated. |
+| Battery / wired charging | Battery telemetry, Steam estimates and USB-PD work. Xiaomi fast charging is experimental: authentication and about 19 W battery power tested; stock HyperCharge behavior and full 90 W input power remain unverified. Battery power uses voltage/current, not the firmware's fixed 10 W placeholder. Computer USB may supply less than the running system consumes. |
 | Wireless charging | Starts and then stops in testing; unresolved. |
-| Sleep | Native `s2idle` is the default. RTC and Power-button wake return to Steam with working touch on Linux 7.2.6. Light sleep remains selectable, with GPU/display runtime suspend and display-domain power-off verified in Plasma and Steam. Deeper SoC power collapse, battery savings and long-term reliability are not established. |
+| Sleep | Experimental native `s2idle` is the default on battery; wired fast charging uses light sleep to keep thermal monitoring active. A missing DSP-service wake path has been repaired and exercised: the sensor DSP woke the AP for a request, with audio, sensors and battery telemetry working afterward. Firmware requests can wake the system; automatic return to sleep after serving them is not implemented. Light sleep remains selectable, with GPU/display runtime suspend and display-domain power-off verified in Plasma and Steam. Sensor restart no longer blocks Steam, and Gamescope waits for a fresh frame before restoring the display, with a timed fallback. Experimental WoWLAN is disabled after a network recovery failure. Deeper SoC power collapse, battery savings and long-term reliability are not established. |
 | USB device | Charging by default; MTP on demand through Armada's switch. USB 3 at 5 Gb/s tested in both connector orientations, with USB 2 fallback. No USB shell or network gadget. |
 | USB host / OTG | Wired gamepad and Pixel webcam tested, including 5 Gb/s webcam transport. No USB 3 storage-drive test; USB4/DisplayPort support is not claimed. |
 | GPS | A satellite fix was verified with the opt-in development tools. No default GeoClue provider, navigation integration or location logger. Modem restart during testing remains unreliable. |
@@ -55,8 +55,11 @@ MTP, audio and GPS components from the supplied sources and pinned dependencies.
 Houji retains its separately pinned Gamescope build for touchscreen rotation.
 The release's native `s2idle` improvements are included in the kernel and
 `s2idle` is Houji's default sleep mode. Light sleep remains available through
-Armada's sleep-mode setting. Longer native-suspend validation is still pending;
-the release's reported battery savings are not a Houji measurement.
+Armada's sleep-mode setting. The sensor teardown change alone did not prevent
+the DSP watchdog. The kernel now lets the sensor file-service listener wake
+and answer requests during sleep; this path has been exercised with working
+audio and battery telemetry afterward. Native suspend remains experimental;
+the release's reported battery savings are not established for Houji.
 
 `boot_b` holds the Linux kernel; `init_boot_b` holds the early-boot ramdisk;
 `vendor_boot_b` holds the mainline device tree. `dtbo_b` retains Xiaomi's
@@ -201,6 +204,27 @@ python3 output/houji/images/flash-internal.py \
 Keep the previous boot bundle until the new system is verified. A boot-only
 flash without staging the matching root image is rejected. Ordinary bootc OTA
 updates are not supported by this custom layout.
+
+## Charging and sleep
+
+Xiaomi fast charging is experimental; matching stock HyperCharge behavior is
+not yet verified. Normal wired charging has a 3 A battery-current ceiling.
+Authenticated Xiaomi PD-PPS charging can select a separate 15.6 A ceiling,
+subject to thermal votes, charge level and firmware limits. A staged test
+measured about 19 W at the battery. These current ceilings and the adapter's
+advertised 90 W are not measured charging rates. The port also retains a
+conservative 38°C battery-temperature cutoff for high current in the installed
+test build, falling back to 500 mA above it. Current sources contain an
+unflashed, hardware-unverified change that permits the firmware's 15–47°C
+fast-charge range only with authenticated PD-PPS, active firmware fast-charge
+mode, healthy telemetry and a matching kernel guard. Other charging modes keep
+the conservative limit. Neither path establishes Xiaomi's full charging curve.
+
+During an authenticated wired charging session, Power uses light sleep to keep
+the host thermal monitor running with the screen off. When charging ends or the
+cable is unplugged, it returns to the configured sleep mode. Native suspend
+remains the default on battery. Direct native suspend reduces the charging
+vote to 500 mA until the monitor resumes. Wireless charging remains experimental.
 
 ## USB and privacy
 

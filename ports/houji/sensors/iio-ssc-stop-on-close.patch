@@ -1,0 +1,17 @@
+diff --git a/src/drv-ssc-accel.c b/src/drv-ssc-accel.c
+--- a/src/drv-ssc-accel.c
++++ b/src/drv-ssc-accel.c
+@@ -133,9 +133,12 @@
+ static void
+ ssc_accelerometer_close (SensorDevice *sensor_device)
+ {
+-	g_autoptr(GError) error = NULL;
+ 	DrvData *drv_data = (DrvData *) sensor_device->priv;
+ 
++	/* Shutdown can happen with clients still holding the sensor. Disconnect
++	 * the callback and send the disable request before releasing the client.
++	 */
++	ssc_accelerometer_set_polling (sensor_device, FALSE);
+ 	g_clear_object (&drv_data->sensor);
+ 	g_clear_pointer (&drv_data->mount_matrix, g_free);
+ 	g_clear_pointer (&sensor_device->priv, g_free);

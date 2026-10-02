@@ -1,0 +1,181 @@
+Subject: [PATCH] misc: fastrpc: service sensor reverse RPC across suspend
+
+The sensor PD can call back into the AP file-service listener while the
+AP is suspended. A failure trace recorded such a reply while userspace
+was frozen, followed by a sensor watchdog and loss of the shared DSP.
+The listener must be able to answer these requests across system sleep.
+
+Wake the AP for successful NEXT2 replies during suspend. Track outstanding
+listener work across the preceding freeze interval and refuse suspend if
+userspace still owes a reply. The next NEXT2 invocation acknowledges that
+work. Idle listener waits do not block suspend. Scope this to the sensor
+PD protocol used by hexagonrpcd; no userspace ABI or permanent wakelock.
+
+---
+
+diff --git a/drivers/misc/fastrpc.c b/drivers/misc/fastrpc.c
+--- a/drivers/misc/fastrpc.c
++++ b/drivers/misc/fastrpc.c
+@@ -14,7 +14,9 @@
+ #include <linux/of_address.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
++#include <linux/pm_wakeup.h>
+ #include <linux/sort.h>
++#include <linux/suspend.h>
+ #include <linux/of_platform.h>
+ #include <linux/rpmsg.h>
+ #include <linux/scatterlist.h>
+@@ -37,6 +39,9 @@
+ #define FASTRPC_CTX_MAX (256)
+ #define FASTRPC_INIT_HANDLE	1
+ #define FASTRPC_DSP_UTILITIES_HANDLE	2
++#define FASTRPC_LISTENER_HANDLE		3
++#define FASTRPC_LISTENER_NEXT2		4
++#define FASTRPC_LISTENER_WAKE_MS		5000
+ #define FASTRPC_CTXID_MASK (0xFF0)
+ #define INIT_FILELEN_MAX (2 * 1024 * 1024)
+ #define INIT_FILE_NAMELEN_MAX (128)
+@@ -306,6 +311,9 @@
+ 	int client_id;
+ 	int pd;
+ 	bool is_secure_dev;
++	/* Sensor reverse RPC awaiting a userspace response. */
++	bool listener_pending;
++	u64 listener_generation;
+ 	/* Lock for lists */
+ 	spinlock_t lock;
+ 	/* lock for allocations */
+@@ -1245,6 +1253,9 @@
+ {
+ 	struct fastrpc_invoke_ctx *ctx = NULL;
+ 	struct fastrpc_buf *buf, *b;
++	bool listener_reply;
++	u64 generation = 0;
++	unsigned long flags;
+ 
+ 	int err = 0;
+ 
+@@ -1266,6 +1277,15 @@
+ 	err = fastrpc_get_args(kernel, ctx);
+ 	if (err)
+ 		goto bail;
++
++	listener_reply = fl->pd == SENSORS_PD &&
++		handle == FASTRPC_LISTENER_HANDLE &&
++		((sc >> 24) & 0x1f) == FASTRPC_LISTENER_NEXT2;
++	if (listener_reply) {
++		spin_lock_irqsave(&fl->cctx->lock, flags);
++		generation = fl->listener_generation;
++		spin_unlock_irqrestore(&fl->cctx->lock, flags);
++	}
+ 
+ 	/* make sure that all CPU memory writes are seen by DSP */
+ 	dma_wmb();
+@@ -1273,6 +1293,18 @@
+ 	err = fastrpc_invoke_send(fl->sctx, ctx, kernel, handle);
+ 	if (err)
+ 		goto bail;
++
++	/* NEXT2 sends the response to the previous reverse RPC. A send failure
++	 * must retain that obligation. A new callback can also beat send's
++	 * return, so only acknowledge the generation we started with.
++	 */
++	if (listener_reply) {
++		spin_lock_irqsave(&fl->cctx->lock, flags);
++		if (fl->listener_generation == generation)
++			fl->listener_pending = false;
++		spin_unlock_irqrestore(&fl->cctx->lock, flags);
++	}
++
+ 
+ 	if (kernel) {
+ 		if (!wait_for_completion_timeout(&ctx->work, 10 * HZ))
+@@ -2391,6 +2423,10 @@
+ 		return -EINVAL;
+ 	}
+ 
++	err = devm_device_init_wakeup(rdev);
++	if (err)
++		return err;
++
+ 	if (of_reserved_mem_device_init_by_idx(rdev, rdev->of_node, 0))
+ 		dev_info(rdev, "no reserved DMA memory for FASTRPC\n");
+ 
+@@ -2540,6 +2576,7 @@
+ 	struct fastrpc_invoke_ctx *ctx;
+ 	unsigned long flags;
+ 	unsigned long ctxid;
++	bool wake_listener = false;
+ 
+ 	if (len < sizeof(*rsp))
+ 		return -EINVAL;
+@@ -2551,12 +2588,27 @@
+ 
+ 	spin_lock_irqsave(&cctx->lock, flags);
+ 	ctx = idr_find(&cctx->ctx_idr, ctxid);
++	/* Serialize the pending flag and suspend-state check with prepare.
++	 * Either prepare observes the unanswered request, or this callback
++	 * observes suspend in progress and wakes the system for the listener.
++	 */
++	if (ctx && ctx->fl->pd == SENSORS_PD &&
++	    ctx->msg.handle == FASTRPC_LISTENER_HANDLE &&
++	    ((ctx->sc >> 24) & 0x1f) == FASTRPC_LISTENER_NEXT2 &&
++	    !rsp->retval) {
++		ctx->fl->listener_pending = true;
++		ctx->fl->listener_generation++;
++		wake_listener = pm_suspend_in_progress();
++	}
+ 	spin_unlock_irqrestore(&cctx->lock, flags);
+ 
+ 	if (!ctx) {
+ 		dev_err(&rpdev->dev, "No context ID matches response\n");
+ 		return -ENOENT;
+ 	}
++
++	if (wake_listener)
++		pm_wakeup_dev_event(&rpdev->dev, FASTRPC_LISTENER_WAKE_MS, true);
+ 
+ 	ctx->retval = rsp->retval;
+ 	complete(&ctx->work);
+@@ -2578,12 +2630,40 @@
+ };
+ MODULE_DEVICE_TABLE(of, fastrpc_rpmsg_of_match);
+ 
++static int __maybe_unused fastrpc_pm_prepare(struct device *dev)
++{
++	struct fastrpc_channel_ctx *cctx = dev_get_drvdata(dev);
++	struct fastrpc_user *fl;
++	unsigned long flags;
++	int ret = 0;
++
++	/* Userspace is frozen by this point. Do not suspend with an unanswered
++	 * sensor request: its DSP-side watchdog continues while the AP sleeps.
++	 * A later reply calls pm_wakeup_dev_event() and aborts the transition.
++	 */
++	spin_lock_irqsave(&cctx->lock, flags);
++	list_for_each_entry(fl, &cctx->users, user) {
++		if (fl->listener_pending) {
++			ret = -EBUSY;
++			break;
++		}
++	}
++	spin_unlock_irqrestore(&cctx->lock, flags);
++
++	return ret;
++}
++
++static const struct dev_pm_ops fastrpc_pm_ops = {
++	.prepare = fastrpc_pm_prepare,
++};
++
+ static struct rpmsg_driver fastrpc_driver = {
+ 	.probe = fastrpc_rpmsg_probe,
+ 	.remove = fastrpc_rpmsg_remove,
+ 	.callback = fastrpc_rpmsg_callback,
+ 	.drv = {
+ 		.name = "qcom,fastrpc",
++		.pm = pm_sleep_ptr(&fastrpc_pm_ops),
+ 		.of_match_table = fastrpc_rpmsg_of_match,
+ 	},
+ };

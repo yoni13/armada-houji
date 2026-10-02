@@ -17,7 +17,10 @@ trap 'systemctl --no-block start sddm' EXIT
 systemctl stop sddm
 userctl stop graphical-session.target
 userctl unset-environment WAYLAND_DISPLAY DISPLAY XAUTHORITY
-rm -f /etc/sddm.conf.d/zzt-holo-temp-login.conf /etc/sddm.conf.d/zzt-steamos-temp-login.conf
-printf '[Autologin]\nSession=%s\n' "$session" >/etc/sddm.conf.d/zz-holo-autologin.conf
+# Share Armada's session preference. Its zz-steamos file sorts after the old
+# Houji zz-holo file and otherwise silently overrides this switch.
+rm -f /etc/sddm.conf.d/zz-holo-autologin.conf \
+    /etc/sddm.conf.d/zzt-holo-temp-login.conf /etc/sddm.conf.d/zzt-steamos-temp-login.conf
+printf '[Autologin]\nSession=%s\n' "$session" >/etc/sddm.conf.d/zz-steamos-autologin.conf
 systemctl start sddm
 trap - EXIT

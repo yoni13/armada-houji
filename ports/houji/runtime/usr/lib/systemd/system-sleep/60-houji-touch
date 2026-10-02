@@ -13,7 +13,10 @@ case "${1:-}" in
         ;;
     post)
         if [ -e "$marker" ]; then
-            systemctl start houji-stock-touch.service
+            # DSP recovery can hold this ordered start job for tens of
+            # seconds. Let systemd restore touch after the hook returns so
+            # a failed DSP does not keep the entire desktop frozen.
+            systemctl --no-block start houji-stock-touch.service
             rm -f "$marker"
         fi
         ;;

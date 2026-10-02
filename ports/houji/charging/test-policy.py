@@ -12,6 +12,170 @@ p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
 
 class PolicyTest(unittest.TestCase):
+    def test_light_sleep_ends_when_unplugged_full_or_telemetry_missing(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            bat, usb, aux = [root / x for x in ('bat', 'usb', 'aux')]
+            for path in (bat, usb, aux / 'houji_charger'):
+                path.mkdir(parents=True)
+            (aux / 'houji_charger_state').touch()
+            (aux / 'houji_charger/authentic').write_text('1')
+            for key, value in dict(status='Charging', health='Good', capacity='40').items():
+                (bat / key).write_text(value)
+            (usb / 'online').write_text('1')
+            (usb / 'usb_type').write_text('[PD_PPS]')
+            check = lambda: p.charging_needs_light_sleep(bat, usb, str(aux / 'houji_charger_state'))
+            self.assertTrue(check())
+            (usb / 'online').write_text('0')
+            self.assertFalse(check())
+            (usb / 'online').write_text('1')
+            (bat / 'capacity').write_text('100')
+            self.assertTrue(check())
+            (bat / 'status').write_text('Full')
+            self.assertFalse(check())
+            (bat / 'status').write_text('Not charging')
+            self.assertFalse(check())
+            (bat / 'capacity').write_text('40')
+            self.assertTrue(check())
+            (bat / 'status').write_text('Charging')
+            (usb / 'usb_type').write_text('[SDP] PD PD_PPS')
+            self.assertFalse(check())
+            (usb / 'usb_type').write_text('[PD_PPS]')
+            (aux / 'houji_charger/authentic').unlink()
+            self.assertFalse(check())
+
+    def test_hypercharge_needs_real_firmware_mode_and_suspend_guard(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            auth = {'battery_authentic': 1, 'pd_verified': 1}
+            properties = {'fcc_suspend_guard': '1', 'fastchg_mode': '1', 'apdo_max': '90',
+                          'fcc_fastcharge_temp_max': '470'}
+            for key, value in properties.items():
+                (root / key).write_text(value)
+            limits = lambda state=auth, kind='PD [PD_PPS]': p.wired_limits(
+                root, kind, state, 3000000, 15600000)
+            self.assertEqual(limits(), (15600000, True))
+            for state in [{}, dict(auth, battery_authentic=0), dict(auth, pd_verified=0)]:
+                self.assertEqual(limits(state), (3000000, False))
+            self.assertEqual(limits(kind='[PD] PD_PPS'), (3000000, False))
+            for key, value in [('fcc_suspend_guard', '0'), ('fastchg_mode', '0'),
+                               ('apdo_max', '33'), ('apdo_max', 'unavailable')]:
+                (root / key).write_text(value)
+                self.assertEqual(limits(), (3000000, False))
+                (root / key).write_text(properties[key])
+            for value in ['380', '471', 'invalid']:
+                (root / 'fcc_fastcharge_temp_max').write_text(value)
+                self.assertEqual(limits(), (15600000, False))
+            (root / 'fcc_fastcharge_temp_max').unlink()
+            self.assertEqual(limits(), (15600000, False))
+            (root / 'fcc_suspend_guard').unlink()
+            self.assertEqual(limits(), (3000000, False))
+
+    def test_stock_fast_charge_temperature_range_and_loss_of_mode(self):
+        # Cool board with a warm cell isolates the extra host battery gate
+        # from Xiaomi's independent virtual-skin controller.
+        values = dict(pa_therm0=30000, quiet_therm=30000, charger_therm0=30000,
+                      cpu_therm=30000, battery=41000, wifi_therm=30000, usb_therm=30000)
+        state = {'battery_authentic': 1, 'pd_verified': 1}
+        for temperature in [38001, 40000, 41000, 47000]:
+            control = p.StockChargingControl()
+            warm = dict(values, battery=temperature)
+            for t in range(30):
+                vote, _ = control.step(warm, state, 3000000, 3000000, False, t,
+                                       fast_charge=True)
+            self.assertGreater(vote, 500000)
+            # A lost firmware mode or failed adapter authentication immediately
+            # restores the legacy gate, without waiting for the next SIC tick.
+            self.assertEqual(control.step(warm, state, vote, 3000000, False, 30,
+                                          fast_charge=False)[0], 500000)
+            self.assertEqual(control.step(warm, dict(state, pd_verified=0), vote,
+                                          3000000, False, 31, fast_charge=True)[0], 500000)
+        for temperature in [14999, 47001]:
+            control = p.StockChargingControl()
+            for t in range(30):
+                vote, _ = control.step(dict(values, battery=temperature), state,
+                                       3000000, 3000000, False, t, fast_charge=True)
+            self.assertEqual(vote, 500000)
+        control = p.StockChargingControl()
+        with self.assertRaises(ValueError):
+            control.step(values, state, 3000000, 3000000, False, 1,
+                         wireless=True, fast_charge=True)
+
+    def test_observed_38_degree_boundary_keeps_stock_sic_vote(self):
+        # The running 38 C guard cut an authenticated 4.6 A session to
+        # 500 mA at 38.1 C, although firmware FFC remained active. With the
+        # guarded stock range, the SIC thermal vote must remain in control.
+        values = dict(pa_therm0=38000, quiet_therm=38000,
+                      charger_therm0=38000, cpu_therm=38000,
+                      battery=38100, wifi_therm=38000, usb_therm=35000)
+        state = {'battery_authentic': 1, 'pd_verified': 1}
+        control = p.StockChargingControl()
+        for second in range(48):
+            vote, _ = control.step(values, state, 4600000, 15600000, False,
+                                   second, fast_charge=True)
+        self.assertGreaterEqual(vote, 4600000)
+        self.assertLess(vote, 5000000)
+        self.assertEqual(control.step(values, state, 4600000, 15600000, False,
+                                      48, fast_charge=False)[0], 500000)
+
+    def test_warm_fast_charge_tick_stops_on_fault_or_stale_mode(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            bat, usb, aux = [root / x for x in ('bat', 'usb', 'aux')]
+            for path in (bat, usb, aux):
+                path.mkdir()
+            for key, value in dict(temp='410', health='Good', constant_charge_current='500000').items():
+                (bat / key).write_text(value)
+            for key, value in dict(online='1', usb_type='PD [PD_PPS]', input_current_limit='3000000').items():
+                (usb / key).write_text(value)
+            state = aux / 'houji_charger_state'
+            state.write_text('verify_process=0\npd_verified=1\nbattery_authentic=1\n')
+            p.tick(bat, usb, str(state), current_limit=3000000, fast_charge=True)
+            self.assertEqual((bat / 'constant_charge_current').read_text(), '3000000\n')
+            p.tick(bat, usb, str(state), current_limit=500000, fast_charge=False)
+            self.assertEqual((bat / 'constant_charge_current').read_text(), '0\n')
+            for fault in ['Unknown', 'Overheat', 'Over voltage', 'Dead', 'Warm', 'Cold']:
+                (bat / 'health').write_text(fault)
+                p.tick(bat, usb, str(state), current_limit=3000000, fast_charge=True)
+                self.assertEqual((bat / 'constant_charge_current').read_text(), '0\n')
+        for temperature, expected in [(400, 500000), (470, 500000), (471, 0)]:
+            self.assertEqual(p.desired_current(1, '[PD_PPS]', temperature, 'Good',
+                                              fast_charge=True), expected)
+        self.assertEqual(p.desired_current(1, '[PD] PD_PPS', 410, 'Good',
+                                          fast_charge=True), 0)
+
+    def test_configuration_fallback_and_stock_bounds(self):
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / 'ceiling'
+            self.assertEqual(p.configured_ceiling(path, 3000000), 3000000)
+            for value in ['0', '-1', '15600001', 'invalid']:
+                path.write_text(value)
+                with self.assertRaises(ValueError):
+                    p.configured_ceiling(path, 3000000)
+            path.write_text('15600000\n')
+            self.assertEqual(p.configured_ceiling(path, 3000000), 15600000)
+
+    def test_hypercharge_loses_high_vote_immediately_when_mode_disappears(self):
+        values = dict(pa_therm0=30000, quiet_therm=30000, charger_therm0=30000,
+                      cpu_therm=30000, battery=30000, wifi_therm=30000, usb_therm=30000)
+        state = {'battery_authentic': 1, 'pd_verified': 1}
+        control = p.StockChargingControl()
+        for t in range(160):
+            vote, _ = control.step(values, state, 15600000, 15600000, False, t)
+        self.assertEqual(vote, 15600000)
+        self.assertEqual(control.step(values, state, vote, 3000000, False, 160)[0], 3000000)
+        # CLOCK_BOOTTIME includes a native-suspend interval: start at the
+        # baseline again, even though CLOCK_MONOTONIC stopped while asleep.
+        self.assertEqual(control.step(values, state, 500000, 15600000, False, 200)[0], 500000)
+
+    def test_service_stop_reduces_the_vote(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            current = root / 'constant_charge_current'
+            current.write_text('6000000')
+            p.finish_charging(root)
+            self.assertEqual(current.read_text(), '500000\n')
+
     def test_wireless_source_precedence_and_no_pd_completion(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

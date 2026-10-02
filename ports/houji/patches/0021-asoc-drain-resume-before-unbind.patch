@@ -1,0 +1,44 @@
+Subject: [PATCH] ASoC: drain deferred resume before card teardown
+
+ADSP recovery can remove the soundcard while its deferred resume worker
+still traverses component and runtime lists. The observed failure hit
+snd_soc_component_is_suspended after that list was changed. Wait for the
+worker while the instantiated card and its resources are still alive.
+
+---
+
+diff --git a/sound/soc/soc-core.c b/sound/soc/soc-core.c
+--- a/sound/soc/soc-core.c
++++ b/sound/soc/soc-core.c
+@@ -818,6 +818,14 @@
+ }
+ EXPORT_SYMBOL_GPL(snd_soc_resume);
+ 
++static void soc_resume_flush(struct snd_soc_card *card)
++{
++	/* DSP recovery can unbind the card while resume work is still walking
++	 * its component and runtime lists. Finish that work before teardown.
++	 */
++	flush_work(&card->deferred_resume_work);
++}
++
+ static void soc_resume_init(struct snd_soc_card *card)
+ {
+ 	/* deferred resume work */
+@@ -827,6 +835,7 @@
+ #define snd_soc_suspend NULL
+ #define snd_soc_resume NULL
+ static inline void soc_resume_init(struct snd_soc_card *card) { }
++static inline void soc_resume_flush(struct snd_soc_card *card) { }
+ #endif
+ 
+ static struct device_node
+@@ -1995,6 +2004,8 @@
+ static void snd_soc_unbind_card(struct snd_soc_card *card)
+ {
+ 	if (snd_soc_card_is_instantiated(card)) {
++		soc_resume_flush(card);
++
+ 		card->instantiated = false;
+ 
+ 		snd_soc_remove_device_links(card);

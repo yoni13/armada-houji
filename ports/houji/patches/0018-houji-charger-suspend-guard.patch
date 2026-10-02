@@ -1,0 +1,131 @@
+Subject: [PATCH] power: supply: end Houji high-current leases before suspend
+
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -19,6 +19,7 @@
+ #include <linux/units.h>
+ #include <linux/unaligned.h>
+ #include <linux/hex.h>
++#include <linux/suspend.h>
+ 
+ /* Staging ceiling for measured bring-up. Raising this ceiling does not itself
+  * vote for more current. Every higher vote still needs live authentication,
+@@ -379,6 +380,8 @@
+ 	struct delayed_work houji_fcc_work;
+ 	unsigned long houji_fcc_deadline;
+ 	bool houji_fcc_stopping;
++	bool houji_suspending;
++	struct notifier_block houji_pm_notifier;
+ 
+ 	/*
+ 	 * @lock is used to prevent concurrent power supply requests to the
+@@ -1054,6 +1057,60 @@
+ 					     HOUJI_BATT_FCC, 500000);
+ 	mutex_unlock(&b->lock);
+ }
++/* Delayed work and the userspace thermal loop stop during native suspend.
++ * Do not leave a high FCC vote running in ADSP without those monitors. Use a
++ * PM notifier so the GLINK transport and userspace are still available; a
++ * failed reduction aborts suspend. The same lock excludes racing FCC writes.
++ */
++static int houji_charger_pm_notify(struct notifier_block *nb,
++                                  unsigned long action, void *unused)
++{
++	struct qcom_battmgr *b = container_of(nb, struct qcom_battmgr,
++					    houji_pm_notifier);
++	int ret = 0;
++
++	mutex_lock(&b->lock);
++	switch (action) {
++	case PM_SUSPEND_PREPARE:
++	case PM_HIBERNATION_PREPARE:
++	case PM_RESTORE_PREPARE:
++		if (b->houji_fcc_vote > 500000) {
++			if (!b->service_up) {
++				ret = -EAGAIN;
++				break;
++			}
++			ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_SET,
++						    HOUJI_BATT_FCC, 500000);
++			if (ret)
++				break;
++			b->houji_fcc = 500000;
++			b->houji_fcc_vote = 500000;
++			cancel_delayed_work(&b->houji_fcc_work);
++			dev_info(b->dev, "native suspend: reduced host FCC to 500 mA\n");
++		}
++		b->houji_suspending = true;
++		b->houji_board_valid = false;
++		break;
++	case PM_POST_SUSPEND:
++	case PM_POST_HIBERNATION:
++	case PM_POST_RESTORE:
++		b->houji_suspending = false;
++		b->houji_board_valid = false;
++		break;
++	}
++	mutex_unlock(&b->lock);
++	if (ret)
++		dev_err(b->dev, "cannot reduce charging current before suspend: %d\n", ret);
++	return notifier_from_errno(ret);
++}
++
++static void houji_unregister_pm_notifier(void *data)
++{
++	struct qcom_battmgr *b = data;
++
++	unregister_pm_notifier(&b->houji_pm_notifier);
++}
++
+ /* Caller holds the serialized GLINK lock. Wired PD takes precedence when both
+  * supplies report online; otherwise use the stock wireless receiver state.
+  */
+@@ -1091,6 +1148,10 @@
+ 	if (!b->service_up)
+ 		return -EAGAIN;
+ 	mutex_lock(&b->lock);
++	if (b->houji_suspending && val->intval > 500000) {
++		ret = -EBUSY;
++		goto out;
++	}
+ 	/* A positive request requires a detected PD or wireless supply and sane battery
+   * temperature. Zero remains available for reducing the host vote. */
+ 	if (val->intval) {
+@@ -2375,6 +2436,13 @@
+ }
+ static DEVICE_ATTR_RO(fcc_lease_seconds);
+ 
++static ssize_t fcc_suspend_guard_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	return sysfs_emit(buf, "1\n");
++}
++static DEVICE_ATTR_RO(fcc_suspend_guard);
++
+ static ssize_t fcc_max_ua_show(struct device *dev,
+ 		struct device_attribute *attr, char *buf)
+ {
+@@ -2474,6 +2542,7 @@
+ 
+ static struct attribute *houji_auth_attrs[] = {
+ 	&dev_attr_fcc_lease_seconds.attr,
++	&dev_attr_fcc_suspend_guard.attr,
+ 	&dev_attr_fcc_max_ua.attr,
+ 	&dev_attr_wired_thermal_level.attr,
+ 	&houji_attr_wireless_thermal_level.attr.attr,
+@@ -2624,7 +2693,14 @@
+ 		ret = devm_device_add_group(dev, &houji_charger_group);
+ 		if (ret)
+ 			return ret;
+-		return devm_device_add_group(dev, &houji_auth_group);
++		ret = devm_device_add_group(dev, &houji_auth_group);
++		if (ret)
++			return ret;
++		battmgr->houji_pm_notifier.notifier_call = houji_charger_pm_notify;
++		ret = register_pm_notifier(&battmgr->houji_pm_notifier);
++		if (ret)
++			return ret;
++		return devm_add_action_or_reset(dev, houji_unregister_pm_notifier, battmgr);
+ 	}
+ 
+ 	return 0;

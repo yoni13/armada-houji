@@ -13,3 +13,8 @@
 0014-nxp-nci-io-supply.patch
 0015-nci-rf-parameter-length.patch
 0016-smp2p-preserve-edges-unless-restarted.patch
+0017-houji-drop-placeholder-battery-power.patch
+0018-houji-charger-suspend-guard.patch
+0019-houji-stock-fastcharge-temperature.patch
+0020-fastrpc-service-suspend.patch
+0021-asoc-drain-resume-before-unbind.patch

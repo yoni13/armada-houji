@@ -1,0 +1,24 @@
+From: Armada Houji maintainers
+Subject: [PATCH] power: supply: qcom_battmgr: omit Houji placeholder power
+
+Houji's firmware reports a constant 10000000 for the translated POWER_NOW
+property, independent of the changing gauge voltage/current. Advertising it
+causes consumers such as btop to prefer a fictitious 10 W reading. It also
+selects their energy-based time estimator although this gauge exports charge.
+
+Do not advertise this unsupported measurement on Houji. Keep the measured
+VOLTAGE_NOW and CURRENT_NOW so consumers can derive watts and use the gauge's
+charge counter. Leave the property on Qualcomm variants that implement it.
+
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -1192,7 +1192,8 @@ static const enum power_supply_property houji_bat_props[] = {
+ 	POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG,
+ 	POWER_SUPPLY_PROP_INTERNAL_RESISTANCE,
+ 	POWER_SUPPLY_PROP_STATE_OF_HEALTH,
+-	POWER_SUPPLY_PROP_POWER_NOW,
++	/* Firmware's POWER_NOW is a fixed placeholder, not gauge telemetry.
++	 * Consumers can use CURRENT_NOW and VOLTAGE_NOW instead. */
+ 	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT,
+ };
+ 

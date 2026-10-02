@@ -4,7 +4,7 @@ from pathlib import Path
 import argparse,json,shutil,subprocess
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from buildlib import checkout, cross_file, run
+from buildlib import checkout, cross_file, run, sha
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--work', type=Path, required=True)
 p.add_argument('--sysroot', type=Path, required=True)
@@ -15,8 +15,11 @@ sysroot=a.sysroot.resolve()
 lock=json.loads((source/'sources.json').read_text())
 for name in ['libssc','hexagonrpc','iio-sensor-proxy']:
  tree=work/'sources'/name
- checkout(lock[name]['source'], lock[name]['revision'], tree,
-          source/'hexagonrpc-houji-registry.patch' if name=='hexagonrpc' else None)
+ pin=lock[name]
+ patch=source/pin['local_patch'] if 'local_patch' in pin else None
+ if patch and sha(patch)!=pin['patch_sha256']:
+  raise ValueError('Sensor patch checksum mismatch: '+patch.name)
+ checkout(pin['source'], pin['revision'], tree, patch)
 cross_file(work, sysroot)
 common=['--cross-file',work/'cross.ini','--prefix=/usr','--libdir=lib64']
 for name,build,extra in [('libssc','libssc-build',[]),('hexagonrpc','hexagon-build',['-Dhexagonrpcd_verbose=false']),('iio-sensor-proxy','iio-build',['--libexecdir=libexec','-Dssc-support=enabled','-Dudevrulesdir=/usr/lib/udev/rules.d','-Dsystemdsystemunitdir=/usr/lib/systemd/system'])]:

@@ -1,0 +1,16 @@
+[Unit]
+Description=Houji Game Mode display handoff for native sleep
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/armada/houji-gamescope-sleep suspend
+# Also restore after a failed start; a timed-out request may have blanked it.
+ExecStopPost=/usr/libexec/armada/houji-gamescope-sleep resume
+TimeoutStartSec=8
+TimeoutStopSec=5
+
+[Install]
+WantedBy=sleep.target

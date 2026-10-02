@@ -1,0 +1,29 @@
+#!/bin/sh
+# Close SSC subscriptions before the AP sleeps. Continuous wakeup delivery from
+# the stock DSP must not remain attached to a frozen orientation consumer.
+# Keep hexagonrpcd running: it also serves the stock touch core and audio DSP.
+set -eu
+state=/run/armada/houji-sensors-resume
+case "${1:-}" in
+    pre)
+        mkdir -p "$state"
+        for service in houji-gamescope-orientation iio-sensor-proxy; do
+            if systemctl is-active --quiet "$service.service"; then
+                touch "$state/$service"
+                systemctl stop "$service.service"
+            fi
+        done
+        ;;
+    post)
+        for service in iio-sensor-proxy houji-gamescope-orientation; do
+            if [ -e "$state/$service" ]; then
+                # user.slice stays frozen until this hook exits. The proxy's
+                # DSP warm-up must not hold Steam's first resumed frame; the
+                # orientation unit's After= orders its asynchronous startup.
+                systemctl --no-block start "$service.service"
+                rm -f "$state/$service"
+            fi
+        done
+        rmdir "$state" 2>/dev/null || true
+        ;;
+esac

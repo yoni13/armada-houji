@@ -14,7 +14,10 @@ a = p.parse_args()
 work=a.work.resolve(); work.mkdir(parents=True,exist_ok=True)
 sysroot=a.sysroot.resolve()
 pin = json.loads((port/'sources.json').read_text())['compositor']
-source=checkout(pin['repository'], pin['revision'], work/'source', port/pin['patch'])
+source=checkout(pin['repository'], pin['revision'], work/'source')
+for patch in pin['patches']:
+    checkout(pin['repository'], pin['revision'], source, port/patch)
+shutil.copy2(port/'frame-wake.h', source/'src/houji_frame_wake.h')
 run('git', '-C', source, 'submodule', 'update', '--init', '--depth', '1',
     'subprojects/wlroots', 'subprojects/libliftoff', 'subprojects/vkroots',
     'src/reshade', 'thirdparty/SPIRV-Headers')

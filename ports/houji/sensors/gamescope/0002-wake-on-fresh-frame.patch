@@ -1,0 +1,80 @@
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 18b799e0..fcde462c 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -95,6 +95,7 @@
+ #include "Script/Script.h"
+ #include "refresh_rate.h"
+ #include "commit.h"
++#include "houji_frame_wake.h"
+ #include "reshade_effect_manager.hpp"
+ #include "BufferMemo.h"
+ #include "vrclient_detect.h"
+@@ -1121,6 +1122,26 @@ bool			hasRepaintNonBasePlane = false;
+ 
+ bool			g_bUpdateForwardedVROverlays = false;
+ 
++// The request arrives on the Wayland thread. Arm and satisfy it on the
++// compositor thread, which owns the held commits and their completed fences.
++enum class HoujiDisplayRequest { Idle, Sleep, Wake };
++static std::atomic<HoujiDisplayRequest> g_HoujiDisplayRequest = { HoujiDisplayRequest::Idle };
++static HoujiFrameWake g_HoujiFrameWake;
++static gamescope::CTimerFunction g_HoujiFrameWakeTimer{ []
++{
++	g_HoujiFrameWakeTimer.DisarmTimer();
++}};
++void drm_sleep_screen( gamescope::GamescopeScreenType eType, bool bSleep );
++
++static gamescope::ConCommand cc_houji_display_sleep( "houji_display_sleep", "Sleep internal display (1) or wake on a fresh frame (0)",
++[]( std::span<std::string_view> args )
++{
++	if ( args.size() != 2 || ( args[1] != "0" && args[1] != "1" ) )
++		return;
++	g_HoujiDisplayRequest = args[1] == "1" ? HoujiDisplayRequest::Sleep : HoujiDisplayRequest::Wake;
++	force_repaint();
++});
++
+ static gamescope::ConCommand cc_debug_force_repaint( "debug_force_repaint", "Force a repaint",
+ []( std::span<std::string_view> args )
+ {
+@@ -9910,6 +9931,7 @@ steamcompmgr_main(int argc, char **argv)
+ 
+ 	g_SteamCompMgrWaiter.AddWaitable( &GetVBlankTimer() );
+ 	g_SteamCompMgrWaiter.AddWaitable( &g_FPSLimitVRRTimer );
++	g_SteamCompMgrWaiter.AddWaitable( &g_HoujiFrameWakeTimer );
+ 	GetVBlankTimer().ArmNextVBlank( true );
+ 	WatchMangoappConfig();
+ 
+@@ -10463,6 +10485,32 @@ steamcompmgr_main(int argc, char **argv)
+ 		if ( g_bPendingFocusInfo.exchange( false ) )
+ 			DumpFocusInfo();
+ 
++		global_focus_t *pWakeFocus = GetCurrentFocus();
++		const uint64_t ulWakeCommit = pWakeFocus && pWakeFocus->HeldCommits[HELD_COMMIT_BASE]
++			? pWakeFocus->HeldCommits[HELD_COMMIT_BASE]->commitID : 0;
++		const auto displayRequest = g_HoujiDisplayRequest.exchange( HoujiDisplayRequest::Idle );
++		if ( displayRequest == HoujiDisplayRequest::Sleep )
++		{
++			g_HoujiFrameWake.Cancel();
++			g_HoujiFrameWakeTimer.DisarmTimer();
++			drm_sleep_screen( gamescope::GAMESCOPE_SCREEN_TYPE_INTERNAL, true );
++			hasRepaint = true;
++		}
++		else if ( displayRequest == HoujiDisplayRequest::Wake )
++		{
++			const auto deadline = g_HoujiFrameWake.Arm( get_time_in_nanos(), ulWakeCommit );
++			// Wake the compositor even if a static client produces no events.
++			g_HoujiFrameWakeTimer.ArmTimer( deadline );
++		}
++		else if ( const auto wake = g_HoujiFrameWake.Update( get_time_in_nanos(), ulWakeCommit );
++			wake != HoujiFrameWake::Result::Waiting )
++		{
++			g_HoujiFrameWakeTimer.DisarmTimer();
++			xwm_log.infof( "Houji display wake: %s", wake == HoujiFrameWake::Result::Fresh ? "fresh client frame" : "static-client fallback" );
++			drm_sleep_screen( gamescope::GAMESCOPE_SCREEN_TYPE_INTERNAL, false );
++			hasRepaint = true;
++		}
++
+ 		ApplyPendingUpscaleSettings();
+ 
+ 		g_bSteamIsActiveWindow = GetCurrentFocus() && window_is_steam( GetCurrentFocus()->focusWindow );

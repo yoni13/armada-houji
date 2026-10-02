@@ -91,6 +91,7 @@ write('etc/udev/rules.d/70-houji-haptics.rules','ACTION!="remove", SUBSYSTEM=="i
 for src in ['charge-policy.py','board_thermal.py','stock_thermal.py']:
     copy(PORT/'charging'/src,'usr/libexec/armada/'+('houji-charge-policy' if src=='charge-policy.py' else src),0o755)
 copy(PORT/'charging/houji-charging.service','etc/systemd/system/houji-charging.service')
+copy(PORT/'charging/suspend.py','usr/libexec/armada/houji-suspend',0o755)
 for name in ['armada-power-profiles','houji-wait-battery','houji-steam-power']:
     copy(PORT/'power'/name,'usr/libexec/armada/'+name,0o755)
 for name in ['armada-power-profiles.service','houji-steam-power.service']:
@@ -101,7 +102,8 @@ copy(PORT/'power/org.armada.power-profiles.policy','usr/share/polkit-1/actions/o
 copy(PORT/'audio/prepare-protection.py','usr/libexec/houji-audio/prepare-protection.py',0o755)
 copy(PORT/'audio/ucm/Xiaomi-14.conf','usr/share/alsa/ucm2/conf.d/houji/Xiaomi-14.conf')
 copy(PORT/'audio/ucm/HiFi.conf','usr/share/alsa/ucm2/Houji/HiFi.conf')
-write('etc/sddm.conf.d/zz-holo-autologin.conf','[Autologin]\nSession=armada-plasma-mobile.desktop\n')
+target('etc/sddm.conf.d/zz-holo-autologin.conf').unlink(missing_ok=True)
+write('etc/sddm.conf.d/zz-steamos-autologin.conf','[Autologin]\nSession=armada-plasma-mobile.desktop\n')
 (root/'etc/sudoers.d/houji-session-switch').chmod(0o440)
 # This layout is managed by this port's installer, not bootc/ESP tools.
 for name in ['udisks2','bootc-generic-growpart','armada-update-reserve','armada-session-default',
@@ -121,6 +123,8 @@ for name in ['houji-stock-touch','houji-sensors','houji-gamescope-orientation','
              'houji-charging','armada-power-profiles','houji-steam-power','armada-nfc']:
     link('etc/systemd/system/multi-user.target.wants/'+name+'.service','../'+name+'.service')
 link('etc/systemd/system/graphical.target.wants/houji-boot-success.service','../houji-boot-success.service')
+link('etc/systemd/system/sleep.target.wants/houji-gamescope-sleep.service',
+     '/usr/lib/systemd/system/houji-gamescope-sleep.service')
 for name in ['bluetooth','NetworkManager']:
     link('etc/systemd/system/multi-user.target.wants/'+name+'.service','/usr/lib/systemd/system/'+name+'.service')
 link('etc/systemd/system/dbus-org.bluez.service','/usr/lib/systemd/system/bluetooth.service')

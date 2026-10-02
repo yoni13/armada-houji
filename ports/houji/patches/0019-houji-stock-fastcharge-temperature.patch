@@ -1,0 +1,173 @@
+Subject: [PATCH] power: supply: validate Houji stock fast-charge temperature range
+
+The stock ADSP normal-zone profiles and FFC eligibility use 15-47 C.
+Allow that range only with healthy telemetry, authenticated battery/adapter
+and active firmware FFC on PD-PPS. Keep the fresh board report, current lease,
+suspend fallback and the firmware minimum-vote path. Other paths keep their
+existing bounds. Expose read-only capability, charge-pump, smart-charge and
+raw gauge diagnostics.
+
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -1134,12 +1134,34 @@
+ 	return b->wireless.online ? 2 : -ENODEV;
+ }
+ 
++/* XM55 is firmware state, not a host enable bit. All three reads must succeed
++ * for the stock wired fast-charge range; leave firmware JEITA/aging votes in
++ * control. Caller holds b->lock and has refreshed the wired supply type.
++ */
++static int houji_fast_charge_locked(struct qcom_battmgr *b)
++{
++	static const u32 properties[] = { 5, 32, 55 };
++	int i, ret;
++
++	if (b->usb.usb_type != POWER_SUPPLY_USB_TYPE_PD_PPS)
++		return 0;
++	for (i = 0; i < ARRAY_SIZE(properties); i++) {
++		ret = qcom_battmgr_request_property(b, 0x50, properties[i], 0);
++		if (ret)
++			return ret;
++		if (b->houji_xm_value != 1)
++			return 0;
++	}
++	return 1;
++}
++
+ static int houji_bat_set_property(struct power_supply *psy,
+ 				  enum power_supply_property psp,
+ 				  const union power_supply_propval *val)
+ {
+ 	struct qcom_battmgr *b = power_supply_get_drvdata(psy);
+ 	int ret, source = 0;
++	bool fast_charge = false;
+ 	if (b->variant != QCOM_BATTMGR_XIAOMI_HOUJI ||
+ 	    psp != POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT)
+ 		return -EOPNOTSUPP;
+@@ -1152,8 +1174,7 @@
+ 		ret = -EBUSY;
+ 		goto out;
+ 	}
+-	/* A positive request requires a detected PD or wireless supply and sane battery
+-  * temperature. Zero remains available for reducing the host vote. */
++	/* Zero remains available even when telemetry or authentication fails. */
+ 	if (val->intval) {
+ 		source = houji_charging_source_locked(b);
+ 		if (source < 0) {
+@@ -1164,8 +1185,25 @@
+ 						    BATT_TEMP + 1, 0);
+ 		if (ret)
+ 			goto out;
++		ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_GET,
++						    BATT_HEALTH, 0);
++		if (ret)
++			goto out;
++		if (b->status.health != POWER_SUPPLY_HEALTH_GOOD) {
++			ret = -ERANGE;
++			goto out;
++		}
++		if (source == 1) {
++			ret = houji_fast_charge_locked(b);
++			if (ret < 0)
++				goto out;
++			fast_charge = ret == 1;
++		}
++		/* OS3.0.303.0.WNCTWXM has a 15-47 C normal zone in every
++		 * aging profile. Only verified, active wired FFC gets that range.
++		 */
+ 		if (b->status.temperature < 100 ||
+-		    b->status.temperature > 400) {
++		    b->status.temperature > (fast_charge ? 470 : 400)) {
+ 			ret = -ERANGE;
+ 			goto out;
+ 		}
+@@ -1177,14 +1215,16 @@
+ 		if (!b->houji_board_valid ||
+ 		    time_after(jiffies, b->houji_board_updated + 10 * HZ) ||
+ 		    b->houji_board_temp >= 450 || b->status.temperature < 150 ||
+-		    b->status.temperature > 380) {
++		    b->status.temperature > (fast_charge ? 470 : 380)) {
+ 			ret = -EAGAIN;
+ 			goto out;
+ 		}
+-		ret = qcom_battmgr_request_property(b, 0x50, 5, 0);
+-		if (ret || b->houji_xm_value != 1) {
+-			ret = ret ?: -EACCES;
+-			goto out;
++		if (!fast_charge) {
++			ret = qcom_battmgr_request_property(b, 0x50, 5, 0);
++			if (ret || b->houji_xm_value != 1) {
++				ret = ret ?: -EACCES;
++				goto out;
++			}
+ 		}
+ 		if (source == 2) {
+ 			/* Stock EPP50/HPP firmware table tops out at 10 A battery FCC. */
+@@ -1192,15 +1232,12 @@
+ 				ret = -ERANGE;
+ 				goto out;
+ 			}
+-		} else {
+-			ret = qcom_battmgr_request_property(b, 0x50, 32, 0);
+-			/* The stock ADSP permits up to 5350 mA in non-FFC mode. Standard
+-			 * PD/QC4 does not need Xiaomi identity; higher FCC does.
++		} else if (val->intval > 5350000 && !fast_charge) {
++			/* Higher than the stock non-FFC bound needs both authentic
++			 * identities and an active firmware FFC mode on PD-PPS.
+ 			 */
+-			if (ret || (b->houji_xm_value != 1 && val->intval > 5350000)) {
+-				ret = ret ?: -EACCES;
+-				goto out;
+-			}
++			ret = -EACCES;
++			goto out;
+ 		}
+ 	}
+ 	ret = qcom_battmgr_request_property(b, BATTMGR_BAT_PROPERTY_SET,
+@@ -2265,6 +2302,11 @@
+ HOUJI_XM_RO(adapter_svid, 31, true);
+ HOUJI_XM_RO(pdo2, 33, true);
+ HOUJI_XM_RO(apdo_max, 61, false);
++HOUJI_XM_RO(power_max, 62, false);
++HOUJI_XM_RO(cp_mode, 36, false);
++HOUJI_XM_RO(charger_user_value_map, 13, false);
++HOUJI_XM_RO(smart_chg, 131, false);
++HOUJI_XM_RO(fg1_rsoc, 195, false);
+ HOUJI_XM_RO(connector_temp, 2, false);
+ static struct houji_xm_attribute houji_attr_thermal_board_temp = {
+ 	.attr = __ATTR(thermal_board_temp, 0600, houji_xm_show, houji_board_temp_store),
+@@ -2443,6 +2485,14 @@
+ }
+ static DEVICE_ATTR_RO(fcc_suspend_guard);
+ 
++static ssize_t fcc_fastcharge_temp_max_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	/* Deci-C. This capability does not imply FFC is currently eligible. */
++	return sysfs_emit(buf, "470\n");
++}
++static DEVICE_ATTR_RO(fcc_fastcharge_temp_max);
++
+ static ssize_t fcc_max_ua_show(struct device *dev,
+ 		struct device_attribute *attr, char *buf)
+ {
+@@ -2543,6 +2593,7 @@
+ static struct attribute *houji_auth_attrs[] = {
+ 	&dev_attr_fcc_lease_seconds.attr,
+ 	&dev_attr_fcc_suspend_guard.attr,
++	&dev_attr_fcc_fastcharge_temp_max.attr,
+ 	&dev_attr_fcc_max_ua.attr,
+ 	&dev_attr_wired_thermal_level.attr,
+ 	&houji_attr_wireless_thermal_level.attr.attr,
+@@ -2555,6 +2606,11 @@
+ 	&houji_attr_adapter_svid.attr.attr,
+ 	&houji_attr_pdo2.attr.attr,
+ 	&houji_attr_apdo_max.attr.attr,
++	&houji_attr_power_max.attr.attr,
++	&houji_attr_cp_mode.attr.attr,
++	&houji_attr_charger_user_value_map.attr.attr,
++	&houji_attr_smart_chg.attr.attr,
++	&houji_attr_fg1_rsoc.attr.attr,
+ 	&houji_attr_connector_temp.attr.attr,
+ 	&houji_attr_thermal_board_temp.attr.attr,
+ 	&houji_attr_fastchg_mode.attr.attr,

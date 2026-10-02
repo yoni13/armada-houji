@@ -5,8 +5,8 @@ HyperOS reports VERIFY_PROCESS=0 on verification failure as well as completion.
 When installed, the hash-pinned stock agent performs real battery/adapter
 authentication. Charging uses 500 mA on incomplete telemetry and a leased,
 gradual ramp when all sensors and authentication pass. The kernel staging
-ceiling defaults to 1 A; tested ceilings can be selected in the root-owned
-houji-charge-ceiling file. Rated 90 W charging is not yet validated.
+ceiling is configured separately for normal PD and authenticated HyperCharge.
+Rated 90 W input power is not inferred from the adapter's advertised capability.
 """
 from pathlib import Path
 import glob
@@ -26,10 +26,78 @@ AUTH_AGENT = Path('/usr/libexec/armada/houji-stock-auth')
 AUTH_BLOB = Path('/usr/lib/armada/houji/charging/batterysecret')
 
 
-def desired_current(online, usb_type, temperature, health, wireless=False):
+def configured_ceiling(path, default):
+    value = int(path.read_text()) if path.exists() else default
+    if not 1_000_000 <= value <= 15_600_000:
+        raise ValueError('charging ceiling outside stock range')
+    return value
+
+
+def wired_limits(directory, usb_type, authentication, normal, hypercharge):
+    """Return (FCC ceiling, stock fast-charge temperature range enabled)."""
+    if ('[PD_PPS]' not in usb_type
+            or authentication.get('battery_authentic') != 1
+            or authentication.get('pd_verified') != 1):
+        return normal, False
+    try:
+        # XM55 is the firmware's fast-charge mode, not an enable switch.
+        # XM61 is advertised APDO power in W, not measured charging power.
+        # Require the native-suspend guard before permitting this higher cap.
+        read = lambda name: int((directory / name).read_text())
+        if (read('fcc_suspend_guard') == 1 and read('fastchg_mode') == 1
+                and read('apdo_max') >= 50):
+            # Older kernels retain their 38 C high-current gate. Only opt in
+            # when the kernel independently checks authentication, mode and
+            # health on every FCC write over the stock normal range.
+            try:
+                stock_range = read('fcc_fastcharge_temp_max') == 470
+            except (OSError, ValueError):
+                stock_range = False
+            return max(normal, hypercharge), stock_range
+    except (OSError, ValueError):
+        pass
+    return normal, False
+
+
+def finish_charging(bat=BAT):
+    """A service stop must not strand a high-current lease in firmware."""
+    try:
+        (bat / 'constant_charge_current').write_text(f'{FCC_UA}\n')
+    except OSError:
+        # Zero is also permitted without an attached supply or healthy pack.
+        (bat / 'constant_charge_current').write_text('0\n')
+
+
+def charging_needs_light_sleep(bat=BAT, usb=USB, aux_pattern=AUX):
+    """Keep thermal monitoring alive for an attached, authenticated PD session."""
+    try:
+        paths = glob.glob(aux_pattern)
+        if len(paths) != 1:
+            return False
+        directory = Path(paths[0]).parent / 'houji_charger'
+        kind = (usb / 'usb_type').read_text()
+        status = (bat / 'status').read_text().strip()
+        capacity = int((bat / 'capacity').read_text())
+        return (int((usb / 'online').read_text()) == 1
+                and ('[PD]' in kind or '[PD_PPS]' in kind)
+                # The gauge can display 100% while the pack still takes current.
+                # Keep host thermal monitoring alive until charging ends.
+                and (status == 'Charging' or
+                     (status == 'Not charging' and capacity < 100))
+                and (bat / 'health').read_text().strip() == 'Good'
+                and int((directory / 'authentic').read_text()) == 1)
+    except (OSError, ValueError):
+        return False
+
+
+def desired_current(online, usb_type, temperature, health, wireless=False, *,
+                    fast_charge=False):
+    if type(fast_charge) is not bool or (wireless and fast_charge):
+        raise ValueError('measured wired fast-charge state is required')
     if not wireless and (online != 1 or ('[PD]' not in usb_type and '[PD_PPS]' not in usb_type)):
         return None
-    if health != 'Good' or not 100 <= temperature <= 400:
+    maximum = 470 if fast_charge and '[PD_PPS]' in usb_type else 400
+    if health != 'Good' or not 100 <= temperature <= maximum:
         return 0
     return FCC_UA
 
@@ -43,13 +111,14 @@ def verification_idle_needed(state, input_limit):
 
 
 def tick(bat=BAT, usb=USB, aux_pattern=AUX, next_idle=0, now=None,
-         current_limit=FCC_UA, wireless=False):
+         current_limit=FCC_UA, wireless=False, *, fast_charge=False):
     now = time.monotonic() if now is None else now
     read_int = lambda path: int(path.read_text().strip())
     desired = desired_current(read_int(usb / 'online'),
                               (usb / 'usb_type').read_text(),
                               read_int(bat / 'temp'),
-                              (bat / 'health').read_text().strip(), wireless)
+                              (bat / 'health').read_text().strip(), wireless,
+                              fast_charge=fast_charge)
     if desired is None:
         return 0, 'waiting for USB-PD'
     if desired:
@@ -136,11 +205,13 @@ class StockChargingControl:
         self.wireless_level = 0
 
     def step(self, temperatures, authentication, readback, maximum, screen_on, now,
-             wireless=False, *, usb_online=True):
+             wireless=False, *, usb_online=True, fast_charge=False):
         if type(maximum) is not int or not 500_000 <= maximum <= 15_600_000:
             raise ValueError('invalid kernel staging ceiling')
         if type(wireless) is not bool or type(usb_online) is not bool:
             raise ValueError('measured power-source states are required')
+        if type(fast_charge) is not bool or (wireless and fast_charge):
+            raise ValueError('measured wired fast-charge state is required')
         source = (wireless, usb_online)
         if self.source is not None and self.source != source:
             self.reset()
@@ -155,10 +226,15 @@ class StockChargingControl:
         self.wired_level = self.wired.update(skin, screen_on)
         self.wireless_level = self.wireless.update(skin, screen_on)
         level = self.wireless_level if wireless else self.wired_level
+        # All four stock aging profiles use 15-47 C for the normal zone.
+        # Firmware still owns voltage steps, taper and aging. Use this range
+        # only with the matching kernel guard and a verified active FFC mode.
+        battery_max = (47000 if fast_charge and usb_online
+                       and authentication.get('pd_verified') == 1 else 38000)
         ready = (len(self.history) == 3
                  and authentication.get('battery_authentic') == 1
                  and (wireless or authentication.get('pd_verified') in (0, 1))
-                 and 15000 <= temperatures['battery'] <= 38000
+                 and 15000 <= temperatures['battery'] <= battery_max
                  # ADSP's stock connector warning/stop thresholds are 50/55 C.
                  # Keep a separate host margin while SIC controls virtual skin.
                  and temperatures['usb_therm'] < 45000
@@ -259,18 +335,18 @@ class StockAuthentication:
 
 
 def main():
+    if sys.argv[1:] == ['--needs-light-sleep']:
+        sys.exit(0 if charging_needs_light_sleep() else 1)
     if sys.argv[1:] == ['--finish-auth']:
         finish_authentication()
+        finish_charging()
         return
-    ceiling_file = Path('/etc/armada/houji-charge-ceiling')
-    if ceiling_file.exists():
-        try:
-            ceiling = int(ceiling_file.read_text())
-            if not 1_000_000 <= ceiling <= 15_600_000:
-                raise ValueError('staging ceiling outside stock range')
-            Path('/sys/module/qcom_battmgr/parameters/houji_max_fcc_ua').write_text(f'{ceiling}\n')
-        except (OSError, ValueError) as error:
-            print(f'staging ceiling not applied: {error}', flush=True)
+    normal = configured_ceiling(Path('/etc/armada/houji-charge-ceiling'), 3_000_000)
+    hypercharge = configured_ceiling(Path('/etc/armada/houji-hypercharge-ceiling'), normal)
+    # This is only the absolute write bound. Selection, authentication, ramp,
+    # stock thermal votes and lease renewal still gate each current request.
+    Path('/sys/module/qcom_battmgr/parameters/houji_max_fcc_ua').write_text(
+        f'{max(normal, hypercharge)}\n')
     next_idle = 0
     previous = None
     authentication = StockAuthentication()
@@ -279,6 +355,7 @@ def main():
         loop_start = time.monotonic()
         try:
             limit = FCC_UA
+            fast_charge = False
             wireless = wireless_selected()
             sample = None
             board_error = None
@@ -310,11 +387,17 @@ def main():
                         if not FCC_UA <= wireless_max <= 10000000:
                             raise ValueError('wireless ceiling outside stock range')
                         maximum = min(maximum, wireless_max)
+                    else:
+                        wired_max, fast_charge = wired_limits(
+                            directory, (USB / 'usb_type').read_text(), verified,
+                            normal, hypercharge)
+                        maximum = min(maximum, wired_max)
                     limit, level = control.step(sample[0], verified,
                                                 int((BAT / 'constant_charge_current').read_text()),
                                                 maximum, read_screen_state(),
-                                                time.monotonic(), wireless,
-                                                usb_online=int((USB / 'online').read_text()) == 1)
+                                                time.clock_gettime(time.CLOCK_BOOTTIME), wireless,
+                                                usb_online=int((USB / 'online').read_text()) == 1,
+                                                fast_charge=fast_charge)
                     # Install both applicable stock monitor votes before FCC.
                     levels = [('wired_thermal_level', control.wired_level)]
                     if wireless:
@@ -328,9 +411,11 @@ def main():
                     limit = FCC_UA if wireless else current_from_thermals(sample[0], verified)
             except (OSError, ValueError, RuntimeError) as error:
                 limit = FCC_UA
+                fast_charge = False
                 control.reset()
                 board_error = error
-            next_idle, state = tick(next_idle=next_idle, current_limit=limit, wireless=wireless)
+            next_idle, state = tick(next_idle=next_idle, current_limit=limit, wireless=wireless,
+                                   fast_charge=fast_charge)
             state += '; ' + authentication.step()
             if board_error is None:
                 state += '; ' + board_state

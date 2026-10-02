@@ -10,7 +10,10 @@
   "compositor": {
     "repository": "https://github.com/OpenGamingCollective/gamescope",
     "revision": "4b50dd7a719c09acb1a0141ff6eac9dab1ab4f2f",
-    "patch": "0001-associate-houji-touch.patch",
-    "purpose": "Bind stock uinput touchscreen to internal display so Gamescope applies its rotation transform"
+    "patches": [
+      "0001-associate-houji-touch.patch",
+      "0002-wake-on-fresh-frame.patch"
+    ],
+    "purpose": "Associate built-in touch with the rotating internal display and wait for a fresh client frame on native wake"
   }
 }
