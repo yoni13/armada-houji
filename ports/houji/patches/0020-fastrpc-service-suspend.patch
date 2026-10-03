@@ -5,11 +5,14 @@ AP is suspended. A failure trace recorded such a reply while userspace
 was frozen, followed by a sensor watchdog and loss of the shared DSP.
 The listener must be able to answer these requests across system sleep.
 
-Wake the AP for successful NEXT2 replies during suspend. Track outstanding
-listener work across the preceding freeze interval and refuse suspend if
-userspace still owes a reply. The next NEXT2 invocation acknowledges that
-work. Idle listener waits do not block suspend. Scope this to the sensor
-PD protocol used by hexagonrpcd; no userspace ABI or permanent wakelock.
+Wake the AP for successful NEXT2 replies during suspend. The wake event
+is held for only 50 ms, as in the stock driver; the prepare check below,
+not a long timer, keeps the system awake while a request is served. Track
+outstanding listener work across the preceding freeze interval and refuse
+suspend if userspace still owes a reply. The next NEXT2 invocation
+acknowledges that work. Idle listener waits do not block suspend. Scope
+this to the sensor PD protocol used by hexagonrpcd; no userspace ABI or
+permanent wakelock.
 
 ---
 
@@ -32,7 +35,7 @@ diff --git a/drivers/misc/fastrpc.c b/drivers/misc/fastrpc.c
  #define FASTRPC_DSP_UTILITIES_HANDLE	2
 +#define FASTRPC_LISTENER_HANDLE		3
 +#define FASTRPC_LISTENER_NEXT2		4
-+#define FASTRPC_LISTENER_WAKE_MS		5000
++#define FASTRPC_LISTENER_WAKE_MS		50
  #define FASTRPC_CTXID_MASK (0xFF0)
  #define INIT_FILELEN_MAX (2 * 1024 * 1024)
  #define INIT_FILE_NAMELEN_MAX (128)

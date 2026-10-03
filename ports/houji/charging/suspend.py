@@ -8,6 +8,9 @@ import sys
 POLICY = '/usr/libexec/armada/houji-charge-policy'
 LIGHT_SLEEP = '/usr/libexec/armada/fake-suspend'
 DISPATCH = '/usr/libexec/armada/suspend-dispatch'
+# suspend-dispatch runs this in place of systemd-sleep for native sleep. It
+# keeps sensor DSP wakeups from lighting the screen; see houji-sleep.
+NATIVE_SLEEP = '/usr/libexec/armada/houji-sleep'
 
 
 def charging_active():
@@ -69,6 +72,8 @@ def main():
         if not sleep_while_charging():
             return
         print('Houji: charging ended; returning to configured sleep mode', flush=True)
+    if os.access(NATIVE_SLEEP, os.X_OK):
+        os.environ.setdefault('ARMADA_SYSTEMD_SLEEP', NATIVE_SLEEP)
     os.execv(DISPATCH, [DISPATCH, *sys.argv[1:]])
 
 

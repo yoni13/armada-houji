@@ -38,7 +38,8 @@ def link(name,value):
 
 for directory in [PORT/'runtime',PORT/'firmware/root']:
     for src in directory.rglob('*'):
-        if src.is_file():copy(src,str(src.relative_to(directory)))
+        # Tests that import scripts from here must not leak bytecode into images.
+        if src.is_file() and '__pycache__' not in src.parts:copy(src,str(src.relative_to(directory)))
 for name in ['armada-powerd','device-env','fake-suspend','mtp-gadget']:
     rel='usr/libexec/armada/'+name;copy(REPO/'system_files'/rel,rel,0o755)
 for name in ['defaults.conf','xiaomi-14.conf']:

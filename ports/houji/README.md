@@ -74,7 +74,7 @@ Results below are from the development handset.
 
 | Feature | State |
 | --- | --- |
-| Sleep | Experimental. Native `s2idle` is the default on battery and works in testing, including waking for sensor-DSP requests. Long-term reliability and battery savings are not established. See [Charging and sleep](#charging-and-sleep). |
+| Sleep | Experimental. Native `s2idle` is the default on battery. The sensor DSP's periodic requests wake the phone, are served, and the phone sleeps again without lighting the screen. Tested for a 50-minute sleep with three such wakes, and for Power-key and alarm wakes. Long-term reliability and battery savings are not established. See [Charging and sleep](#charging-and-sleep). |
 | Wired fast charging | Xiaomi authentication and about 19 W at the battery were measured. Stock HyperCharge behaviour and the full 90 W input are not verified. |
 | GPS | A satellite fix works with the opt-in development tools. There is no GeoClue provider or navigation integration, and restarting the modem can reboot the phone. |
 | NFC reader | Experimental. Card discovery and ISO-DEP activation work. Reading NDEF from physical tags, other tag families and writing are unverified. Off by default. |
@@ -95,9 +95,12 @@ Results below are from the development handset.
 
 - **Sleep may still misbehave.** An intermittent animation freeze around Steam
   wake was reported earlier and never reproduced or explained. The sensor-DSP
-  wake path is fixed and exercised, but long-sleep reliability is unproven.
-  Firmware requests can wake the phone, and automatic return to sleep after
-  serving them is not implemented.
+  wake and re-sleep path works in testing, but only a few hours of sleep have
+  been exercised, not days of standby, and the standby power cost of the
+  periodic DSP wakeups has not been measured. Dark resume was tested in Steam
+  Game Mode only; the Plasma Mobile session is unverified. If sleep ever
+  misbehaves, create `/etc/armada/houji-sleep-classic` to go back to plain
+  `systemd-sleep`.
 - **Wake from sleep is not instant.** Display wake took roughly one to two
   seconds in testing.
 - **Wi-Fi wake-on-LAN (WoWLAN) is off by default.** A faster-wake trial caused a
@@ -302,11 +305,14 @@ not verified.
   configured mode when charging ends or the cable is unplugged.
 - **Direct native suspend while charging** cuts the charging vote to 500 mA until
   the monitor resumes.
-- **Sensor-DSP wakeups.** The kernel wakes the phone when the sensor DSP needs
-  the file service to answer. This fixed a watchdog that used to take down
-  audio, battery readings and sensors after resume. The phone does not yet go
-  back to sleep automatically after answering, so it can stay awake until the
-  next Power press.
+- **Sensor-DSP wakeups.** Every few minutes to an hour the sensor DSP asks the
+  AP to save its gyroscope calibration to a registry file. The kernel wakes
+  for that request, the file service answers, and `houji-sleep` suspends
+  again with the desktop still frozen, so the screen and sound stay off. Any
+  other wake (Power key, RTC alarm, USB peripheral, modem) ends the sleep
+  normally. This replaced `systemd-sleep` for native sleep, and fixed a
+  watchdog that used to take down audio, battery readings and sensors after
+  resume. See [HISTORY.md](HISTORY.md#sleep-and-resume) for the cause.
 
 ## USB and privacy
 

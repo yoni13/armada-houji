@@ -1,0 +1,36 @@
+Subject: [PATCH] misc: fastrpc: keep an in-flight invoke across the freezer
+
+The sensors-PD listener blocks in FASTRPC_IOCTL_INVOKE waiting for the DSP
+to hand it the next reverse RPC. The wait is interruptible, so suspend's
+freezer wakes it with a fake signal and the call returns -ERESTARTSYS.
+After thaw the ioctl restarts and builds a fresh context, while the
+context the DSP will reply to is still the old one: the reply completes a
+context nobody waits on, the request payload is dropped, and the DSP only
+sees the request answered after its own retry. Qualcomm's downstream
+driver avoids this by parking and restoring interrupted contexts.
+
+Wait with TASK_FREEZABLE instead, so the freezer parks the caller in place
+and the original context is still the one that returns the request after
+resume. Real signals still interrupt the wait.
+
+---
+
+diff --git a/drivers/misc/fastrpc.c b/drivers/misc/fastrpc.c
+--- a/drivers/misc/fastrpc.c
++++ b/drivers/misc/fastrpc.c
+@@ -1310,7 +1310,14 @@
+ 		if (!wait_for_completion_timeout(&ctx->work, 10 * HZ))
+ 			err = -ETIMEDOUT;
+ 	} else {
+-		err = wait_for_completion_interruptible(&ctx->work);
++		/*
++		 * Park the caller in a freezable sleep. A plain interruptible wait
++		 * returns -ERESTARTSYS when the freezer signals it; the restarted
++		 * call builds a new context, so a reply that arrives while the system
++		 * is suspended lands on an abandoned one and is lost.
++		 */
++		err = wait_for_completion_state(&ctx->work,
++						TASK_INTERRUPTIBLE | TASK_FREEZABLE);
+ 	}
+ 
+ 	if (err)

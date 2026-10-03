@@ -1,8 +1,10 @@
 #!/usr/bin/python3
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import unittest
+from unittest import mock
 from unittest.mock import Mock
 
 spec = importlib.util.spec_from_file_location('charging_suspend', Path(__file__).with_name('suspend.py'))
@@ -53,6 +55,31 @@ class ChargingSleepTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             s.sleep_while_charging(Mock(side_effect=RuntimeError('test')), Mock(return_value=child), Mock())
         child.terminate.assert_called_once()
+
+    def run_main(self, env):
+        with mock.patch.object(s, 'charging_active', return_value=False), \
+             mock.patch.object(s.os, 'access', return_value=True), \
+             mock.patch.object(s.os, 'execv') as execv, \
+             mock.patch.dict(os.environ, env, clear=True):
+            s.main()
+            return execv, dict(os.environ)
+
+    def test_native_sleep_runs_the_dark_resume_step(self):
+        execv, env = self.run_main({})
+        execv.assert_called_once_with(s.DISPATCH, [s.DISPATCH])
+        self.assertEqual(env['ARMADA_SYSTEMD_SLEEP'], s.NATIVE_SLEEP)
+
+    def test_an_explicit_sleep_override_is_respected(self):
+        _, env = self.run_main({'ARMADA_SYSTEMD_SLEEP': '/custom'})
+        self.assertEqual(env['ARMADA_SYSTEMD_SLEEP'], '/custom')
+
+    def test_a_missing_dark_resume_step_leaves_the_dispatch_default(self):
+        with mock.patch.object(s, 'charging_active', return_value=False), \
+             mock.patch.object(s.os, 'access', side_effect=lambda path, mode: path != s.NATIVE_SLEEP), \
+             mock.patch.object(s.os, 'execv'), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            s.main()
+            self.assertNotIn('ARMADA_SYSTEMD_SLEEP', os.environ)
 
 
 if __name__ == '__main__':

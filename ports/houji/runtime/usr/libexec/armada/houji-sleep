@@ -1,0 +1,312 @@
+#!/usr/bin/python3
+"""Native sleep for Houji that keeps sensor DSP wakeups invisible.
+
+Stock Android handles a DSP request during sleep by waking the AP, letting the
+file-service listener answer, and suspending again within milliseconds. The
+display never turns on. systemd-sleep stops at the first wake, so every DSP
+request would thaw the desktop and light the screen.
+
+This is the real-suspend step that suspend-dispatch runs in place of
+systemd-sleep. It does the same work (freeze user.slice, run the system-sleep
+hooks, suspend, run the hooks again, thaw) but, while user.slice stays frozen,
+suspends again after a wake that only the sensor DSP caused. The kernel
+refuses to suspend while the listener still owes an answer, so retrying is how
+this waits for the request to be served.
+
+Any other wake ends the loop, and anything unexpected falls back to
+systemd-sleep. Create /etc/armada/houji-sleep-classic to force the fallback.
+"""
+import errno
+import os
+import signal
+import subprocess
+import sys
+import time
+from collections import deque
+from pathlib import Path
+
+CLASSIC = '/usr/lib/systemd/systemd-sleep'
+KILL_SWITCH = '/etc/armada/houji-sleep-classic'
+# The directories systemd-sleep reads, highest precedence first. A file of the
+# same name in an earlier directory replaces a later one, and a symlink to
+# /dev/null masks it.
+HOOK_DIRS = ('/etc/systemd/system-sleep', '/run/systemd/system-sleep',
+             '/usr/local/lib/systemd/system-sleep', '/usr/lib/systemd/system-sleep')
+STATE = '/sys/power/state'
+WAKE_IRQ = '/sys/power/pm_wakeup_irq'
+SOURCES = '/sys/kernel/debug/wakeup_sources'
+INTERRUPTS = '/proc/interrupts'
+HOOK_TIMEOUT = 90          # systemd-sleep gives its hooks the same budget
+BUSY_TIMEOUT = 15.0        # how long to wait for the listener to answer
+ABORT_SECONDS = 0.5        # a suspend that returns sooner never slept
+MAX_ABORTS = 5
+DARK_BURST = 6             # this many dark wakes ...
+DARK_WINDOW = 20.0         # ... inside this many seconds means a wake loop
+# Wakeup sources that fire without anyone touching the phone. The sensor DSP
+# is the one we are hiding. Charger and RTC bookkeeping is soft: it is
+# recorded but does not end a sleep. Anything else (power key, touch, USB
+# peripherals, modem) is treated as a person and ends the loop.
+CAUSE = 'fastrpc'
+BENIGN = ('fastrpc', 'battmgr', 'ucsi', 'rtc')
+# A key pressed while the system is briefly awake between two suspends raises
+# an interrupt but neither wakes nor aborts anything, so watch the counters.
+# Matched case-insensitively against the whole interrupt label.
+INPUT_IRQS = ('pwrkey', 'resin', 'gpio-keys', 'volume')
+
+
+def log(message):
+    print('Houji sleep: ' + message, file=sys.stderr, flush=True)
+
+
+def parse_sources(text):
+    """wakeup_sources -> {name: event_count}; fields are tab separated."""
+    counts = {}
+    for line in text.splitlines()[1:]:
+        fields = [f for f in line.split('\t') if f != '']
+        if len(fields) < 3:
+            continue
+        try:
+            counts[fields[0].strip()] = int(fields[2])
+        except ValueError:
+            continue
+    return counts
+
+
+def parse_input_irqs(text):
+    """/proc/interrupts -> {label: total count} for key-like interrupts."""
+    counts = {}
+    for line in text.splitlines()[1:]:
+        head, colon, rest = line.partition(':')
+        if not colon:
+            continue
+        fields = rest.split()
+        columns = 0
+        while columns < len(fields) and fields[columns].isdigit():
+            columns += 1
+        label = ' '.join(fields[columns:])
+        if not any(tag in label.lower() for tag in INPUT_IRQS):
+            continue
+        counts[label] = counts.get(label, 0) + sum(int(f) for f in fields[:columns])
+    return counts
+
+
+def hook_paths(dirs):
+    """Executable hooks as [(name, path)], resolved like systemd-sleep does."""
+    chosen = {}
+    for directory in dirs:
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            continue
+        for name in names:
+            chosen.setdefault(name, os.path.join(directory, name))
+    hooks = []
+    for name in sorted(chosen):
+        path = chosen[name]
+        if os.path.realpath(path) == os.devnull:
+            continue  # masked
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            hooks.append((name, path))
+    return hooks
+
+
+def classify(before, after, irq):
+    """Return ('dark'|'real'|'unknown', detail) for one wake."""
+    if irq is not None:
+        return 'real', 'wake irq %s' % irq
+    changed = {name: after[name] - before.get(name, 0) for name in after
+               if after[name] - before.get(name, 0) > 0}
+    if not any(CAUSE in name for name in changed):
+        return 'unknown', 'no wake source recorded'
+    other = sorted(name for name in changed
+                   if not any(tag in name for tag in BENIGN))
+    if other:
+        return 'real', 'activity on ' + ', '.join(other)
+    return 'dark', 'sensor DSP request'
+
+
+class Platform:
+    """Everything that touches the system. Tests replace these methods."""
+
+    def classic(self, argv):
+        os.execv(CLASSIC, [CLASSIC, *argv])
+
+    def classic_forced(self):
+        return os.path.exists(KILL_SWITCH)
+
+    def supported(self):
+        return (os.access(STATE, os.W_OK) and os.access(SOURCES, os.R_OK)
+                and os.path.exists(WAKE_IRQ) and os.access(CLASSIC, os.X_OK))
+
+    def systemctl(self, *args):
+        try:
+            return subprocess.run(['systemctl', *args], timeout=30).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    def shield_signals(self):
+        """From here on finish the wake-up work even if asked to stop."""
+        for number in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(number, signal.SIG_IGN)
+
+    def run_hooks(self, phase):
+        procs = []
+        env = dict(os.environ, SYSTEMD_SLEEP_ACTION='suspend')
+        for name, path in hook_paths(HOOK_DIRS):
+            try:
+                procs.append((name, subprocess.Popen([path, phase, 'suspend'], env=env)))
+            except OSError as error:
+                log('hook %s could not start in %s: %s' % (name, phase, error))
+        deadline = time.monotonic() + HOOK_TIMEOUT
+        for name, proc in procs:
+            try:
+                status = proc.wait(max(0.1, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                log('hook %s timed out in %s' % (name, phase))
+                continue
+            if status:
+                log('hook %s exited with %d in %s' % (name, status, phase))
+
+    def write_state(self):
+        with open(STATE, 'w') as stream:
+            stream.write('mem')
+
+    def wake_irq(self):
+        try:
+            text = Path(WAKE_IRQ).read_text().strip()
+        except OSError as error:
+            if error.errno == errno.ENODATA:
+                return None  # the last wake was not an interrupt
+            # Anything else means we cannot tell, so never call it dark.
+            return 'unreadable (%s)' % errno.errorcode.get(error.errno, error.errno)
+        return text or None
+
+    def sources(self):
+        return parse_sources(Path(SOURCES).read_text())
+
+    def input_counts(self):
+        return parse_input_irqs(Path(INTERRUPTS).read_text())
+
+    def boottime(self):
+        return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+    def monotonic(self):
+        return time.monotonic()
+
+    def sleep(self, seconds):
+        time.sleep(seconds)
+
+
+def suspend_once(platform, awake_inputs=None):
+    """One trip through the kernel.
+
+    Returns (kind, detail, slept_seconds, inputs). awake_inputs is the
+    key-interrupt snapshot taken the moment the previous suspend returned; a
+    change before this one starts means a key was pressed while the system was
+    up, and a change across the suspend itself means one arrived while it was
+    entering or leaving sleep.
+    """
+    started = platform.monotonic()
+    while True:
+        inputs_before = platform.input_counts()
+        if awake_inputs is not None and inputs_before != awake_inputs:
+            return 'real', 'key pressed while awake', 0.0, inputs_before
+        before = platform.sources()
+        boot0, mono0 = platform.boottime(), platform.monotonic()
+        try:
+            platform.write_state()
+            break
+        except OSError as error:
+            # fastrpc_pm_prepare returns EBUSY while the listener still owes
+            # the DSP an answer; it clears as soon as the answer is sent.
+            if error.errno != errno.EBUSY or platform.monotonic() - started > BUSY_TIMEOUT:
+                raise
+            platform.sleep(0.25)
+    inputs_after = platform.input_counts()
+    boot1, mono1 = platform.boottime(), platform.monotonic()
+    slept = (boot1 - boot0) - (mono1 - mono0)
+    kind, detail = classify(before, platform.sources(), platform.wake_irq())
+    if kind != 'real' and inputs_after != inputs_before:
+        kind, detail = 'real', 'key interrupt during suspend or resume'
+    return kind, detail, slept, inputs_after
+
+
+def sleep_until_real_wake(platform):
+    """Suspend, repeating for dark wakes. Returns (detail, dark_wakes)."""
+    recent = deque()
+    dark = aborts = 0
+    awake_inputs = None
+    while True:
+        try:
+            kind, detail, slept, awake_inputs = suspend_once(platform, awake_inputs)
+        except OSError as error:
+            if error.errno == errno.EBUSY and dark:
+                # Better to show the desktop than to sit here: it can sort out
+                # whatever the listener is stuck on.
+                return 'sensor request still pending', dark
+            raise
+        now = platform.boottime()
+        if kind == 'dark':
+            dark += 1
+            recent.append(now)
+            while recent and now - recent[0] > DARK_WINDOW:
+                recent.popleft()
+            if len(recent) >= DARK_BURST:
+                return 'too many dark wakes in a row', dark
+            log('dark wake %d after %.0f s: %s served; sleeping again'
+                % (dark, slept, detail))
+            continue
+        if kind == 'unknown' and slept < ABORT_SECONDS and aborts < MAX_ABORTS:
+            aborts += 1
+            platform.sleep(0.3)
+            continue
+        return detail, dark
+
+
+def run(platform, argv):
+    if argv[:1] != ['suspend']:
+        return platform.classic(argv)
+    if platform.classic_forced():
+        log('plain systemd-sleep requested by %s' % KILL_SWITCH)
+        return platform.classic(argv)
+    if not platform.supported():
+        log('kernel interfaces missing; using systemd-sleep')
+        return platform.classic(argv)
+    if not platform.systemctl('freeze', 'user.slice'):
+        log('could not freeze user.slice; using systemd-sleep')
+        return platform.classic(argv)
+    try:
+        print("Performing sleep operation 'suspend'...", file=sys.stderr, flush=True)
+        platform.run_hooks('pre')
+        detail, dark = sleep_until_real_wake(platform)
+        log('resuming (%s)%s' % (detail, '' if not dark else ' after %d dark wakes' % dark))
+        print("System returned from sleep operation 'suspend'.", file=sys.stderr, flush=True)
+    finally:
+        # The hooks and the thaw must run even if the suspend itself failed or
+        # we are being stopped, and a failing hook must not skip the thaw.
+        platform.shield_signals()
+        try:
+            platform.run_hooks('post')
+        finally:
+            if not platform.systemctl('thaw', 'user.slice'):
+                log('could not thaw user.slice')
+    return 0
+
+
+def main():
+    def terminated(signum, frame):
+        raise SystemExit(128 + signum)
+    signal.signal(signal.SIGTERM, terminated)
+    signal.signal(signal.SIGINT, terminated)
+    try:
+        status = run(Platform(), sys.argv[1:])
+    except OSError as error:
+        log('suspend failed: %s' % error)
+        return 1
+    return status or 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

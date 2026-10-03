@@ -18,3 +18,4 @@
 0019-houji-stock-fastcharge-temperature.patch
 0020-fastrpc-service-suspend.patch
 0021-asoc-drain-resume-before-unbind.patch
+0022-fastrpc-freezable-invoke-wait.patch

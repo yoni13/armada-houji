@@ -168,7 +168,7 @@ This section gives the final understanding first, then the dead ends.
   Audio, battery and charging readings, sensors and USB-C control all vanished
   together, because they share that DSP. Resume was slow and a normal reboot could
   stall. Once, the audio stack also faulted while recovering the DSP.
-- **Cause (final):** The sensor DSP can send a request ("reverse RPC") to the
+- **Cause (first part; see "a second cause" below):** The sensor DSP can send a request ("reverse RPC") to the
   file-service listener in userspace. The listener is frozen during sleep, and the
   mainline FastRPC driver did not wake the system for these requests. The DSP's
   watchdog then expired while the application processor slept. Stock Xiaomi
@@ -192,9 +192,10 @@ This section gives the final understanding first, then the dead ends.
   fault.
 - **Result:**
   - An early-after-boot native sleep woke on a real FastRPC reply after about 228
-    seconds, before its RTC alarm. The trace shows the reply, the wake event, and
-    the listener answering about 1.25 seconds later. There was no watchdog and no
-    kernel fault.
+    seconds, before its RTC alarm, with no watchdog and no kernel fault. The trace
+    shows the reply and the wake event. I first read the listener's call 1.25
+    seconds later as its answer; it was the interrupted call being re-issued (see
+    "a second cause").
   - Afterward, speaker playback reached the hardware, accelerometer samples arrived
     and battery queries worked.
   - A later Power-key sleep, woken by a physical tap, also passed. The owner saw
@@ -204,9 +205,115 @@ This section gives the final understanding first, then the dead ends.
     owner's report and the counters.
   - The new kernel and every in-tree and port module were built and installed
     together under a separate release name so rollback stayed possible.
-- **Not proven:** An uninterrupted long sleep with the final kernel. Deliberately
-  crashing the DSP to exercise the audio-teardown patch. Automatic return to sleep
-  after the DSP wakes the phone is not implemented.
+- **Not proven:** Deliberately crashing the DSP to exercise the audio-teardown
+  patch.
+
+### What the DSP asks for, and a second cause
+
+A debug build of `hexagonrpcd` logged every request. The sensor DSP's
+periodic wake-up request is always the same thing: it writes one registry
+item, `sns_gyro_cal_dynamic_config_0.poly_para` (the gyroscope's dynamic
+calibration), through a temp-file write and rename. It arrives every few
+minutes to an hour while the phone sleeps, and roughly every minute or two
+while the phone is awake and still. It needs no file I/O beyond that, so
+the earlier syscall traces of the woken daemon came back empty for a reason
+that mattered: the request had not reached it yet.
+
+- **Issue:** After a wake, the registry write reached the daemon about 11
+  seconds to 100 seconds late, not within the roughly 1.3 s that thawing
+  takes. The earlier "listener answered 1.25 s after wake" trace was wrong:
+  that was the listener re-issuing its `NEXT2` call, not answering.
+- **Cause:** The listener waits for the DSP's request in an interruptible
+  `FASTRPC_IOCTL_INVOKE`. The freezer wakes it with a fake signal, the call
+  returns `-ERESTARTSYS`, and the restarted call builds a new context. The
+  DSP's reply lands on the abandoned original context, which is freed, so
+  the request payload is dropped and the DSP only delivers it again after
+  its own retry. Stock Xiaomi `frpc-adsprpc.ko` has explicit
+  `fastrpc_context_interrupt` and `context_restore_interrupted` handling
+  for exactly this; mainline has no equivalent. This is the more likely
+  root cause of the old sensor watchdog and of the long resume stalls.
+- **Fix (kernel patch `0022`):** Wait with
+  `TASK_INTERRUPTIBLE | TASK_FREEZABLE`, so the freezer parks the caller in
+  place and the original context is the one that returns the request after
+  thaw. Real signals still interrupt it.
+
+### How stock Android handles this
+
+Read from the firmware's own `frpc-adsprpc.ko` and `libadsprpc.so`:
+
+- In `fastrpc_handle_rpc_response`, a client with wake control enabled
+  triggers `pm_wakeup_ws_event(ws, ws_timeout, true)` for every reply. The
+  PM ioctl caps `ws_timeout` at 50 ms.
+- `libadsprpc` takes a userspace wakelock (`/sys/power/wake_lock`) when a
+  call returns a request and drops it when the listener calls `NEXT2`
+  again with the answer. The blocking `NEXT2` itself deliberately holds no
+  lock. `sscrpcd` runs with `group wakelock` and `BLOCK_SUSPEND`.
+- Android's SystemSuspend loop writes `mem` to `/sys/power/state` again as
+  soon as no wakelock is held. The kernel wakes briefly, the request is
+  served, and the system sleeps again; the screen is never involved.
+
+Our kernel has neither `CONFIG_PM_WAKELOCKS` nor `CONFIG_PM_AUTOSLEEP`, and
+systemd-sleep stops at the first wake, so an ordinary resume lit the screen
+for every DSP request.
+
+### Quiet resume
+
+- **Issue:** Every DSP wake thawed the desktop and turned the display on.
+- **Fix:** `houji-sleep` replaces `systemd-sleep` as the real-suspend step
+  (`suspend-dispatch` already allows this through `ARMADA_SYSTEMD_SLEEP`,
+  and `houji-suspend` sets it). It freezes `user.slice`, runs the same
+  system-sleep hooks, and suspends. After a wake with no wake interrupt, a
+  FastRPC wake-source increase and no other activity, it suspends again
+  with the desktop still frozen. Any other wake ends the loop, runs the
+  `post` hooks once, and thaws. The kernel's prepare check from patch
+  `0020` refuses a suspend while the listener still owes an answer, so
+  retrying on `EBUSY` is how it waits for the request to be served.
+  The kernel wake hold dropped from 5 s to stock's 50 ms.
+- **Why not a hook:** systemd runs sleep hooks under a 90 second budget, so a
+  loop inside a hook would be killed after a couple of dozen wakes.
+- **Safeguards:**
+  - It falls back to plain `systemd-sleep` if the kernel lacks what it needs or
+    `user.slice` cannot be frozen, or when `/etc/armada/houji-sleep-classic`
+    exists.
+  - Key interrupts (power, volume, any `gpio-keys` label) are compared just
+    before each suspend, and again the moment it returns, so a press while the
+    system is briefly awake, or while it is entering or leaving sleep, ends
+    the loop instead of being lost in the frozen session's input queue.
+  - Six dark wakes inside 20 seconds end the loop. If the listener is still
+    busy after 15 s following a dark wake, the desktop resumes normally.
+  - The hooks come from the same directories as `systemd-sleep` (including
+    `/etc` overrides and `/dev/null` masks) under the same 90 second budget. A
+    hook that cannot start or exits non-zero is logged and skipped.
+  - Stop signals are ignored while the `post` hooks and the thaw run, a failing
+    hook cannot skip the thaw, and the unit thaws `user.slice` even if the
+    script is killed outright.
+  - An unreadable wake-interrupt file counts as a real wake, never a dark one.
+- **Review:** an independent read-through found a too-late key baseline, an
+  unwatched multi-word `Volume Up` label, an unguarded hook launch and a test
+  that left bytecode in the tree that gets staged into images. All are fixed
+  and covered by `tests/houji-sleep-test.py`, and staging now skips
+  `__pycache__`.
+- **Known limit:** if the freezer scans the listener while it is runnable
+  rather than sleeping, patch `0022` does not apply and the old restart path
+  can still lose that one request. The DSP retries it, and the worst outcome
+  is the old delay, not a failure.
+- **Result:** On the phone (kernel `adsp3`), a 50-minute sleep ended by an RTC
+  alarm absorbed three DSP wakes, after 396 s, 1677 s and 15 s. The desktop
+  thawed once, at the end, and the kernel log shows the panel initialised
+  only then. The kernel woke at boot-clock 499.96 and 2178.68 and the daemon
+  had the request 1.17 s later each time, handled in under a millisecond;
+  before patch `0022` it took 11 to 100 s. The kernel counted four
+  suspends and no failures. Afterwards speaker playback reached the
+  hardware, accelerometer samples and battery readings were normal, the DSP
+  was running and no watchdog or oops was logged. A Power press ended a
+  separate sleep with `wake irq 21`, the panel came back, and two further
+  rapid Power sleep/wake cycles also worked.
+- **Not covered on hardware:** a Power press after an absorbed dark wake, a key
+  press inside the brief awake window (unit tests only:
+  `tests/houji-sleep-test.py`), and the Plasma Mobile session. The tests
+  above ran in Steam Game Mode, where Gamescope disables the panel before
+  sleep; whether Plasma leaves the panel off across a dark wake is
+  unverified. Standby power with the periodic wakes has not been measured.
 
 ### Dead ends in that investigation
 
@@ -702,8 +809,9 @@ Verification:
 ## Open problems
 
 - Intermittent animation freeze around Steam wake: never reproduced or explained.
-- Long-sleep reliability with the final kernel, and DSP crash recovery, are untested.
-- Automatic return to sleep after the DSP wakes the phone is not implemented.
+- Sleep has been exercised for hours, not days. The standby power cost of the
+  sensor DSP's periodic wakeups is unmeasured, and DSP crash recovery is
+  untested.
 - Wireless charging starts, then stops.
 - Stock HyperCharge behaviour, the 15–47°C fast-charge path and charge-pump transitions
   are unverified.
