@@ -27,6 +27,7 @@ fixed is in [HISTORY.md](HISTORY.md).
 - [Build](#build)
 - [Install](#install)
 - [Update without erasing games](#update-without-erasing-games)
+- [Continuous integration](#continuous-integration)
 - [Charging and sleep](#charging-and-sleep)
 - [USB and privacy](#usb-and-privacy)
 - [NFC Manager](#nfc-manager)
@@ -276,6 +277,40 @@ work with this layout. Use this procedure instead.
    ```
 
 A boot-only flash without staging the matching root image is rejected.
+
+## Continuous integration
+
+The **Houji checks** workflow (`.github/workflows/houji.yml`) runs on pushes
+and pull requests to `main` that touch the port, and on demand. It uses no
+secrets, publishes nothing and needs no phone.
+
+| Job | What it checks |
+| --- | --- |
+| Unit tests | Every Python and shell test (sleep, charging, thermal, installer, session switching, NFC and GPS helpers, panel gamma, and the patch checker itself). |
+| Kernel patches | The shared Armada kernel series plus Houji's apply in build order, with every hunk parsed and no fuzz, onto the SHA-256-pinned Linux tarball. It then replays the Wi-Fi DBS/SBS parser on the phone's captured record. |
+| Userspace patches and native tests | The pinned revisions of hexagonrpc, iio-sensor-proxy, gamescope and tqftpserv take the port's patches. The C and C++ tests are then built and run against those patched trees, in a Fedora 44 container like the image. |
+
+The same checks run locally:
+
+```sh
+ports/houji/unit-tests.sh
+python3 ports/houji/check-patches.py kernel      # downloads Linux once (about 150 MB), cached
+python3 ports/houji/check-patches.py userspace --keep /tmp/patched
+ports/houji/native-tests.sh /tmp/patched         # needs gcc, g++ and glib, gio-unix, gudev, libqmi-glib, libqrtr-glib headers
+```
+
+These checks do not build the kernel or the images. That is still
+`python3 ports/houji/build.py`, by hand.
+
+**Armada's image workflows are switched off on this fork** (Build images,
+Packages, PR, PR disk image link, Build disk image, Publish disk image and
+Promote release), in the repository's Actions settings. No workflow file was
+changed, so merging upstream stays conflict-free. They publish signed container
+images and need secrets this fork does not have (`SIGNING_SECRET`, R2 keys),
+they build Armada's stock images rather than this port, and the gamescope
+package recipe they pin (`3.16.29-ogc2`) no longer exists upstream, so they
+failed on every push. To bring them back, sync with upstream, add the secrets
+and run `gh workflow enable "<name>"`.
 
 ## Charging and sleep
 

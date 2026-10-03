@@ -1,0 +1,117 @@
+---
+name: Houji checks
+
+# Checks for the Xiaomi 14 (houji) port: its unit tests, and that its patches
+# still apply to the exact sources they were written for. It reads the
+# repository and fetches pinned upstream sources; it uses no secrets, never
+# publishes anything and needs no phone.
+#
+# Armada's image workflows (Build images, PR, ...) are disabled on this fork.
+# They publish signed images that need secrets the fork does not have, and
+# they build the stock Armada images rather than this port. See
+# ports/houji/README.md, "Continuous integration".
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ports/houji/**
+      - tests/houji-*
+      - packages/kernel/BASE.env
+      - packages/kernel/patches/**
+      - system_files/usr/libexec/armada/suspend-dispatch
+      - system_files/usr/libexec/armada/fake-suspend
+      - system_files/usr/lib/systemd/system-sleep/**
+      - system_files/usr/lib/systemd/system/systemd-suspend.service.d/**
+      - .github/workflows/houji.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ports/houji/**
+      - tests/houji-*
+      - packages/kernel/BASE.env
+      - packages/kernel/patches/**
+      - system_files/usr/libexec/armada/suspend-dispatch
+      - system_files/usr/libexec/armada/fake-suspend
+      - system_files/usr/lib/systemd/system-sleep/**
+      - system_files/usr/lib/systemd/system/systemd-suspend.service.d/**
+      - .github/workflows/houji.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Sleep, charging, thermal, installer, session switching, NFC and GPS
+      # helpers, panel gamma, and the patch checker's own tests.
+      - name: Run Python and shell tests
+        run: bash ports/houji/unit-tests.sh
+
+  kernel-patches:
+    name: Kernel patches
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read the pinned kernel version
+        id: pin
+        run: |
+          python3 - >> "${GITHUB_OUTPUT}" <<'PY'
+          import json
+          print('version=' + json.load(open('ports/houji/sources.json'))['linux']['version'])
+          PY
+
+      # The tarball is checked against its pinned SHA-256 either way.
+      - name: Cache the kernel tarball
+        uses: actions/cache@640a1c2554105b57832a23eea0b4672fc7a790d5 # v4.2.3
+        with:
+          path: ~/.cache/houji-checks
+          key: linux-${{ steps.pin.outputs.version }}
+
+      # Shared Armada series plus Houji's, in build order, with the build's own
+      # rules: every hunk parsed and no fuzz. Then replays the Wi-Fi DBS/SBS
+      # parser on the phone's captured record.
+      - name: Apply the kernel series
+        run: python3 ports/houji/check-patches.py kernel
+
+  userspace:
+    name: Userspace patches and native tests
+    runs-on: ubuntu-24.04
+    # The same distribution the Armada image is built on, so library versions
+    # match what the port is compiled against.
+    container: quay.io/fedora/fedora:44
+    timeout-minutes: 20
+    steps:
+      - name: Install build tools
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            gcc gcc-c++ git glib2-devel libgudev-devel libqmi-devel libqrtr-glib-devel \
+            patch pkgconf-pkg-config python3 tar xz
+
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # hexagonrpc, iio-sensor-proxy, gamescope and tqftpserv at their pinned
+      # revisions, with the port's patches applied. The patched trees are kept
+      # for the tests below.
+      - name: Apply the userspace patches
+        run: python3 ports/houji/check-patches.py userspace --keep "${RUNNER_TEMP}/patched"
+
+      - name: Build and run the native tests
+        run: bash ports/houji/native-tests.sh "${RUNNER_TEMP}/patched"

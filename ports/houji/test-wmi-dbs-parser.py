@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """Replay the phone's DBS/SBS record through the patched C parser on the host.
 
-Pass an unpatched source directory for the pinned Linux version. Only two files are copied to a
-temporary directory; the kernel worktree is never modified by this check.
+Pass an unpatched source directory for the pinned Linux version, or its .tar.xz archive. Only
+two files are copied to a temporary directory; the kernel worktree is never modified by this check.
 """
 import argparse
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
+import tarfile
 import tempfile
 
 HERE = Path(__file__).resolve().parent
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('kernel_source', type=Path)
+parser.add_argument('kernel_source', type=Path, help='unpatched Linux tree or linux-<version>.tar.xz')
 args = parser.parse_args()
+sys.dont_write_bytecode = True
 
 
 def function(text, name):
@@ -34,8 +37,22 @@ with tempfile.TemporaryDirectory(prefix='houji-wmi-parser-') as tmp:
     tmp = Path(tmp)
     relative = Path('drivers/net/wireless/ath/ath12k')
     (tmp / relative).mkdir(parents=True)
-    for name in ('wmi.c', 'wmi.h'):
-        shutil.copy2(args.kernel_source / relative / name, tmp / relative / name)
+    if args.kernel_source.is_file():
+        wanted = {f'{relative.as_posix()}/{name}' for name in ('wmi.c', 'wmi.h')}
+        with tarfile.open(args.kernel_source, 'r:xz') as tar:
+            for member in tar:
+                _, _, inner = member.name.partition('/')  # drop linux-<version>/
+                if member.isfile() and inner in wanted:
+                    with tar.extractfile(member) as source, (tmp / inner).open('wb') as target:
+                        shutil.copyfileobj(source, target)
+                    wanted.discard(inner)
+                    if not wanted:
+                        break
+        if wanted:
+            raise SystemExit(f'{args.kernel_source} lacks {sorted(wanted)}')
+    else:
+        for name in ('wmi.c', 'wmi.h'):
+            shutil.copy2(args.kernel_source / relative / name, tmp / relative / name)
     with (HERE / 'patches/0002-ath12k-parse-nested-dbs-sbs.patch').open() as patch:
         subprocess.run(['patch', '-p1', '--batch', '--forward', '-F0'],
                        cwd=tmp, stdin=patch, check=True)
