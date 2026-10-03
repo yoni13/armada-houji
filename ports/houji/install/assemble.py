@@ -8,7 +8,6 @@ from pathlib import Path
 import shutil
 import stat
 import struct
-import tempfile
 import sys
 import uuid
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -58,6 +57,8 @@ def main():
     entries.append(('bin/sh',stat.S_IFLNK|0o777,b'busybox'))
     entries += [(name,stat.S_IFREG|mode,data) for name,mode,data in files]
     (out/'initramfs.cpio.gz').write_bytes(cpio(entries))
+    spec=importlib.util.spec_from_file_location('userdata',PORT/'install/make-userdata.py')
+    userdata=importlib.util.module_from_spec(spec);spec.loader.exec_module(userdata)
     spec=importlib.util.spec_from_file_location('pack',PORT/'pack-images.py')
     pack=importlib.util.module_from_spec(spec);spec.loader.exec_module(pack)
     pack.pack(out,PORT/'firmware/stock')
@@ -73,27 +74,10 @@ def main():
         dest.unlink(missing_ok=True)
         try:dest.hardlink_to(a.rootfs.resolve())
         except OSError:shutil.copy2(a.rootfs,dest)
-    if not a.skip_userdata:
-        initial=max(12<<30,((layout['rootfs_size']+(2<<30)+(1<<30)-1)//(1<<30))*(1<<30))
-        layout['initial_size']=initial
-        data=out/'data-root'
-        if data.exists():shutil.rmtree(data)
-        base=data/layout_path;base.mkdir(parents=True)
-        (base/'rootfs.erofs').hardlink_to(dest)
-        (base/'build-id').write_text(build_id+'\n');(base/'upper').mkdir();(base/'work').mkdir()
-        # A separate scratch filesystem avoids keeping two expanded images on
-        # the output volume while converting to Android sparse format.
-        scratch=tempfile.TemporaryDirectory(prefix='houji-userdata-')
-        raw=Path(scratch.name)/'userdata.ext4'
-        with raw.open('wb') as stream:stream.truncate(initial)
-        run('mke2fs','-t','ext4','-F','-b','4096','-m','0','-L',layout['filesystem_label'],
-            '-U',layout['filesystem_uuid'],'-E','root_owner=0:0,lazy_itable_init=0,lazy_journal_init=0','-d',data,raw)
-        # mke2fs -d preserves input ownership; these build-generated files are root-owned.
-        for path in [*data.rglob('*')]:
-            relative='/'+str(path.relative_to(data))
-            for field in ['uid','gid']:run('debugfs','-w','-R','set_inode_field '+relative+' '+field+' 0',raw)
-        run('e2fsck','-fn',raw);run('img2simg',raw,out/'userdata.img')
-        scratch.cleanup();shutil.rmtree(data)
+    # Recorded even for update-only bundles, so make-userdata.py can build the
+    # fresh-install filesystem later from the root image alone.
+    layout['initial_size']=userdata.initial_size(layout['rootfs_size'])
+    if not a.skip_userdata:userdata.build_userdata(out,layout,sidecar=False)
     manifest=json.loads((out/'images.json').read_text())
     names=['boot.img','init_boot.img','vendor_boot.img','dtbo.img','vbmeta.img']
     if not a.skip_userdata:names.append('userdata.img')
@@ -102,7 +86,7 @@ def main():
     manifest['images']={name:{'size':(out/name).stat().st_size,'sha256':sha(out/name)} for name in names}
     (out/'images.json').write_text(json.dumps(manifest,indent=2)+'\n')
     (out/'SHA256SUMS').write_text(''.join(v['sha256']+'  '+n+'\n' for n,v in manifest['images'].items())+root_hash+'  rootfs.erofs\n')
-    shutil.copy2(PORT/'install/flash-internal.py',out/'flash-internal.py')
+    for tool in ('flash-internal.py','make-userdata.py'):shutil.copy2(PORT/'install'/tool,out/tool)
     print('Images ready for installer preflight:',out)
 
 

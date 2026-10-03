@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
-from buildlib import PORT, REPO, kernel_source, run
+from buildlib import PORT, REPO, kernel_source, run, stage_modules
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('root',type=Path)
 p.add_argument('work',type=Path)
@@ -50,14 +50,7 @@ target('etc/NetworkManager/ignore-sleep').unlink(missing_ok=True)
 for src in (REPO/'system_files/usr/share/inputplumber').rglob('*shanwan*'):
     if src.is_file():copy(src,str(src.relative_to(REPO/'system_files')))
 # Base kernels cannot load modules built for this kernel release.
-modules=target('usr/lib/modules')
-shutil.rmtree(modules)
-shutil.copytree(work/('kernel/staging-'+release)/'lib/modules',modules,symlinks=True)
-copy(work/'touch-module/houji-tcm-probe.ko','usr/lib/modules/'+release+'/extra/houji-tcm-probe.ko')
-copy(work/'nfc-module/houji-nfc-power.ko','usr/lib/modules/'+release+'/extra/houji-nfc-power.ko')
-for linkpath in (modules/release).glob('*'):
-    if linkpath.name in ['build','source'] and linkpath.is_symlink():linkpath.unlink()
-run('depmod','-b',root,release)
+stage_modules(work,release,target('usr/lib/modules'))
 for name in ['houji-stock-core','houji-stock-auth']:
     copy(users/'bin'/name,'usr/libexec/armada/'+name,0o755)
 for name in ['qbootctl','umtprd']:
@@ -133,6 +126,5 @@ link('etc/systemd/system/dbus-org.bluez.service','/usr/lib/systemd/system/blueto
 for name in ['rmtfs','qrtr-lookup','tqftpserv','houji-loc-test']:
     copy(work/'gps'/name,'usr/libexec/houji-gps/'+name,0o755)
 copy(PORT/'gps/nmea-bridge.py','usr/libexec/houji-gps/nmea-bridge.py',0o755)
-copy(work/'gps/module/houji-modem-overlay.ko','usr/lib/modules/'+release+'/extra/houji-modem-overlay.ko')
 run('depmod','-b',root,release)
 print('Staged clean Houji userspace and modules:',release)

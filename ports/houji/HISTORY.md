@@ -31,7 +31,8 @@ and build and install steps are in [README.md](README.md).
 12. [NFC](#nfc)
 13. [Session switching](#session-switching)
 14. [Making the build reproducible](#making-the-build-reproducible)
-15. [Open problems](#open-problems)
+15. [Smaller updates and CI builds](#smaller-updates-and-ci-builds)
+16. [Open problems](#open-problems)
 
 ## Boot and storage
 
@@ -805,6 +806,102 @@ Verification:
   credentials and its digest verified. Installer regression tests and final image checks
   also passed. No extracted firmware, source checkout or earlier build artefact from the
   porting workspace was needed.
+
+## Smaller updates and CI builds
+
+### One 7 GB image for every change
+
+- **Issue:** Every change meant a new 7.1 GB `rootfs.erofs`, and the bundle also
+  carried `userdata.img`, which is the same image again inside an ext4
+  filesystem (15 GB in all). That is too much to build, store and download per
+  commit.
+- **What is actually coupled** (read from the initramfs, `assemble.py` and
+  `stage-update.py`):
+  - The kernel and device tree live in `boot_b` and `vendor_boot_b`, apart from
+    the root image.
+  - The initramfs only compares a build id baked into `init_boot` with a file on
+    userdata. It does not look at the kernel, so a new kernel can be flashed
+    without touching `init_boot`.
+  - The modules for the base kernel are inside the read-only root image.
+  - The port itself adds only about 290 MB (uncompressed) to Armada's pinned
+    image, so most of every root image is identical from build to build.
+- **Kernel-only updates:** A new bundle type carries `boot.img`, `vendor_boot.img`
+  and the module tree (about 90 MB). `package-kernel-update.py` builds it with the
+  same packer as a full build. `install-kernel-update.py` runs on the phone, checks
+  every entry of the archive, installs the modules under their own release name and
+  writes a receipt. `flash-internal.py --kernel-only` needs that receipt and writes
+  only the two partitions. A build-time check refuses a kernel whose boot-critical
+  drivers (ext4, erofs, overlayfs, the UFS storage stack) are not built in, since
+  the installed initramfs loads no modules. Each build must carry its own kernel
+  release, because the root image's module directory sits in the read-only layer.
+- **Userdata built where it is flashed:** `make-userdata.py` builds `userdata.img`
+  from `rootfs.erofs` and `images.json` on the user's machine, and `assemble.py`
+  now uses the same code. A published bundle therefore holds only the root image.
+  The flasher accepts a locally built `userdata.img` only with a sidecar proving it
+  was made from this bundle's root image, so a stale or truncated file cannot be
+  flashed.
+- **Considered and left for later:** a layered root, with Armada's base published
+  once per pin and the port as a roughly 150 MB second overlay layer. It would shrink
+  full updates too, but it changes the initramfs and update tool and needs a
+  hardware reflash to prove, so it was not worth the boot-path risk yet.
+
+### How it was checked
+
+- **Packaging against a known image:** a bundle packaged from the already-flashed
+  `adsp3` build reproduced its `boot.img` byte for byte, and its `vendor_boot.img`
+  matched the full bundle's.
+- **On the phone:** the same bundle was installed, flashed and booted end to end:
+  modules installed, receipt written, host preflight passed, only `boot_b` and
+  `vendor_boot_b` written, and the phone returned on the same kernel with sensors,
+  touch, audio and the DSP running. That first run reinstalled the kernel that was
+  already running; a different kernel was flashed afterwards (next item).
+- **A different kernel, on hardware:** a fresh build under a new release name
+  (`-kdryrun`, same config and patch series) went through the whole path with the
+  fixed installer and booted. The phone matched its state before the flash, with
+  fewer error-level kernel messages, and a 120-second sleep in Game Mode completed
+  natively and woke on the RTC alarm. The first sleep attempt did nothing, and the
+  cause was the session: the phone had been booting into the Plasma desktop, where
+  PowerDevil holds a blocking inhibitor on the power key, so logind logged the press
+  and KDE did not suspend. The test was rerun after switching to Game Mode with the
+  port's own switch unit, and the original autologin file was restored byte for byte.
+- **A refusal that was right:** the first hardware attempt stopped with "already
+  holds different modules". I suspected the phone's own `depmod` run and checked
+  before changing anything: the generated index files were identical, and the only
+  differences were the three out-of-tree modules, which an earlier hand-made package
+  had stripped and the standard build copies unstripped. The installer compares whole
+  trees on purpose, so it was left as it is and the rehearsal bundle was rebuilt from
+  matching inputs.
+- **Tests that bite:** each safety rule was broken in turn to confirm a test fails.
+  That found two real gaps, a same-size corruption that only the checksum could catch
+  and a receipt check that was only covered on the older code path, and both now have
+  tests.
+- **A blocker the hardware test could not see:** an independent review found that
+  the first install of any *new* kernel release always failed. The installer
+  verified the staged tree with `modinfo -k <release>`, which only looks under
+  `/lib/modules`, where a release that is not installed yet does not exist. The
+  rehearsal above had reinstalled the *running* kernel, which takes the "already
+  installed" path where that lookup works, and the unit tests had mocked `modinfo`
+  away. Running the old installer on the phone with a fresh release reproduced it
+  exactly (`modinfo: ERROR: Module houji-tcm-probe not found`) and also showed the
+  failure path cleaning up after itself. The staged tree is now checked through
+  `modinfo -b`, and the same install on the phone with the fixed installer put in
+  1598 modules, left nothing behind and was a no-op the second time.
+- **Other review findings fixed:** `--replace` could delete the running kernel's
+  modules and was not atomic, so it now refuses the running release and any release
+  the root image owns, and swaps by renaming the old tree aside; the boot-critical
+  list missed the UFS PHY, the ramdisk decompressors, the EROFS decompressor and the
+  console; the release check was a prefix match; there was no free-space check; the
+  receipt was written through a link someone could have planted; and the packager
+  could wipe any directory given as `--output`. A half-applied flash now says so.
+- **Mocks that hid bugs:** the install tests now run the real `modinfo` and `depmod`
+  on genuine ELF module objects compiled in the test, and a test feeds the
+  packager's archive to the phone's reader.
+- **A stale copy:** a bundle carries a copy of the installer from the moment it was
+  packaged. The first phone run above used the copy from a build made before the
+  fix, so a bundle must be rebuilt, not reused, after the installer changes.
+- **A command-line bug only a real build could find:** `--localversion -kNAME`
+  failed in `argparse`, which reads the value as another option, in both the
+  documentation and the first workflow draft. The option now takes `kNAME`.
 
 ## Open problems
 

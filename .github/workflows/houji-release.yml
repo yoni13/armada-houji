@@ -1,0 +1,293 @@
+---
+name: Houji release
+
+# Builds the complete Xiaomi 14 image (kernel, userspace, root filesystem and
+# boot images) and publishes it as a GitHub release. Run it by hand when you
+# want something to flash. A kernel-only change does not need it: build the much
+# smaller kernel update locally (ports/houji/README.md, "Kernel-only updates").
+#
+# The root image is about 7 GB and GitHub release assets must be under 2 GiB, so
+# it is published in parts. userdata.img is not published: it is only the root
+# image inside an ext4 filesystem, and make-userdata.py builds it on your machine.
+#
+# It first runs the port's unit tests and patch checks, and the long build starts
+# only if every one of them passes. It uses no secrets beyond the workflow's own
+# token, and signs nothing: Android boot images are not signed by this port.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to create, for example houji-20261003
+        required: true
+        type: string
+      publish:
+        description: Create the release. Turn off to keep the files as a workflow artifact only.
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: houji-release
+  cancel-in-progress: false
+
+jobs:
+  # Fails within seconds on a bad or taken tag, before any minutes are spent.
+  tag:
+    name: Check the tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check the tag
+        run: |
+          [[ "${TAG}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$ ]] || { echo "::error::Invalid tag name."; exit 1; }
+          if [[ "${{ inputs.publish }}" == 'true' ]] && gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::error::Release ${TAG} already exists."
+            exit 1
+          fi
+
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The kernel-update tests build real archives (zstd) and the userdata
+      # tests build a small real ext4 image (e2fsprogs, Android sparse tools).
+      # Without these the userdata tests would skip rather than fail.
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends android-sdk-libsparse-utils e2fsprogs kmod tar zstd
+
+      # Sleep, charging, thermal, installer, kernel and userdata updates, session
+      # switching, NFC and GPS helpers, panel gamma, and the patch checker's tests.
+      - name: Run Python and shell tests
+        run: bash ports/houji/unit-tests.sh
+
+  kernel-patches:
+    name: Kernel patches
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read the pinned kernel version
+        id: pin
+        run: |
+          python3 - >> "${GITHUB_OUTPUT}" <<'PY'
+          import json
+          print('version=' + json.load(open('ports/houji/sources.json'))['linux']['version'])
+          PY
+
+      # The tarball is checked against its pinned SHA-256 either way.
+      - name: Cache the kernel tarball
+        uses: actions/cache@640a1c2554105b57832a23eea0b4672fc7a790d5 # v4.2.3
+        with:
+          path: ~/.cache/houji-checks
+          key: linux-${{ steps.pin.outputs.version }}
+
+      # Shared Armada series plus Houji's, in build order, with the build's own
+      # rules: every hunk parsed and no fuzz. Then replays the Wi-Fi DBS/SBS
+      # parser on the phone's captured record.
+      - name: Apply the kernel series
+        run: python3 ports/houji/check-patches.py kernel
+
+  userspace:
+    name: Userspace patches and native tests
+    runs-on: ubuntu-24.04
+    # The same distribution the Armada image is built on, so library versions
+    # match what the port is compiled against.
+    container: quay.io/fedora/fedora:44
+    timeout-minutes: 20
+    steps:
+      - name: Install build tools
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            gcc gcc-c++ git glib2-devel libgudev-devel libqmi-devel libqrtr-glib-devel \
+            patch pkgconf-pkg-config python3 tar xz
+
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # hexagonrpc, iio-sensor-proxy, gamescope and tqftpserv at their pinned
+      # revisions, with the port's patches applied. The patched trees are kept
+      # for the tests below.
+      - name: Apply the userspace patches
+        run: python3 ports/houji/check-patches.py userspace --keep "${RUNNER_TEMP}/patched"
+
+      - name: Build and run the native tests
+        run: bash ports/houji/native-tests.sh "${RUNNER_TEMP}/patched"
+
+  build:
+    name: Full image
+    needs: [tag, unit-tests, kernel-patches, userspace]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Disk space before
+        run: df -h /
+
+      # Kernel build dependencies (the same list upstream's kernel package
+      # installs), the userspace toolchain and generators, the image tools and
+      # rootless Podman for the pristine Armada image.
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            alsa-utils bc bison bsdextrautils build-essential ccache cpio curl device-tree-compiler \
+            dwarves e2fsprogs erofs-utils flex git glslang-tools kmod libarchive-tools libasound2-dev \
+            libelf-dev libglib2.0-dev-bin libssl-dev libwayland-bin m4 meson mtools ninja-build \
+            patch patchelf perl pkgconf podman protobuf-c-compiler python3 python3-libfdt rsync \
+            uidmap xz-utils zstd
+          # The build calls the toolchain by its cross-compiler names. On an arm64
+          # host they are the native tools under another name.
+          for tool in gcc g++ ar strip readelf objcopy objdump nm ranlib ld; do
+            if ! command -v "aarch64-linux-gnu-${tool}" >/dev/null; then
+              sudo ln -s "$(command -v "${tool}")" "/usr/local/bin/aarch64-linux-gnu-${tool}"
+            fi
+          done
+          aarch64-linux-gnu-gcc --version | head -1
+
+      # Ubuntu 24.04 blocks unprivileged user namespaces by default, which the
+      # rootless Podman steps of the build need.
+      - name: Allow rootless containers
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          podman info --format '{{.Host.Security.Rootless}} {{.Store.GraphDriverName}}'
+
+      - name: Read the pinned kernel version
+        id: pin
+        run: |
+          python3 - >> "${GITHUB_OUTPUT}" <<'PY'
+          import json
+          print('version=' + json.load(open('ports/houji/sources.json'))['linux']['version'])
+          PY
+
+      - name: Cache the kernel tarball
+        uses: actions/cache@640a1c2554105b57832a23eea0b4672fc7a790d5 # v4.2.3
+        with:
+          path: output/houji/work/kernel/linux-${{ steps.pin.outputs.version }}.tar.xz
+          key: linux-tarball-${{ steps.pin.outputs.version }}
+
+      - name: Cache compiled objects
+        uses: actions/cache@640a1c2554105b57832a23eea0b4672fc7a790d5 # v4.2.3
+        with:
+          path: ~/.cache/ccache
+          key: ccache-houji-release-${{ runner.arch }}-${{ steps.pin.outputs.version }}-${{ hashFiles('ports/houji/patches/**', 'packages/kernel/patches/**', 'packages/kernel/config/**', 'ports/houji/bringup.config') }}
+          restore-keys: |
+            ccache-houji-release-${{ runner.arch }}-${{ steps.pin.outputs.version }}-
+            ccache-houji-release-${{ runner.arch }}-
+
+      # Pulls the pinned Armada image (about 12 GB), builds the kernel and every
+      # component of the port, and assembles the root image and boot images.
+      - name: Build the image
+        run: python3 ports/houji/build.py --skip-userdata
+
+      - name: Disk space after
+        if: always()
+        run: df -h /
+
+      # The installer's own offline checks, as run before every flash.
+      - name: Verify the bundle
+        working-directory: output/houji/images
+        run: |
+          sha256sum -c SHA256SUMS
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('flash', 'flash-internal.py')
+          flash = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(flash)
+          manifest = flash.verify(Path('.'), boot_only=True)
+          print('Installer checks passed for build', manifest['layout']['build_id'])
+          PY
+
+      - name: Collect the release files
+        run: |
+          set -euo pipefail
+          images=output/houji/images
+          mkdir release
+          for file in boot.img init_boot.img vendor_boot.img dtbo.img vbmeta.img images.json \
+                      SHA256SUMS kernel.config flash-internal.py make-userdata.py; do
+            cp "${images}/${file}" release/
+          done
+          cp ports/houji/install/stage-update.py release/
+          # Each part stays under GitHub's 2 GiB asset limit.
+          split -b 1900M -d --suffix-length=2 "${images}/rootfs.erofs" release/rootfs.erofs.part-
+          (cd release && sha256sum rootfs.erofs.part-* > PARTS.sha256)
+          ls -l --block-size=M release
+
+      - name: Write the release notes
+        run: |
+          set -euo pipefail
+          python3 - > release-notes.md <<'PY'
+          import json, os
+          manifest = json.load(open('output/houji/images/images.json'))
+          sources = json.load(open('ports/houji/sources.json'))
+          layout = manifest['layout']
+          print('# Armada on Xiaomi 14 (houji), unofficial and experimental')
+          print()
+          print('**A fresh install erases all data on the phone.** Read the '
+                '[port README](https://github.com/%s/blob/%s/ports/houji/README.md) first.' % (
+                    os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA']))
+          print()
+          print('- Built from commit `%s`' % os.environ['GITHUB_SHA'])
+          print('- Armada base `%s`' % sources['armada_version'])
+          print('- Linux `%s`, build id `%s`' % (sources['linux']['version'], layout['build_id']))
+          print('- Reference firmware: HyperOS OS3.0.303.0.WNCTWXM (Taiwan)')
+          print()
+          print('## Using these files')
+          print()
+          print('Download everything into one directory, then:')
+          print()
+          print('```sh')
+          print('sha256sum -c PARTS.sha256                  # each downloaded part')
+          print('cat rootfs.erofs.part-* > rootfs.erofs      # join the root image')
+          print('sha256sum -c SHA256SUMS                    # boot images and the joined root image')
+          print('python3 make-userdata.py                   # fresh install only: builds userdata.img')
+          print('python3 flash-internal.py --images-dir . --serial YOUR_FASTBOOT_SERIAL --check-only')
+          print('```')
+          print()
+          print('Then follow "Install" in the README. To update an installed phone without erasing')
+          print('it, copy `rootfs.erofs`, `images.json` and `stage-update.py` to the phone and follow')
+          print('"Update without erasing games". `make-userdata.py` needs `mke2fs`, `debugfs`, `e2fsck`')
+          print('and `img2simg`, and scratch space about the size of the root image.')
+          PY
+          cat release-notes.md
+
+      - name: Publish the release
+        if: ${{ inputs.publish }}
+        run: |
+          gh release create "${TAG}" release/* \
+            --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" \
+            --title "Armada on Xiaomi 14: ${TAG}" --notes-file release-notes.md --prerelease
+
+      - name: Keep the files as an artifact
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: houji-release-${{ github.sha }}
+          path: |
+            release/
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0

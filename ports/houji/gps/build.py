@@ -30,9 +30,5 @@ run(*cc,'-D_GNU_SOURCE',tftp/'tqftpserv.c',tftp/'translate.c',*shared,'-o',out/'
 cross_file(out,sysroot)
 flags=shlex.split(subprocess.check_output([str(out/'pkg-config'),'--cflags','--libs','qmi-glib','qrtr-glib','gio-unix-2.0'],text=True))
 run(*cc,'-Werror=implicit-function-declaration',ASSETS/'houji-loc-test.c','-o',out/'houji-loc-test',*flags)
-module=out/'module';module.mkdir(exist_ok=True)
-for name in ['Makefile','houji-modem-overlay.c']:shutil.copy2(ASSETS/name,module/name)
-run('dtc','-@','-I','dts','-O','dtb','-o',module/'modem.dtbo',ASSETS/'modem.dtso')
-blob=(module/'modem.dtbo').read_bytes()
-(module/'modem-overlay.h').write_text('static const unsigned char modem_dtbo[] = {\n'+','.join(f'0x{x:02x}' for x in blob)+'\n};\n')
-run('make','-C',kernel,'ARCH=arm64','CROSS_COMPILE=aarch64-linux-gnu-','M='+str(module),'modules')
+# The kernel module needs only the kernel tree, so it has its own script.
+run('python3',ASSETS/'build-module.py',kernel,out/'module')

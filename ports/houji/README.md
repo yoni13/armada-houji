@@ -27,6 +27,7 @@ fixed is in [HISTORY.md](HISTORY.md).
 - [Build](#build)
 - [Install](#install)
 - [Update without erasing games](#update-without-erasing-games)
+- [Kernel-only updates](#kernel-only-updates)
 - [Continuous integration](#continuous-integration)
 - [Charging and sleep](#charging-and-sleep)
 - [USB and privacy](#usb-and-privacy)
@@ -186,7 +187,9 @@ Outputs go to `output/houji/` (ignored by Git). The flash bundle is
 | Option | Effect |
 | --- | --- |
 | `--skip-kernel` | Reuse a finished kernel while rebuilding userspace. |
-| `--skip-userdata` | Omit the destructive fresh-install image, for a preserving update. |
+| `--skip-userdata` | Omit the fresh-install `userdata.img`. It is only the root image wrapped in an ext4 filesystem, so `make-userdata.py` can build it later from `rootfs.erofs`. |
+| `--kernel-update` | Build only a [kernel-only update](#kernel-only-updates) (kernel, device tree and modules, about 90 MB). Needs `--localversion`. |
+| `--localversion kNAME` | Suffix for the kernel release (a leading `-` is added). A kernel update installs beside the running modules, so its release name must differ from the root image's. |
 | `--output DIR` | Choose another output directory. |
 | `--image IMAGE` | Use an arm64 Armada OCI image built from your fork. This may also require updating pinned development dependencies. |
 
@@ -205,6 +208,22 @@ files and verifies the archive first.
 
 ## Install
 
+### From a downloaded release
+
+A release from the **Houji release** workflow replaces the build step. Its root
+image comes in 1.9 GB parts because GitHub assets must be under 2 GiB. Download
+every file into one directory and join them:
+
+```sh
+sha256sum -c PARTS.sha256                    # each downloaded part
+cat rootfs.erofs.part-* > rootfs.erofs       # join the root image
+sha256sum -c SHA256SUMS                      # boot images and the joined root image
+```
+
+That directory then works like `output/houji/images/` below. A fresh install also
+needs `python3 make-userdata.py` there first, as described next; an update needs
+only `rootfs.erofs`, `images.json` and `stage-update.py`.
+
 ### Fresh install (erases userdata)
 
 Start from the reference stock firmware with an unlocked bootloader. Put the
@@ -219,6 +238,20 @@ python3 output/houji/images/flash-internal.py \
 python3 output/houji/images/flash-internal.py \
   --images-dir output/houji/images --serial YOUR_FASTBOOT_SERIAL --erase-userdata
 ```
+
+A bundle built here already contains `userdata.img`. A bundle that was built with
+`--skip-userdata`, including a downloaded release, does not: it holds only the root
+image, and `userdata.img` is just that image inside an ext4 filesystem. Build it
+next to the root image before flashing:
+
+```sh
+python3 make-userdata.py          # in the bundle directory; --scratch DIR picks the temporary space
+```
+
+It checks `rootfs.erofs` against `images.json`, writes `userdata.img` and a small
+`userdata.json`, and the installer refuses a `userdata.img` that does not belong
+to this bundle's root image. It needs `mke2fs`, `debugfs`, `e2fsck` and `img2simg`
+(Android sparse tools) and free scratch space about the size of the root image.
 
 `--erase-userdata` explicitly authorizes losing **all Android and user files**.
 The installer writes userdata first, then the boot components, activates slot B
@@ -278,19 +311,115 @@ work with this layout. Use this procedure instead.
 
 A boot-only flash without staging the matching root image is rejected.
 
+## Kernel-only updates
+
+A kernel, device-tree or kernel-module change does not need the 7 GB root image.
+A kernel update is about 90 MB: it replaces `boot_b` (kernel) and `vendor_boot_b`
+(device tree) and adds the new kernel's modules beside the running ones.
+`init_boot`, `dtbo`, `vbmeta` and `userdata` (your games and settings) are not
+touched. It cannot carry userspace changes (sleep script, services, Gamescope):
+those live in the read-only root image, so use the full update above for them.
+
+Build a bundle (the kernel build takes about 15 minutes on 20 cores and leaves a
+work directory of about 14 GB):
+
+```sh
+python3 ports/houji/build.py --kernel-update --localversion kMYBUILD   # output/houji/kernel-update/
+```
+
+1. Copy the bundle to the phone by any method you have enabled and, on the phone:
+
+   ```sh
+   sudo python3 /path/to/kernel-update/install-kernel-update.py /path/to/kernel-update \
+     --serial YOUR_FASTBOOT_SERIAL
+   ```
+
+   This verifies every checksum and each archive entry, installs the modules, and
+   writes `kernel-receipt.json`. Running it again is harmless.
+2. Copy `kernel-receipt.json` back, put the phone in **bootloader fastboot**, then:
+
+   ```sh
+   python3 flash-internal.py --kernel-only --images-dir kernel-update \
+     --serial YOUR_FASTBOOT_SERIAL --kernel-receipt kernel-receipt.json --check-only
+   python3 flash-internal.py --kernel-only --images-dir kernel-update \
+     --serial YOUR_FASTBOOT_SERIAL --kernel-receipt kernel-receipt.json
+   ```
+
+   It writes only `boot_b` and `vendor_boot_b`, then reboots.
+
+What stops a bad update:
+
+- **At packaging**, the build refuses a kernel the installed initramfs could not
+  boot (the filesystems it mounts, the ramdisk decompressors and the whole UFS
+  storage stack down to its PHY, clocks and regulators must be built in), an `Image`
+  that does not name exactly the declared release, and modules built for another
+  release. It also reads its own archive back with the phone's reader, and it
+  only ever overwrites an empty directory or an earlier bundle.
+- **On the phone**, only plain files and directories under `modules/<release>` are
+  accepted (no links, devices or traversal; owners and special bits are ignored,
+  modes are normalised), and free space is checked first. The new tree is verified
+  before it is renamed into place and removed again if the check afterwards fails.
+  The running kernel's modules and any release that belongs to the root image are
+  never touched. An installed tree of the same release that differs is refused
+  unless you pass `--replace`, which swaps it by renaming the old one aside and
+  puts it back if the new one fails. A run that was interrupted is cleaned up by
+  the next one.
+- **On the host**, the flasher needs the receipt (it ties this bundle to this
+  phone), checks that `boot.img` really is the declared release, and needs slot B,
+  an unlocked bootloader and large enough partitions. If the second flash fails
+  after the first succeeded, it says the phone now has a new kernel with the old
+  device tree.
+
+To undo an update, flash the previous bundle's `boot.img` and `vendor_boot.img`
+(a full bundle has them too) with `fastboot flash boot_b ...` and
+`fastboot flash vendor_boot_b ...`. The old modules stay installed. Each update
+leaves a module tree of about 180 MB on userdata, and a full update starts clean.
+
+**Tested on hardware:**
+
+- Re-installing the already running kernel from its own bundle, then flashing it.
+  The packaged `boot.img` was byte-identical to the image that was booting, the
+  phone-side install, receipt, preflight and flash all ran, and the phone came back
+  on the same kernel with sensors, touch, audio and the DSP running.
+- A **different** kernel through the whole path: a fresh local build
+  (`7.2.6-armada-houji-kdryrun`, same config and patch series as the running
+  kernel, a new release name). The phone-side install put in 1598 modules, the
+  receipt and preflight passed, only `boot_b` and `vendor_boot_b` were written, and
+  the phone booted the new kernel. Afterwards it matched its earlier state: the
+  same two failing units as before, Wi-Fi, audio, touch and sensor services up, the
+  DSP running, all three out-of-tree modules resolving under the new release, and
+  fewer error-level kernel messages (10, down from 13). A 120-second sleep in Steam
+  Game Mode then completed natively (118.5 s suspended, no failures, no DSP crash),
+  woken by the RTC alarm.
+
+Not covered: a Power-key wake or a DSP wake on the new kernel (the 120-second test
+saw neither), and sleep in the Plasma session. In Plasma, PowerDevil holds a
+blocking inhibitor on the power key, so an injected press reached logind but
+nothing suspended. That is session behaviour, not something the kernel path
+changed, but it was not compared against the previous kernel.
+
 ## Continuous integration
 
-The **Houji checks** workflow (`.github/workflows/houji.yml`) runs on pushes
-and pull requests to `main` that touch the port, and on demand. It uses no
-secrets, publishes nothing and needs no phone.
+One workflow covers the port: **Houji release** (`houji-release.yml`). It runs only
+on demand (Actions, Houji release, Run workflow), uses no secrets beyond GitHub's
+own token, and needs no phone. It builds the complete image on an arm64 runner and
+publishes it as a GitHub pre-release: boot images, the installer tools and the root
+image in 1.9 GB parts (GitHub assets must stay under 2 GiB). `userdata.img` is not
+published; `make-userdata.py` builds it on your machine. It needs a tag name; turn
+**publish** off to keep the files as an artifact instead.
 
-| Job | What it checks |
+No workflow runs on a push or pull request. When you start a release, it first
+checks the tag name (and that the release does not exist yet) and runs the three
+checks below as parallel jobs, taking about 4 minutes. The long image build starts
+only if all of them pass, so a failed check costs minutes, not hours.
+
+| Check | What it covers |
 | --- | --- |
-| Unit tests | Every Python and shell test (sleep, charging, thermal, installer, session switching, NFC and GPS helpers, panel gamma, and the patch checker itself). |
+| Unit tests | Every Python and shell test (sleep, charging, thermal, installer, kernel and userdata updates, session switching, NFC and GPS helpers, panel gamma, and the patch checker itself). |
 | Kernel patches | The shared Armada kernel series plus Houji's apply in build order, with every hunk parsed and no fuzz, onto the SHA-256-pinned Linux tarball. It then replays the Wi-Fi DBS/SBS parser on the phone's captured record. |
-| Userspace patches and native tests | The pinned revisions of hexagonrpc, iio-sensor-proxy, gamescope and tqftpserv take the port's patches. The C and C++ tests are then built and run against those patched trees, in a Fedora 44 container like the image. |
+| Userspace patches and native tests | The pinned revisions of hexagonrpc, iio-sensor-proxy, gamescope and tqftpserv take the port's patches. The C and C++ tests are then built and run against those patched trees, ideally in a Fedora 44 container like the image. |
 
-The same checks run locally:
+The same checks run locally, which is worth doing before a push:
 
 ```sh
 ports/houji/unit-tests.sh
@@ -299,8 +428,8 @@ python3 ports/houji/check-patches.py userspace --keep /tmp/patched
 ports/houji/native-tests.sh /tmp/patched         # needs gcc, g++ and glib, gio-unix, gudev, libqmi-glib, libqrtr-glib headers
 ```
 
-These checks do not build the kernel or the images. That is still
-`python3 ports/houji/build.py`, by hand.
+The unit tests also need `zstd`, e2fsprogs and the Android sparse tools
+(`img2simg`, `simg2img`); the userdata tests skip without them.
 
 **Armada's image workflows are switched off on this fork** (Build images,
 Packages, PR, PR disk image link, Build disk image, Publish disk image and

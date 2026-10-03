@@ -33,7 +33,7 @@ class InstallerTests(unittest.TestCase):
         files={'boot.img':boot,'init_boot.img':init,'vendor_boot.img':vendor,'dtbo.img':b'dtbo','vbmeta.img':vbmeta,
                'userdata.img':struct.pack('<I4H4I',0xed26ff3a,1,0,28,12,4096,1024,0,0)}
         self.manifest={'device':'xiaomi,houji','root_transport':'internal userdata ext4','automatic_reboot':False,
-                       'layout':{'initial_size':4<<20,'build_id':'abc','rootfs_sha256':'def'},'images':{}}
+                       'layout':{'initial_size':4<<20,'build_id':'abc','rootfs_sha256':'def','filesystem_uuid':'uuid-1'},'images':{}}
         for name,data in files.items():
             (self.root/name).write_bytes(data)
             self.manifest['images'][name]={'size':len(data),'sha256':hashlib.sha256(data).hexdigest()}
@@ -117,6 +117,69 @@ else:print('OKAY')
     def test_receipt_device_mismatch(self):
         receipt=self.root/'receipt.json';receipt.write_text(json.dumps({'build_id':'abc','rootfs_sha256':'def','serial_sha256':'wrong'}))
         self.assertNotEqual(self.invoke('--boot-only','--staged-receipt',str(receipt)).returncode,0);self.no_writes()
+
+
+    def publish(self,**changes):
+        """Make this a root-image-only bundle whose userdata.img was built locally."""
+        data=(self.root/'userdata.img').read_bytes()
+        del self.manifest['images']['userdata.img'];self.save()
+        info={'size':len(data),'sha256':hashlib.sha256(data).hexdigest(),'initial_size':4<<20,
+              'build_id':'abc','rootfs_sha256':'def','filesystem_uuid':'uuid-1'}
+        info.update(changes);(self.root/'userdata.json').write_text(json.dumps(info))
+
+    def test_published_bundle_needs_a_locally_built_userdata(self):
+        self.publish();(self.root/'userdata.json').unlink()
+        r=self.invoke('--erase-userdata');self.assertNotEqual(r.returncode,0)
+        self.assertIn('make-userdata.py',r.stderr);self.assertEqual(self.commands(),[])
+
+    def test_published_bundle_without_the_image_file_is_refused(self):
+        self.publish();(self.root/'userdata.img').unlink()
+        r=self.invoke('--erase-userdata');self.assertNotEqual(r.returncode,0)
+        self.assertIn('make-userdata.py',r.stderr);self.assertEqual(self.commands(),[])
+
+    def test_locally_built_userdata_is_flashed_in_the_usual_order(self):
+        self.publish();r=self.invoke('--erase-userdata');self.assertEqual(r.returncode,0,r.stderr)
+        writes=[c for c in self.commands() if c[0] in ['erase','flash','set_active','reboot']]
+        self.assertEqual(writes[0],['erase','userdata']);self.assertEqual(writes[1],['flash','userdata',str(self.root/'userdata.img')])
+        self.assertEqual(writes[-2:],[['set_active','b'],['reboot']])
+
+    def test_userdata_built_from_another_root_image_is_refused(self):
+        for change in ({'build_id':'other'},{'rootfs_sha256':'other'}):
+            with self.subTest(change):
+                self.publish(**change);r=self.invoke('--erase-userdata')
+                self.assertNotEqual(r.returncode,0);self.assertIn('different root image',r.stderr);self.assertEqual(self.commands(),[])
+                self.manifest['images']['userdata.img']={};self.save();(self.root/'userdata.img').write_bytes(
+                    struct.pack('<I4H4I',0xed26ff3a,1,0,28,12,4096,1024,0,0))
+
+    def test_userdata_with_another_or_missing_filesystem_identity_is_refused(self):
+        for label,change in (('other',{'filesystem_uuid':'uuid-2'}),('missing',None)):
+            with self.subTest(label):
+                self.publish(**(change or {}))
+                if change is None:
+                    info=json.loads((self.root/'userdata.json').read_text());del info['filesystem_uuid']
+                    (self.root/'userdata.json').write_text(json.dumps(info))
+                r=self.invoke('--erase-userdata');self.assertNotEqual(r.returncode,0)
+                self.assertIn('filesystem identity',r.stderr);self.assertEqual(self.commands(),[])
+                self.manifest['images']['userdata.img']={};self.save()
+
+    def test_corrupt_locally_built_userdata_is_refused_even_at_the_same_size(self):
+        self.publish();path=self.root/'userdata.img';data=bytearray(path.read_bytes());data[-1]^=0xFF;path.write_bytes(data)
+        r=self.invoke('--erase-userdata');self.assertNotEqual(r.returncode,0);self.assertIn('checksum',r.stderr);self.assertEqual(self.commands(),[])
+
+    def test_truncated_locally_built_userdata_is_refused(self):
+        self.publish();path=self.root/'userdata.img';path.write_bytes(path.read_bytes()[:-3])
+        r=self.invoke('--erase-userdata');self.assertNotEqual(r.returncode,0);self.assertEqual(self.commands(),[])
+
+    def test_locally_built_userdata_of_another_size_is_refused(self):
+        self.publish(initial_size=8<<20);r=self.invoke('--erase-userdata')
+        self.assertNotEqual(r.returncode,0);self.assertEqual(self.commands(),[])
+
+    def test_update_of_a_published_bundle_needs_no_userdata_at_all(self):
+        self.publish();(self.root/'userdata.json').unlink();(self.root/'userdata.img').unlink()
+        receipt=self.root/'receipt.json';receipt.write_text(json.dumps({'build_id':'abc','rootfs_sha256':'def',
+              'serial_sha256':hashlib.sha256(b'TEST').hexdigest()}))
+        r=self.invoke('--boot-only','--staged-receipt',str(receipt));self.assertEqual(r.returncode,0,r.stderr)
+        self.assertFalse(any('userdata' in c or 'erase' in c for c in self.commands()))
 
 
 if __name__=='__main__':unittest.main()

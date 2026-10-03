@@ -3,6 +3,7 @@ from pathlib import Path
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import urllib.request
 
@@ -17,6 +18,32 @@ def kernel_source(work):
     if package != 'VERSION=' + version:
         raise ValueError('Houji Linux pin does not match packages/kernel/BASE.env')
     return Path(work) / 'kernel' / ('linux-' + version)
+
+
+# Out-of-tree modules built against the same kernel tree: (work subdirectory, file).
+EXTRA_MODULES = (('touch-module', 'houji-tcm-probe.ko'),
+                 ('nfc-module', 'houji-nfc-power.ko'),
+                 ('gps/module', 'houji-modem-overlay.ko'))
+
+
+def stage_modules(work, release, modules):
+    """Fill `modules` (a lib/modules directory) with one kernel's modules plus the
+    port's out-of-tree modules. Used by the root image and by kernel updates, so
+    both ship identical trees. Running depmod afterwards is the caller's job."""
+    work, modules = Path(work), Path(modules)
+    if modules.exists():
+        shutil.rmtree(modules)
+    shutil.copytree(work / ('kernel/staging-' + release) / 'lib/modules', modules, symlinks=True)
+    extra = modules / release / 'extra'
+    extra.mkdir(exist_ok=True)
+    for folder, name in EXTRA_MODULES:
+        destination = extra / name
+        destination.unlink(missing_ok=True)
+        shutil.copyfile(work / folder / name, destination)
+        destination.chmod(0o644)
+    for link in (modules / release).glob('*'):
+        if link.name in ('build', 'source') and link.is_symlink():
+            link.unlink()
 
 
 def run(*args, **kwargs):

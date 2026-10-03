@@ -52,6 +52,36 @@ def verify_initramfs(image):
     require(all(struct.unpack_from('<I',elf,phoff+i*entsize)[0]!=3 for i in range(count)),'Early BusyBox must be statically linked')
 
 
+def check_boot_image(path):
+    with path.open('rb') as stream:header=stream.read(1584)
+    require(header[:8]==b'ANDROID!' and struct.unpack_from('<I',header,40)[0]==4,'Not Android boot v4')
+    args=header[44:1580].split(b'\0',1)[0].decode().split()
+    for word in ['rdinit=/init','clk_ignore_unused','pd_ignore_unused','regulator_ignore_unused']:
+        require(word in args,'Missing boot argument: '+word)
+    require(struct.unpack_from('<I',header,16)[0]!=0,'Missing stock ABL version metadata')
+
+
+def check_vendor_boot(path):
+    with path.open('rb') as stream:header=stream.read(12)
+    require(header[:8]==b'VNDRBOOT' and struct.unpack_from('<I',header,8)[0]==4,'Invalid vendor_boot')
+
+
+def verify_kernel_update(root):
+    m=json.loads((root/'kernel-update.json').read_text())
+    require(m.get('format')==1 and m.get('kind')=='kernel-update','Not a kernel update bundle')
+    require(m.get('device')=='xiaomi,houji','Wrong device in manifest')
+    require(set(m.get('files',{}))=={'boot.img','vendor_boot.img','modules.tar.zst'},'Unexpected file list')
+    for name,info in m['files'].items():
+        path=root/name
+        require(path.is_file() and path.stat().st_size==info['size'],name+' size mismatch')
+        require(sha(path)==info['sha256'],name+' checksum mismatch')
+    check_boot_image(root/'boot.img');check_vendor_boot(root/'vendor_boot.img')
+    # The manifest's release name is what the receipt and the installed modules are tied to.
+    require(b'Linux version '+m['kernel_release'].encode()+b' (' in (root/'boot.img').read_bytes(),
+            'boot.img is not kernel release '+m['kernel_release'])
+    return m
+
+
 def verify(root,boot_only=False):
     m=json.loads((root/'images.json').read_text())
     require(m.get('device')=='xiaomi,houji','Wrong device in manifest')
@@ -59,32 +89,43 @@ def verify(root,boot_only=False):
     require(m.get('automatic_reboot') is False,'Unexpected reboot timer')
     names=set(m['images'])
     require(names in [BOOT_NAMES,BOOT_NAMES|{'userdata.img'}],'Unexpected image list')
-    require(boot_only or 'userdata.img' in names,'Fresh installation requires userdata.img')
+    local_userdata=None
+    if not boot_only and 'userdata.img' not in names:
+        # A root-image-only bundle: userdata.img must have been built here by
+        # make-userdata.py, from this bundle's own root image.
+        local_userdata=json.loads((root/'userdata.json').read_text()) if (root/'userdata.json').is_file() else None
+        require(local_userdata is not None and (root/'userdata.img').is_file(),
+                'Fresh installation requires userdata.img; run make-userdata.py in this directory first')
+        layout=m['layout']
+        require(local_userdata['build_id']==layout['build_id'] and local_userdata['rootfs_sha256']==layout['rootfs_sha256'],
+                'userdata.img was built from a different root image; run make-userdata.py again')
+        require((root/'userdata.img').stat().st_size==local_userdata['size'],'userdata.img size mismatch')
+        require(sha(root/'userdata.img')==local_userdata['sha256'],'userdata.img checksum mismatch; run make-userdata.py again')
+        require(local_userdata['initial_size']==layout.get('initial_size',local_userdata['initial_size']),
+                'userdata.img does not match this bundle layout')
+        require(local_userdata.get('filesystem_uuid')==layout.get('filesystem_uuid'),
+                'userdata.img was built for a different filesystem identity; run make-userdata.py again')
     for name,info in m['images'].items():
         path=root/name
         require(path.stat().st_size==info['size'],name+' size mismatch')
         require(sha(path)==info['sha256'],name+' checksum mismatch')
-    with (root/'boot.img').open('rb') as stream:header=stream.read(1584)
-    require(header[:8]==b'ANDROID!' and struct.unpack_from('<I',header,40)[0]==4,'Not Android boot v4')
-    args=header[44:1580].split(b'\0',1)[0].decode().split()
-    for word in ['rdinit=/init','clk_ignore_unused','pd_ignore_unused','regulator_ignore_unused']:
-        require(word in args,'Missing boot argument: '+word)
-    require(struct.unpack_from('<I',header,16)[0]!=0,'Missing stock ABL version metadata')
+    check_boot_image(root/'boot.img')
     with (root/'init_boot.img').open('rb') as stream:header=stream.read(44)
     require(header[:8]==b'ANDROID!' and struct.unpack_from('<I',header,40)[0]==4,'Invalid init_boot')
     verify_initramfs((root/'init_boot.img').read_bytes())
-    with (root/'vendor_boot.img').open('rb') as stream:header=stream.read(12)
-    require(header[:8]==b'VNDRBOOT' and struct.unpack_from('<I',header,8)[0]==4,'Invalid vendor_boot')
+    check_vendor_boot(root/'vendor_boot.img')
     vbmeta=(root/'vbmeta.img').read_bytes()
     require(len(vbmeta)>=256 and vbmeta[:4]==b'AVB0','Invalid vbmeta header')
     auth_size,aux_size=struct.unpack_from('>QQ',vbmeta,12)
     require(256+auth_size+aux_size<=len(vbmeta),'Truncated vbmeta image')
     require(struct.unpack_from('>I',vbmeta,120)[0]&3==3,'vbmeta verification flags are not prepared')
-    if 'userdata.img' in names:
+    if 'userdata.img' in names or local_userdata is not None:
         with (root/'userdata.img').open('rb') as stream:header=stream.read(28)
         magic,major,minor,hs,cs,bs,blocks,chunks,crc=struct.unpack('<I4H4I',header)
         require(magic==0xed26ff3a and major==1 and bs==4096 and hs==28 and cs==12,'Invalid Android sparse userdata')
-        require(blocks*bs==m['layout']['initial_size'],'Sparse userdata size mismatch')
+        expected=m['layout']['initial_size'] if local_userdata is None else local_userdata['initial_size']
+        require(blocks*bs==expected,'Sparse userdata size mismatch')
+        m['layout'].setdefault('initial_size',expected)
     return m
 
 
@@ -95,17 +136,29 @@ def main():
     mode=p.add_mutually_exclusive_group()
     mode.add_argument('--erase-userdata',action='store_true',help='Erase ALL user data for a fresh installation')
     mode.add_argument('--boot-only',action='store_true',help='Preserve userdata; requires a staged-update receipt')
+    mode.add_argument('--kernel-only',action='store_true',
+                      help='Replace only the kernel and device tree; requires a kernel-update receipt')
     p.add_argument('--staged-receipt',type=Path)
+    p.add_argument('--kernel-receipt',type=Path,help='kernel-receipt.json from install-kernel-update.py')
     p.add_argument('--fastboot',default='fastboot')
     p.add_argument('--check-only',action='store_true')
-    a=p.parse_args();root=a.images_dir.resolve();m=verify(root,a.boot_only)
-    if a.boot_only:
+    a=p.parse_args();root=a.images_dir.resolve()
+    m=verify_kernel_update(root) if a.kernel_only else verify(root,a.boot_only)
+    if a.kernel_only:
+        require(a.kernel_receipt is not None,'Run install-kernel-update.py on the phone before a kernel-only update')
+        receipt=json.loads(a.kernel_receipt.read_text())
+        require(receipt['kernel_release']==m['kernel_release'],'Receipt is for another kernel release')
+        for key,name in [('boot_sha256','boot.img'),('vendor_boot_sha256','vendor_boot.img'),('modules_sha256','modules.tar.zst')]:
+            require(receipt[key]==m['files'][name]['sha256'],'Receipt does not match '+name)
+        require(receipt['serial_sha256']==hashlib.sha256(a.serial.encode()).hexdigest(),'Receipt belongs to another phone')
+    elif a.boot_only:
         require(a.staged_receipt is not None,'Run stage-update.py on the phone before a boot-only update')
         receipt=json.loads(a.staged_receipt.read_text())
         require(receipt['build_id']==m['layout']['build_id'],'Staged build does not match boot images')
         require(receipt['rootfs_sha256']==m['layout']['rootfs_sha256'],'Staged root does not match manifest')
         require(receipt['serial_sha256']==hashlib.sha256(a.serial.encode()).hexdigest(),'Receipt belongs to another phone')
-    require(a.check_only or a.boot_only or a.erase_userdata,'Choose --erase-userdata or --boot-only')
+    require(a.check_only or a.boot_only or a.kernel_only or a.erase_userdata,
+            'Choose --erase-userdata, --boot-only or --kernel-only')
     fb=shutil.which(a.fastboot);require(fb is not None,'fastboot not found')
     def command(*args,timeout=90):
         result=subprocess.run([fb,'-s',a.serial,*args],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=timeout)
@@ -115,16 +168,35 @@ def main():
                           (('getvar','snapshot-update-status'),'snapshot-update-status: none'),
                           (('oem','device-info'),'Device unlocked: true')]:
         require(expected in command(*args),'Bootloader preflight failed: '+args[-1])
-    for name in sorted(BOOT_NAMES|({'userdata.img'} if not a.boot_only else set())):
-        part='userdata' if name=='userdata.img' else name[:-4]+'_b'
+    if a.kernel_only:
+        # Only slot B holds an installed Armada; its init_boot is left untouched.
+        require('current-slot: b' in command('getvar','current-slot'),'Bootloader preflight failed: current-slot')
+        targets=[(name[:-4]+'_b',m['files'][name]['size']) for name in ('boot.img','vendor_boot.img')]
+    else:
+        targets=[('userdata' if name=='userdata.img' else name[:-4]+'_b',
+                  m['layout']['initial_size'] if name=='userdata.img' else m['images'][name]['size'])
+                 for name in sorted(BOOT_NAMES|({'userdata.img'} if not a.boot_only else set()))]
+    for part,needed in targets:
         output=command('getvar','partition-size:'+part)
         match=re.search(r'partition-size:'+re.escape(part)+r':\s*((?:0x)?[0-9a-fA-F]+)\b',output)
         require(match is not None,'Missing partition capacity: '+part)
-        size=int(match[1],16)
-        needed=m['layout']['initial_size'] if part=='userdata' else m['images'][name]['size']
-        require(size>=needed,part+' is too small')
+        require(int(match[1],16)>=needed,part+' is too small')
     if a.check_only:
         print('Preflight passed; no storage written.');return
+    if a.kernel_only:
+        written=[]
+        try:
+            for name in ('boot','vendor_boot'):
+                command('flash',name+'_b',str(root/(name+'.img')),timeout=180)
+                written.append(name+'_b')
+        except (subprocess.SubprocessError,OSError):
+            if written:
+                print('WARNING: '+', '.join(written)+' was written but the next flash failed, so the phone now has a new '
+                      'kernel with the old device tree. Run this command again, or restore both images from the previous bundle.',flush=True)
+            raise
+        command('reboot')
+        print('Kernel flashed. Verify the physical boot; the previous kernel remains flashable from its bundle.')
+        return
     if a.erase_userdata:
         command('erase','userdata',timeout=300)
         command('flash','userdata',str(root/'userdata.img'),timeout=1800)
