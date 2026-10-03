@@ -44,9 +44,9 @@ printf '%s\n' "$rootdev" >/run/houji/root-device
 # The DSP firmware and factory calibration belong to this handset. Never replay
 # the ext4 journal or write to these stock partitions.
 mkdir -p /run/houji/firmware /run/houji/dsp /run/houji/persist /run/houji/qcom/sensors
-mount -t vfat -o ro "$(partition modem_b)" /run/houji/firmware || fail 'ADSP firmware'
-mount -t ext4 -o ro,noload "$(partition dsp_b)" /run/houji/dsp || fail 'DSP libraries'
-mount -t ext4 -o ro,noload "$(partition persist)" /run/houji/persist || fail 'factory calibration'
+mount -t vfat -o ro "$(partition modem_b)" /run/houji/firmware || fail 'modem_b (ADSP firmware) is unreadable; see the README, "Starting from stock firmware"'
+mount -t ext4 -o ro,noload "$(partition dsp_b)" /run/houji/dsp || fail 'dsp_b (DSP libraries) is unreadable; see the README, "Starting from stock firmware"'
+mount -t ext4 -o ro,noload "$(partition persist)" /run/houji/persist || fail 'persist (factory calibration) is unreadable'
 echo /run/houji/firmware/image >/sys/module/firmware_class/parameters/path
 cp -r /newroot/usr/lib/armada/houji/sensors/config /run/houji/qcom/sensors/
 cp /newroot/usr/lib/armada/houji/sensors/sns_reg.conf /run/houji/qcom/sensors/

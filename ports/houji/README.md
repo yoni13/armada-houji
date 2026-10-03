@@ -44,7 +44,9 @@ You need:
 - A backup of anything on the phone. A fresh install wipes `userdata`.
 
 Know how to get back to Xiaomi fastboot, and keep the original firmware
-archive if you may want to return to HyperOS.
+archive if you may want to return to HyperOS. If the phone is not on the
+reference firmware yet, read [Starting from stock firmware](#starting-from-stock-firmware)
+before you flash it.
 
 **Tested on one phone only:** the development handset, with its N3 panel and its
 storage size. Other panel revisions, capacities and regional firmware are
@@ -109,6 +111,12 @@ Results below are from the development handset.
   network recovery failure, so it was disabled.
 - **Charging.** The adapter's 90 W rating is not a measured rate. Computer USB
   ports can supply less than the running system uses. Wireless charging stops.
+- **The bootloader can stall after the big write.** On the development phone the
+  Xiaomi bootloader stopped answering right after the 7.5 GB `userdata` write,
+  twice: once as a timed-out `boot_b` write, once as a `reboot` it acknowledged and
+  ignored. Nothing was lost either time. The installer writes `userdata` last to
+  cope with this; if the phone does not restart, hold Power alone for 10-15
+  seconds.
 - **First boot.** Armada's `armada-controller-type.service` may report failed
   with no controller attached. This does not affect touch or sessions. If
   Flatpak setup fails before the clock syncs, connect to Wi-Fi, wait for the
@@ -208,6 +216,40 @@ files and verifies the archive first.
 
 ## Install
 
+### Starting from stock firmware
+
+Armada reads the phone's own firmware from slot B (`modem_b` and `dsp_b`) and from
+`persist`, so slot B's firmware must be valid at Armada's first boot. If you flash
+Xiaomi's fastboot package to get onto the reference firmware, three things matter.
+Each comes from one phone and one run, not from a wider test.
+
+1. **Do not boot Android before installing Armada.** In the one case where Android
+   was booted after the package was flashed, nine slot-B firmware partitions
+   (`modem_b`, `modemfirmware_b`, `bluetooth_b`, `dsp_b`, `qupfw_b`,
+   `featenabler_b`, `imagefv_b`, `xbl_ramdump_b` and `recovery_b`) were later found
+   blank while slot A was correct, and Armada stopped at start-up with
+   `modem_b (ADSP firmware) is unreadable`. Flashing the package without booting
+   Android and installing Armada straight afterwards did not do this. Booting
+   Android is the only difference seen; it is not a proven cause. See
+   [HISTORY.md](HISTORY.md#installing-over-stock-android).
+2. **Stop Xiaomi's script before it reboots.** Its last two lines are
+   `fastboot $* reboot` and the error check after it. Run a copy without them:
+
+   ```sh
+   head -n -2 flash_all.sh > flash_all_noboot.sh
+   tail -2 flash_all_noboot.sh        # must end with the "set_active a" line and its error check
+   bash flash_all_noboot.sh
+   ```
+
+3. **Restart the bootloader before the installer.** The package's script loads
+   Xiaomi's CRC list into the bootloader session, and until the bootloader restarts
+   it refuses any image that is not on the list (`Error flashing partition :
+   0000001B`). Run `fastboot reboot-bootloader`: it restarts back into fastboot and
+   does not boot Android.
+
+If you did boot Android first and Armada stops with that message, flash the
+package again as above and reinstall.
+
 ### From a downloaded release
 
 A release from the **Houji release** workflow replaces the build step. Its root
@@ -254,21 +296,26 @@ to this bundle's root image. It needs `mke2fs`, `debugfs`, `e2fsck` and `img2sim
 (Android sparse tools) and free scratch space about the size of the root image.
 
 `--erase-userdata` explicitly authorizes losing **all Android and user files**.
-The installer writes userdata first, then the boot components, activates slot B
-and reboots. First boot should reach Plasma Mobile. Set up Wi-Fi in the normal UI,
-and use the session switch to enter Steam Game Mode.
+The installer writes the boot components first and activates slot B, then erases
+and writes `userdata` last, and reboots. `userdata` goes last because the Xiaomi
+bootloader has stopped answering right after that 7.5 GB write: with slot B already
+active, restarting a stalled phone boots Armada instead of Android. If the phone is
+still in fastboot 30 seconds after the reboot command, the installer says so; hold
+the Power button alone for 10-15 seconds (not Volume Down). First boot should reach
+Plasma Mobile. Set up Wi-Fi in the normal UI, and use the session switch to enter
+Steam Game Mode.
 
 For reference, the write sequence after preflight is:
 
 ```sh
-fastboot -s YOUR_FASTBOOT_SERIAL erase userdata
-fastboot -s YOUR_FASTBOOT_SERIAL flash userdata output/houji/images/userdata.img
 fastboot -s YOUR_FASTBOOT_SERIAL flash boot_b output/houji/images/boot.img
 fastboot -s YOUR_FASTBOOT_SERIAL flash init_boot_b output/houji/images/init_boot.img
 fastboot -s YOUR_FASTBOOT_SERIAL flash vendor_boot_b output/houji/images/vendor_boot.img
 fastboot -s YOUR_FASTBOOT_SERIAL flash dtbo_b output/houji/images/dtbo.img
 fastboot -s YOUR_FASTBOOT_SERIAL flash vbmeta_b output/houji/images/vbmeta.img
 fastboot -s YOUR_FASTBOOT_SERIAL set_active b
+fastboot -s YOUR_FASTBOOT_SERIAL erase userdata
+fastboot -s YOUR_FASTBOOT_SERIAL flash userdata output/houji/images/userdata.img
 fastboot -s YOUR_FASTBOOT_SERIAL reboot
 ```
 
@@ -279,6 +326,8 @@ Armada device's ABL scripts, format `persist`, or erase modem NV partitions.
 
 If a boot fails, use **Power + Volume Down** to return to fastboot, then reflash
 a known-good bundle. Keep the previous boot bundle until a new one is verified.
+A start-up failure prints the unreadable partition's name on the screen before
+dropping to a shell.
 
 ## Update without erasing games
 

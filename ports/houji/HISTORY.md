@@ -32,7 +32,8 @@ and build and install steps are in [README.md](README.md).
 13. [Session switching](#session-switching)
 14. [Making the build reproducible](#making-the-build-reproducible)
 15. [Smaller updates and CI builds](#smaller-updates-and-ci-builds)
-16. [Open problems](#open-problems)
+16. [Installing over stock Android](#installing-over-stock-android)
+17. [Open problems](#open-problems)
 
 ## Boot and storage
 
@@ -875,10 +876,30 @@ cross compiler. That reproduced the failure exactly (same Meson 1.3.2, same GCC
 
 With those in place the sensors stack, Gamescope, the GPS tools and BusyBox build
 under Ubuntu's toolchain, and `assemble.py` produced a bundle whose `boot.img` is the
-same size as the flashed one. Not rehearsed: the root image step (it needs the
-Armada image mounted under rootless Podman) and the release upload. The workflow also
-now saves its caches even when the build fails, so a late failure no longer throws
-the kernel build away.
+same size as the flashed one. The root image step (it needs the Armada image mounted
+under rootless Podman) and the release upload could not be rehearsed, and both worked
+on the next run: the full image built in 58 minutes (the build step took 55, with a
+cold 39-minute kernel) and the pre-release was published. The workflow also now saves
+its caches even when the build fails, so a late failure no longer throws the kernel
+build away.
+
+The published files were downloaded and checked the way a user would use them. The
+parts, the joined root image (exactly the manifest's size) and `SHA256SUMS` all
+verified; `fsck.erofs` passed and the image holds the port's files, including the
+CI-built Gamescope; `make-userdata.py` built `userdata.img` from the real 7.5 GB image
+in 110 seconds with a clean `e2fsck`; and the flasher's offline checks passed for both
+a fresh install and an update, and refused the userdata image after one flipped byte.
+Against the build that was flashed and booted:
+
+- `vendor_boot.img` is byte-for-byte identical, so Ubuntu's `dtc` and `fdtoverlay`
+  produce the same device tree. `dtbo.img` and `vbmeta.img` are identical too.
+- The kernel config differs in 22 lines, all of them values detected from the
+  toolchain (compiler, binutils, `pahole`, OpenSSL), none selected. The visible effect
+  is that `CONFIG_RELR` is off, because Ubuntu's linker cannot pack relocations, so
+  `boot.img` is 82.2 MB instead of 67.9 MB, 82% of `boot_b`. Every boot-critical
+  option is still built in.
+- Not done: flashing the CI-built image on the phone. Its kernel was built by GCC 13
+  rather than GCC 16, so it is a different binary from anything tested on hardware.
 
 ### How it was checked
 
@@ -937,6 +958,79 @@ the kernel build away.
 - **A command-line bug only a real build could find:** `--localversion -kNAME`
   failed in `argparse`, which reads the value as another option, in both the
   documentation and the first workflow draft. The option now takes `kNAME`.
+
+## Installing over stock Android
+
+### Blank slot-B firmware and a stalling bootloader
+
+- **Issue:** The first install onto a phone that had just been reflashed with
+  Xiaomi's fastboot package stopped in the initramfs with `Armada startup failed:
+  ADSP firmware`. Before that, the installer's `boot_b` write had timed out right
+  after the 7.5 GB `userdata` write, and the bootloader had stopped answering (even
+  `fastboot reboot fastboot` was ignored) until the phone was restarted by hand.
+- **What the boot showed:** Everything before the firmware mount worked. `userdata`
+  mounted, the build id matched, the 7.5 GB root image mounted and the overlay came
+  up, so the stalled write had not damaged anything. `modem_b` was found (the same
+  partition that mounted in earlier boots) but would not mount as FAT.
+- **Diagnosis, one step at a time:**
+  - A diagnostic `init_boot` printed what the partition looked like. `blkid` found
+    nothing on `modem_b` but identified `modem_a` as the FAT image carrying the
+    package's volume id. The kernel's FAT driver does not compare a filesystem's
+    declared size with the device, so the image declaring 211.8 MB while its file is
+    131.6 MB was not the cause.
+  - A second diagnostic hashed both partitions. `modem_a` matched the package file
+    exactly, and `modem_b`'s whole 131,624,960-byte image region hashed the same as
+    that many zero bytes. It was blank, not mis-written.
+  - A USB serial console, started from `fail()` in a debug-only initramfs, made it
+    possible to run commands on the phone instead of photographing its screen. The
+    shipped device tree sets the USB controller to `otg` with a default role of
+    `peripheral`, and the kernel has the configfs ACM gadget built in, so a gadget
+    started from the initramfs enumerates on the PC as an ordinary serial port. It
+    was tied to one debug image and is not shipped.
+  - Through that console every slot-B firmware partition was compared with its
+    slot-A twin. Nine differed: `featenabler`, `modem`, `modemfirmware`,
+    `bluetooth`, `dsp`, `qupfw`, `xbl_ramdump`, `imagefv` and `recovery`. Eight were
+    blank at the start, and `modemfirmware` differed without being blank there. The
+    other 19 pairs compared, the boot-critical firmware (`abl`, `xbl`, `tz`, `hyp`,
+    `aop`, `uefi` and similar), were byte-identical. All nine slot-A partitions
+    matched the package files by length and SHA-256, and `persist` was intact.
+  - The package's script had flashed all 33 A/B partitions, and its log reported
+    both slots written for every one, including these nine.
+- **Fix for that phone:** the nine slot-B partitions were copied from slot A, each
+  source checked against the package hash before the copy and each result after it.
+  `modem_b`, `dsp_b` and `persist` then mounted as the init expects and Armada
+  booted.
+- **What caused it:** not established. A second run flashed the package again
+  without booting Android and installed Armada straight afterwards. Armada booted
+  and found `modem_b` intact, so the package does write slot B. Booting Android in
+  between is the only difference between the two runs, which makes it the main
+  suspect. It was not tested directly, because that would erase the install. A
+  forced restart followed a bootloader stall in both runs, so it does not explain
+  the difference.
+- **Two more behaviours found on the way:**
+  - When the bootloader reports `crc: 1`, the package's script loads Xiaomi's
+    `crclist`. For the rest of that fastboot session the bootloader refuses any
+    image not on the list (`Error flashing partition : 0000001B`, the UEFI CRC
+    error). A bootloader restart clears it, and `fastboot reboot-bootloader` does
+    that without booting Android. It had not shown before only because the script's
+    own reboot cleared it.
+  - The bootloader stalled after the 7.5 GB `userdata` write in both runs: first as
+    a timed-out `boot_b` write, then as a `reboot` that was acknowledged and
+    ignored. The data was intact both times, and holding Power alone restarted the
+    phone.
+- **Changes:**
+  - The installer writes the boot images and activates slot B, then writes
+    `userdata` last. Nothing that matters follows the stalling write, and a restart
+    after a stall boots Armada instead of Android. It explains the CRC refusal, says
+    to hold Power if the phone is still in fastboot after the reboot, and says what
+    state the phone is in if the `userdata` write fails.
+  - The init's failure messages name the unreadable partition and point to the
+    README.
+  - The README gained "Starting from stock firmware".
+- **Lessons:** a flash log that says both slots were written does not prove both
+  slots hold the data. A mount that fails without a kernel message needs the
+  partition's own bytes looked at. A console on the failing system is worth more
+  than photographs of its screen.
 
 ## Open problems
 

@@ -11,8 +11,18 @@ import re
 import shutil
 import struct
 import subprocess
+import time
 
 BOOT_NAMES={'boot.img','init_boot.img','vendor_boot.img','dtbo.img','vbmeta.img'}
+# Xiaomi's flash_all script loads a CRC list into the bootloader session; until the bootloader restarts it
+# refuses every image that is not on the list, with the UEFI CRC error code 0x1B.
+CRC_REFUSAL=re.compile(r'Error flashing partition\s*:\s*0*1B\b')
+CRC_HINT=('The bootloader refused an image with a CRC error (0x1B), so that image was not written. This happens in the same '
+          'fastboot session as Xiaomi\'s flash_all script, which loads Xiaomi\'s CRC list. Run "fastboot reboot-bootloader" '
+          '(it restarts into fastboot and does not boot Android), then run this installer again.')
+STALL_NOTE=('The phone acknowledged the reboot but is still in fastboot. After a large userdata write the Xiaomi bootloader '
+            'can stall. If the phone has not restarted by itself, hold the Power button alone for 10-15 seconds (not Volume '
+            'Down). Slot B is active, so it boots Armada.')
 
 
 def require(condition,message):
@@ -142,6 +152,8 @@ def main():
     p.add_argument('--kernel-receipt',type=Path,help='kernel-receipt.json from install-kernel-update.py')
     p.add_argument('--fastboot',default='fastboot')
     p.add_argument('--check-only',action='store_true')
+    p.add_argument('--reboot-wait',type=float,default=30,
+                   help='Seconds to wait for the phone to leave fastboot after the reboot command; 0 skips the check')
     a=p.parse_args();root=a.images_dir.resolve()
     m=verify_kernel_update(root) if a.kernel_only else verify(root,a.boot_only)
     if a.kernel_only:
@@ -162,7 +174,21 @@ def main():
     fb=shutil.which(a.fastboot);require(fb is not None,'fastboot not found')
     def command(*args,timeout=90):
         result=subprocess.run([fb,'-s',a.serial,*args],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=timeout)
-        print(result.stdout,end='',flush=True);result.check_returncode();return result.stdout
+        print(result.stdout,end='',flush=True)
+        if result.returncode and CRC_REFUSAL.search(result.stdout):raise ValueError(CRC_HINT)
+        result.check_returncode();return result.stdout
+    def reboot():
+        try:command('reboot',timeout=40)
+        except subprocess.TimeoutExpired:
+            print(STALL_NOTE,flush=True);return
+        if a.reboot_wait<=0:return
+        deadline=time.monotonic()+a.reboot_wait
+        while True:
+            listing=subprocess.run([fb,'devices'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=15).stdout
+            if a.serial not in listing:return
+            if time.monotonic()>=deadline:break
+            time.sleep(2)
+        print(STALL_NOTE,flush=True)
     # Product and bootloader-state checks precede every write, including erase.
     for args,expected in [(('getvar','product'),'product: houji'),(('getvar','is-userspace'),'is-userspace: no'),
                           (('getvar','snapshot-update-status'),'snapshot-update-status: none'),
@@ -194,16 +220,24 @@ def main():
                 print('WARNING: '+', '.join(written)+' was written but the next flash failed, so the phone now has a new '
                       'kernel with the old device tree. Run this command again, or restore both images from the previous bundle.',flush=True)
             raise
-        command('reboot')
+        reboot()
         print('Kernel flashed. Verify the physical boot; the previous kernel remains flashable from its bundle.')
         return
-    if a.erase_userdata:
-        command('erase','userdata',timeout=300)
-        command('flash','userdata',str(root/'userdata.img'),timeout=1800)
     for name in ['boot','init_boot','vendor_boot','dtbo']:
         command('flash',name+'_b',str(root/(name+'.img')),timeout=180)
     command('flash','vbmeta_b',str(root/'vbmeta.img'))
-    command('set_active','b');command('reboot')
+    command('set_active','b')
+    if a.erase_userdata:
+        # userdata goes last. The Xiaomi bootloader has stalled right after this large write, so no command that
+        # matters may follow it, and slot B is already active: a forced restart after a stall boots Armada, not Android.
+        try:
+            command('erase','userdata',timeout=300)
+            command('flash','userdata',str(root/'userdata.img'),timeout=1800)
+        except (subprocess.SubprocessError,OSError):
+            print('WARNING: slot B is active but userdata was not completely written, so Armada cannot boot yet. '
+                  'Put the phone in bootloader fastboot and run this command again.',flush=True)
+            raise
+    reboot()
     print('Flash commands succeeded. Verify the physical boot before calling the build tested.')
 
 

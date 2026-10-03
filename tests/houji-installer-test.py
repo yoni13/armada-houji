@@ -6,6 +6,7 @@ import stat
 import json
 import os
 from pathlib import Path
+import re
 import struct
 import subprocess
 import sys
@@ -41,9 +42,16 @@ class InstallerTests(unittest.TestCase):
         self.fb=self.root/'fastboot'
         self.fb.write_text('''#!/usr/bin/env python3
 import json,os,sys
+if sys.argv[1]=='devices':
+    with open(os.environ['FAKE_LOG'],'a') as f:f.write(json.dumps(['devices'])+'\\n')
+    print('' if os.environ.get('FAKE_LEFT_FASTBOOT') else 'TEST\\tfastboot');sys.exit(0)
 args=sys.argv[3:]
 with open(os.environ['FAKE_LOG'],'a') as f:f.write(json.dumps(args)+'\\n')
 key=' '.join(args)
+if args[:1]==['flash'] and args[1:2]==[os.environ.get('FAKE_CRC_REFUSE')]:
+    print("Writing '"+args[1]+"'   FAILED (remote: 'Error flashing partition : 0000001B')");sys.exit(1)
+if args[:1]==['flash'] and args[1:2]==[os.environ.get('FAKE_FAIL_FLASH')]:
+    print("Writing '"+args[1]+"'   FAILED (remote: 'write error')");sys.exit(1)
 values={'getvar product':'product: '+os.environ.get('FAKE_PRODUCT','houji'),
 'getvar is-userspace':'is-userspace: no','getvar snapshot-update-status':'snapshot-update-status: none',
 'oem device-info':'Device unlocked: '+os.environ.get('FAKE_UNLOCKED','true')}
@@ -57,7 +65,7 @@ else:print('OKAY')
     def invoke(self,*args,**env):
         settings=os.environ.copy();settings.update(FAKE_LOG=str(self.log),**env)
         return subprocess.run([sys.executable,'-O',str(INSTALLER),'--images-dir',str(self.root),
-                               '--serial','TEST','--fastboot',str(self.fb),*args],env=settings,capture_output=True,text=True)
+                               '--serial','TEST','--fastboot',str(self.fb),'--reboot-wait','0',*args],env=settings,capture_output=True,text=True)
 
     def commands(self):
         return [json.loads(x) for x in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -101,9 +109,10 @@ else:print('OKAY')
 
     def test_fresh_write_order(self):
         r=self.invoke('--erase-userdata');self.assertEqual(r.returncode,0,r.stderr)
-        writes=[c for c in self.commands() if c[0] in ['erase','flash','set_active','reboot']]
-        self.assertEqual(writes[0],['erase','userdata']);self.assertEqual(writes[1][:2],['flash','userdata'])
-        self.assertEqual(writes[-2:], [['set_active','b'],['reboot']])
+        writes=[c[:2] if c[0]=='flash' else c for c in self.commands() if c[0] in ['erase','flash','set_active','reboot']]
+        # userdata is last: the bootloader has stalled after that write, and slot B is already active by then
+        self.assertEqual(writes,[['flash','boot_b'],['flash','init_boot_b'],['flash','vendor_boot_b'],['flash','dtbo_b'],['flash','vbmeta_b'],
+                       ['set_active','b'],['erase','userdata'],['flash','userdata'],['reboot']])
 
     def test_update_requires_receipt(self):
         self.assertNotEqual(self.invoke('--boot-only').returncode,0);self.no_writes()
@@ -140,8 +149,9 @@ else:print('OKAY')
     def test_locally_built_userdata_is_flashed_in_the_usual_order(self):
         self.publish();r=self.invoke('--erase-userdata');self.assertEqual(r.returncode,0,r.stderr)
         writes=[c for c in self.commands() if c[0] in ['erase','flash','set_active','reboot']]
-        self.assertEqual(writes[0],['erase','userdata']);self.assertEqual(writes[1],['flash','userdata',str(self.root/'userdata.img')])
-        self.assertEqual(writes[-2:],[['set_active','b'],['reboot']])
+        self.assertEqual([c[:2] if c[0]=='flash' else c for c in writes],[['flash','boot_b'],['flash','init_boot_b'],['flash','vendor_boot_b'],['flash','dtbo_b'],['flash','vbmeta_b'],
+                       ['set_active','b'],['erase','userdata'],['flash','userdata'],['reboot']])
+        self.assertEqual(writes[-2],['flash','userdata',str(self.root/'userdata.img')])
 
     def test_userdata_built_from_another_root_image_is_refused(self):
         for change in ({'build_id':'other'},{'rootfs_sha256':'other'}):
@@ -180,6 +190,36 @@ else:print('OKAY')
               'serial_sha256':hashlib.sha256(b'TEST').hexdigest()}))
         r=self.invoke('--boot-only','--staged-receipt',str(receipt));self.assertEqual(r.returncode,0,r.stderr)
         self.assertFalse(any('userdata' in c or 'erase' in c for c in self.commands()))
+
+
+    def test_a_crc_refusal_explains_itself_and_nothing_destructive_happened(self):
+        r=self.invoke('--erase-userdata',FAKE_CRC_REFUSE='boot_b');self.assertNotEqual(r.returncode,0)
+        self.assertIn('fastboot reboot-bootloader',r.stderr);self.assertIn('0x1B',r.stderr)
+        writes=[c for c in self.commands() if c[0] in ['erase','flash','set_active','reboot']]
+        self.assertEqual([c[:2] for c in writes],[['flash','boot_b']])   # userdata untouched, slot not switched
+
+    def test_a_failed_userdata_write_says_slot_b_is_active_and_does_not_reboot(self):
+        r=self.invoke('--erase-userdata',FAKE_FAIL_FLASH='userdata');self.assertNotEqual(r.returncode,0)
+        self.assertIn('userdata was not completely written',r.stdout)
+        self.assertNotIn(['reboot'],self.commands());self.assertIn(['set_active','b'],self.commands())
+
+    def test_a_phone_still_in_fastboot_after_reboot_gets_the_power_button_advice(self):
+        r=self.invoke('--erase-userdata','--reboot-wait','1');self.assertEqual(r.returncode,0,r.stderr)
+        self.assertIn('hold the Power button alone',r.stdout);self.assertIn(['devices'],self.commands())
+
+    def test_a_phone_that_left_fastboot_gets_no_warning(self):
+        r=self.invoke('--erase-userdata','--reboot-wait','1',FAKE_LEFT_FASTBOOT='1');self.assertEqual(r.returncode,0,r.stderr)
+        self.assertNotIn('still in fastboot',r.stdout);self.assertIn(['devices'],self.commands())
+
+    def test_every_init_failure_message_names_its_partition(self):
+        init=(INSTALLER.parent/'init').read_text()
+        pairs=re.findall(r'\$\(partition (\w+)\)[^\n]*\|\| fail \'([^\']*)\'',init)
+        self.assertEqual({p for p,_ in pairs},{'modem_b','dsp_b','persist'})
+        for part,message in pairs:self.assertIn(part,message)
+
+    def test_the_readme_section_the_init_points_to_exists(self):
+        init=(INSTALLER.parent/'init').read_text();readme=(INSTALLER.parents[1]/'README.md').read_text()
+        self.assertIn('"Starting from stock firmware"',init);self.assertIn('### Starting from stock firmware',readme)
 
 
 if __name__=='__main__':unittest.main()

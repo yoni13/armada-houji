@@ -691,7 +691,7 @@ class FlashTests(Scratch):
         settings = os.environ.copy()
         settings.update(FAKE_LOG=str(self.log), **env)
         command = [sys.executable, '-O', str(FLASH), '--images-dir', str(self.bundle), '--serial', 'TEST',
-                   '--fastboot', str(self.fastboot), mode, *args]
+                   '--fastboot', str(self.fastboot), '--reboot-wait', '0', mode, *args]
         if receipt:
             command += ['--kernel-receipt', str(self.receipt)]
         return subprocess.run(command, env=settings, capture_output=True, text=True)
