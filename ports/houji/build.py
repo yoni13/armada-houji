@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from buildlib import PORT, REPO, kernel_source, run, sha
+from buildlib import PORT, REPO, erofs_worker_options, kernel_source, run, sha
 
 
 def main():
@@ -40,7 +40,8 @@ def main():
             else:
                 run('python3',PORT/'stage-root.py',mount,work)
                 target=output/'rootfs.erofs';temp=output/'rootfs.erofs.tmp'
-                run('mkfs.erofs','--workers=8','-zlz4hc,level=9','-T','1790424000','-L','ARMADA_HOUJI',temp,mount)
+                mkfs_help=subprocess.run(['mkfs.erofs','--help'],capture_output=True,text=True)
+                run('mkfs.erofs',*erofs_worker_options(mkfs_help.stdout+mkfs_help.stderr),'-zlz4hc,level=9','-T','1790424000','-L','ARMADA_HOUJI',temp,mount)
                 run('fsck.erofs',temp);temp.replace(target)
         finally:run(*pm,'unmount',a.container)
         return

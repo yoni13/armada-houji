@@ -845,6 +845,41 @@ Verification:
   full updates too, but it changes the initramfs and update tool and needs a
   hardware reflash to prove, so it was not worth the boot-path risk yet.
 
+### The first release run
+
+The first run of the release workflow passed its checks and then failed 42 minutes
+in, after the 39-minute kernel build, on the first userspace component. The cause
+was the machine, not the port: it had been developed on Arch (Meson 1.12, GCC 16,
+Wayland 1.26, erofs-utils 1.9) and the runner is Ubuntu 24.04. Finding the rest of
+the mismatches by re-running on GitHub would have cost most of an hour each, so
+the userspace build was rehearsed in an Ubuntu 24.04 container with Ubuntu's own
+cross compiler. That reproduced the failure exactly (same Meson 1.3.2, same GCC
+13.3.0, same message) and then found, one at a time:
+
+- `libssc` requires Meson 1.4 and Ubuntu has 1.3.2.
+- `libssc` also needs `protoc` (`protobuf-compiler`) and Python headers
+  (`python3-dev`), which Arch ships by default.
+- Ubuntu's GCC enables stack protection by default and its guard symbol,
+  `__stack_chk_guard`, is defined only in the dynamic loader. The sysroot's
+  `libc.so` is a bare symlink to `libc.so.6` rather than the usual linker script
+  that pulls the loader into a link, so every protected object failed to link. The
+  compiler used for the flashed image has it off, so the cross-compiler names now
+  point at wrappers that add `-fno-stack-protector`. One mechanism covers every
+  call site; the port calls the compiler from Meson, from Makefiles and directly.
+- `wlroots`, built into Gamescope, wants a build-host `wayland-scanner` of 1.24 and
+  Ubuntu has 1.22, so the scanner alone is built from the 1.24.0 release the image
+  uses. The tarball's checksum matches the one Arch records for it.
+- `mkfs.erofs` 1.7.1 rejects `--workers`. The rest of the call works (`lz4hc` level 9,
+  the fixed timestamp, `fsck.erofs`), at about 53 MB/s on one thread, so the option
+  is now only passed when the tool lists it.
+
+With those in place the sensors stack, Gamescope, the GPS tools and BusyBox build
+under Ubuntu's toolchain, and `assemble.py` produced a bundle whose `boot.img` is the
+same size as the flashed one. Not rehearsed: the root image step (it needs the
+Armada image mounted under rootless Podman) and the release upload. The workflow also
+now saves its caches even when the build fails, so a late failure no longer throws
+the kernel build away.
+
 ### How it was checked
 
 - **Packaging against a known image:** a bundle packaged from the already-flashed

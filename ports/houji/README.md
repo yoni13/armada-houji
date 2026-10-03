@@ -408,6 +408,15 @@ image in 1.9 GB parts (GitHub assets must stay under 2 GiB). `userdata.img` is n
 published; `make-userdata.py` builds it on your machine. It needs a tag name; turn
 **publish** off to keep the files as an artifact instead.
 
+The release runs on Ubuntu 24.04, whose tools are older than the ones the port was
+developed with, so the workflow installs Meson 1.12.0 from a hash-pinned wheel,
+builds `wayland-scanner` 1.24.0 from a pinned tarball, and wraps the compiler to
+turn stack protection off (Ubuntu enables it by default, and it does not link
+against the Armada sysroot). `mkfs.erofs` is 1.7.1 there and compresses on one
+thread, which `build.py` allows for. A kernel that is already in the compiler
+cache builds in minutes instead of about 40, and the cache is saved even when
+the build fails.
+
 No workflow runs on a push or pull request. When you start a release, it first
 checks the tag name (and that the release does not exist yet) and runs the three
 checks below as parallel jobs, taking about 4 minutes. The long image build starts

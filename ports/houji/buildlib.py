@@ -50,6 +50,11 @@ def run(*args, **kwargs):
     return subprocess.run([str(arg) for arg in args], check=True, **kwargs)
 
 
+def erofs_worker_options(help_text):
+    """Threaded compression needs erofs-utils 1.8; older mkfs.erofs rejects the option and works single-threaded."""
+    return ['--workers=8'] if '--workers' in help_text else []
+
+
 def sha(path):
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()

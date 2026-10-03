@@ -147,24 +147,61 @@ jobs:
 
       # Kernel build dependencies (the same list upstream's kernel package
       # installs), the userspace toolchain and generators, the image tools and
-      # rootless Podman for the pristine Armada image.
+      # rootless Podman for the pristine Armada image. Meson and wayland-scanner
+      # come from the steps below: Ubuntu 24.04's are too old.
       - name: Install build tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             alsa-utils bc bison bsdextrautils build-essential ccache cpio curl device-tree-compiler \
             dwarves e2fsprogs erofs-utils flex git glslang-tools kmod libarchive-tools libasound2-dev \
-            libelf-dev libglib2.0-dev-bin libssl-dev libwayland-bin m4 meson mtools ninja-build \
-            patch patchelf perl pkgconf podman protobuf-c-compiler python3 python3-libfdt rsync \
-            uidmap xz-utils zstd
+            libelf-dev libexpat1-dev libglib2.0-dev-bin libssl-dev m4 mtools ninja-build patch \
+            patchelf perl pkgconf podman protobuf-c-compiler protobuf-compiler python3 python3-dev \
+            python3-libfdt python3-venv rsync uidmap xz-utils zstd
           # The build calls the toolchain by its cross-compiler names. On an arm64
-          # host they are the native tools under another name.
-          for tool in gcc g++ ar strip readelf objcopy objdump nm ranlib ld; do
+          # host they are the native tools under another name. Ubuntu's gcc also
+          # enables stack protection by default, and the guard symbol then fails
+          # to link against the Armada sysroot: its libc.so is a bare symlink that
+          # does not pull in the dynamic loader, the only place the symbol is
+          # defined. The build that was tested on the phone had it off.
+          for tool in gcc g++; do
+            printf '#!/bin/sh\nexec %s -fno-stack-protector "$@"\n' "$(command -v "${tool}")" \
+              | sudo tee "/usr/local/bin/aarch64-linux-gnu-${tool}" >/dev/null
+            sudo chmod 755 "/usr/local/bin/aarch64-linux-gnu-${tool}"
+          done
+          for tool in ar strip readelf objcopy objdump nm ranlib ld; do
             if ! command -v "aarch64-linux-gnu-${tool}" >/dev/null; then
               sudo ln -s "$(command -v "${tool}")" "/usr/local/bin/aarch64-linux-gnu-${tool}"
             fi
           done
           aarch64-linux-gnu-gcc --version | head -1
+
+      # libssc needs Meson 1.4 or newer; Ubuntu 24.04 has 1.3.2. This is the
+      # version the port was built and tested with, installed from a pinned wheel.
+      - name: Install Meson 1.12.0
+        run: |
+          echo 'meson==1.12.0 --hash=sha256:71f133147fa0fcfe8f4df49fa1045771064947834538409e5d97b3613aac8b4e' > "${RUNNER_TEMP}/meson-requirements.txt"
+          sudo python3 -m venv /opt/meson
+          sudo /opt/meson/bin/pip install --quiet --disable-pip-version-check --require-hashes --no-deps \
+            -r "${RUNNER_TEMP}/meson-requirements.txt"
+          sudo ln -sf /opt/meson/bin/meson /usr/local/bin/meson
+          meson --version
+
+      # wlroots, built into Gamescope, needs a build-host wayland-scanner of 1.24
+      # or newer and Ubuntu 24.04 has 1.22. The Armada image uses Wayland 1.24.0,
+      # so build only the scanner from that release. The checksum matches the one
+      # Arch Linux records for the same release.
+      - name: Build wayland-scanner 1.24.0
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL --retry 3 -o wayland.tar.xz \
+            https://gitlab.freedesktop.org/wayland/wayland/-/releases/1.24.0/downloads/wayland-1.24.0.tar.xz
+          echo '82892487a01ad67b334eca83b54317a7c86a03a89cfadacfef5211f11a5d0536  wayland.tar.xz' | sha256sum -c -
+          tar -xf wayland.tar.xz
+          meson setup wayland-1.24.0/build wayland-1.24.0 --prefix=/usr/local \
+            -Dlibraries=false -Dtests=false -Ddocumentation=false -Ddtd_validation=false
+          sudo ninja -C wayland-1.24.0/build install
+          echo "wayland-scanner $(wayland-scanner --version 2>&1 | awk '{print $NF}'), pkg-config $(pkg-config --modversion wayland-scanner)"
 
       # Ubuntu 24.04 blocks unprivileged user namespaces by default, which the
       # rootless Podman steps of the build need.
@@ -181,14 +218,19 @@ jobs:
           print('version=' + json.load(open('ports/houji/sources.json'))['linux']['version'])
           PY
 
-      - name: Cache the kernel tarball
-        uses: actions/cache@640a1c2554105b57832a23eea0b4672fc7a790d5 # v4.2.3
+      # Both caches are restored first and saved afterwards even if the build
+      # fails. The kernel alone takes about 40 minutes on this runner, so a
+      # failure further on must not throw that work away.
+      - name: Restore the kernel tarball
+        id: tarball
+        uses: actions/cache/restore@640a1c2554105b57832a23eea0b4672fc7a790d5 # v4.2.3
         with:
           path: output/houji/work/kernel/linux-${{ steps.pin.outputs.version }}.tar.xz
           key: linux-tarball-${{ steps.pin.outputs.version }}
 
-      - name: Cache compiled objects
-        uses: actions/cache@640a1c2554105b57832a23eea0b4672fc7a790d5 # v4.2.3
+      - name: Restore compiled objects
+        id: ccache
+        uses: actions/cache/restore@640a1c2554105b57832a23eea0b4672fc7a790d5 # v4.2.3
         with:
           path: ~/.cache/ccache
           key: ccache-houji-release-${{ runner.arch }}-${{ steps.pin.outputs.version }}-${{ hashFiles('ports/houji/patches/**', 'packages/kernel/patches/**', 'packages/kernel/config/**', 'ports/houji/bringup.config') }}
@@ -200,6 +242,24 @@ jobs:
       # component of the port, and assembles the root image and boot images.
       - name: Build the image
         run: python3 ports/houji/build.py --skip-userdata
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache -s || true
+
+      - name: Save the kernel tarball
+        if: ${{ always() && steps.tarball.outputs.cache-hit != 'true' && hashFiles(format('output/houji/work/kernel/linux-{0}.tar.xz', steps.pin.outputs.version)) != '' }}
+        uses: actions/cache/save@640a1c2554105b57832a23eea0b4672fc7a790d5 # v4.2.3
+        with:
+          path: output/houji/work/kernel/linux-${{ steps.pin.outputs.version }}.tar.xz
+          key: linux-tarball-${{ steps.pin.outputs.version }}
+
+      - name: Save compiled objects
+        if: ${{ always() && steps.ccache.outputs.cache-primary-key != '' && steps.ccache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@640a1c2554105b57832a23eea0b4672fc7a790d5 # v4.2.3
+        with:
+          path: ~/.cache/ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
 
       - name: Disk space after
         if: always()
