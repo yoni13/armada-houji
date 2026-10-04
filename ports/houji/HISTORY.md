@@ -25,15 +25,16 @@ and build and install steps are in [README.md](README.md).
 6. [Wi-Fi](#wi-fi)
 7. [Sensors and rotation](#sensors-and-rotation)
 8. [Battery and charging](#battery-and-charging)
-9. [Audio, Bluetooth and haptics](#audio-bluetooth-and-haptics)
-10. [USB, OTG and gamepads](#usb-otg-and-gamepads)
-11. [GPS](#gps)
-12. [NFC](#nfc)
-13. [Session switching](#session-switching)
-14. [Making the build reproducible](#making-the-build-reproducible)
-15. [Smaller updates and CI builds](#smaller-updates-and-ci-builds)
-16. [Installing over stock Android](#installing-over-stock-android)
-17. [Open problems](#open-problems)
+9. [Thermal limits](#thermal-limits)
+10. [Audio, Bluetooth and haptics](#audio-bluetooth-and-haptics)
+11. [USB, OTG and gamepads](#usb-otg-and-gamepads)
+12. [GPS](#gps)
+13. [NFC](#nfc)
+14. [Session switching](#session-switching)
+15. [Making the build reproducible](#making-the-build-reproducible)
+16. [Smaller updates and CI builds](#smaller-updates-and-ci-builds)
+17. [Installing over stock Android](#installing-over-stock-android)
+18. [Open problems](#open-problems)
 
 ## Boot and storage
 
@@ -522,6 +523,36 @@ for every DSP request.
   tables) uses a capture of the pixels above the sensor, so it is not ported.
   Readings were not compared with a lux meter.
 
+### Steam's adaptive brightness needs an IIO light sensor
+
+- **Issue:** Steam ignores iio-sensor-proxy.
+- **How Steam finds a sensor (IDA, `steamclient.so`):**
+  - At startup it scans `/sys/bus/iio/devices/iio:device*` and reads each
+    device's `name`. It knows `ltrf216a` and `opt3001` (Steam Deck sensors,
+    with calibration gains) and `als` (gain 1.0).
+  - For `als` it reads `in_illuminance_raw` as lux.
+  - It offers adaptive brightness only in SteamOS management mode with
+    `STEAM_ENABLE_DYNAMIC_BACKLIGHT` set to a non-zero value. The
+    `[display]` lines in its log report what it found.
+- **Fix:**
+  - Kernel patch `0023` adds `houji-virtual-als`, an IIO light device named
+    `als`. Root writes the value, anyone can read it, and `read_count` counts
+    reads.
+  - `houji-als` writes each lux value there. While the count keeps changing,
+    it holds its own `ambient_light` client, because the raw channels only
+    stream while one is enabled. It releases the client 30 seconds after the
+    last read.
+  - A udev rule keeps iio-sensor-proxy off the device, and a session drop-in
+    sets the variable.
+- **Result:**
+  - On the phone, Steam logged `ALS: 1`, `ALS 0 gain 1.000000 model 3` and
+    `adaptive brightness available: 1`.
+  - It read the device about five times a second, and the value followed the
+    room (17.6 lux in the evening).
+- **Open:** with adaptive brightness switched on, a flashlight did not
+  brighten the screen. Steam's mapping from lux to backlight, and how it
+  writes the backlight on this panel, are not yet traced.
+
 ## Battery and charging
 
 ### Battery readings
@@ -657,6 +688,79 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   curve, charge-pump transitions, taper and thermal behaviour remain under
   investigation. Charging light sleep is a port workaround to keep host monitoring,
   and stock-equivalent suspend behaviour is unverified.
+
+## Thermal limits
+
+### Nothing limited the CPU or GPU by heat
+
+- **Issue:** The kernel's only CPU trips are critical ones at 110 °C. The GPU has
+  a passive trip at 95 °C. Nothing reacted to skin or board temperature. In a
+  game the board CPU thermistor reached 61 °C and the skin estimate 46.5 °C, with
+  the GPU at its 834 MHz top.
+- **Stock behaviour:**
+  - `mi_thermald` drives its limits from `VIRTUAL-SENSOR0`, which
+    `board_thermal.py` already reproduces.
+  - The decoded `thermal-normal.conf` caps each CPU cluster in steps from
+    25 °C to 50 °C skin. It holds the GPU at level 2 above 15 °C, pauses cpu3,
+    cpu4 and cpu7 at 50 °C, and adds CPU caps at 3 % and 1 % battery.
+  - `thermal-mgame.conf` replaces this in games. The CPU runs uncapped until
+    46 °C skin and then drops to about 0.6 GHz, and the GPU is held at level 3.
+- **Semantics (IDA):**
+  - `ss` sections (`timer_expires`, 0xa6298) select the highest trigger
+    reached. Their clear values are unused. The cap then moves one step of the
+    device's frequency table per poll in both directions. It only jumps while a
+    profile is being reloaded.
+  - `monitor` sections (`timer_expires_1`, 0xa7138) keep a hysteresis flag per
+    threshold. The level ends the leading run of active thresholds; reversed
+    tables such as battery level use the trailing run.
+  - Several sections writing the same device combine: the lowest CPU frequency,
+    the highest GPU level and every paused core win.
+- **GPU levels:** `msm_kgsl.ko` (`adreno_device_probe`) builds its SKU code from
+  the feature code alone unless that code is 209–224 or 241–256. On this unit
+  the feature code is 2, which selects the table whose SKU list is `<0>`: 903,
+  834, 770, 720 MHz and down. Level 2 is 770 MHz and level 3 is 720 MHz.
+- **Fix:** `houji-thermal` applies the stock tables through the cpufreq and
+  devfreq cooling devices:
+  - These are separate frequency limits from the profile's `scaling_max_freq`
+    and GPU `max_freq`, so `armada-powerd` and Steam keep working unchanged.
+  - The CPU cooling devices are bound to no thermal zone.
+  - The GPU's is shared with the kernel's 95 °C trip. The service never lowers
+    a state the kernel raised, and re-applies its state after the kernel resets
+    it on resume.
+  - The prime cluster's energy model lists a 3302.4 MHz boost state that
+    cpufreq does not, so its cooling states are offset by one.
+  - At the owner's request, Game Mode keeps the normal CPU steps and leaves the
+    GPU at full speed until the stock game trip (46 °C, 770 MHz; 48 °C,
+    720 MHz). Plasma uses the stock normal profile.
+- **Result:** Live in a game:
+  - The caps followed the skin estimate (about 41 °C: prime 1248 MHz) and rose
+    one step per second as it cooled.
+  - Stopping the service released every cooling state.
+  - Taking cpu4 offline and back online worked.
+  - Policy tests cover both evaluators, level mapping and profile combination.
+- **Not ported:** the 51 °C brightness cap (its unit is not established), the
+  modem, Wi-Fi, NPU, torch and voice limits, and framework overrides.
+
+### A reset under load was a brownout
+
+- **Symptom:** Launching a game at 46 % battery and about 46 °C skin reset the
+  phone. The journal stopped without a shutdown. The owner saw a red CPU symbol
+  first; this was probably the Steam performance overlay.
+- **Evidence:** The PMK8550 `FAULT_REASON1` register (PON PBS 0x8C8) read
+  `0x40`, the UVLO (under-voltage lockout) bit. `FAULT_REASON2` (0x8C9), which
+  holds the over-temperature bit `OTST3`, was 0. Battery telemetry updates only
+  about once a second (3.63 V at 1.6 A during play), too slowly to show the dip.
+- **Cause (likely):**
+  - The stock board overlay configures BCL on `pm8550b` (battery) and `pm8550`
+    (system supply), with three alarm levels each. Its thermal zones respond by
+    cutting the GPU to cooling states 2, 4 and 5 or more, and the NPU and modem
+    too.
+  - The upstream kernel has no BCL driver, so these alarms do nothing. The PMIC
+    BCL blocks are enabled, and their live battery-current reading matches the
+    load.
+- **Status:** Open. Fixing it needs a kernel BCL driver and device-tree zones.
+  The thermal limits above lower the average load but cannot react within
+  milliseconds.
 
 ## Audio, Bluetooth and haptics
 
@@ -1096,6 +1200,8 @@ Against the build that was flashed and booted:
 - Wireless charging starts, then stops.
 - Stock HyperCharge behaviour, the 15–47°C fast-charge path and charge-pump transitions
   are unverified.
+- Heavy load can reset the phone through a brownout (PMIC UVLO). Stock BCL
+  voltage alarms, which cut the GPU quickly, have no kernel driver yet.
 - GPS: restarting the modem can reboot the phone.
 - NFC: NDEF reads from physical tags, other tag families and writes are unverified.
 - Gyro aiming, cellular, cameras and fingerprint are not implemented.

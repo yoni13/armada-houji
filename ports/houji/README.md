@@ -30,6 +30,7 @@ fixed is in [HISTORY.md](HISTORY.md).
 - [Kernel-only updates](#kernel-only-updates)
 - [Continuous integration](#continuous-integration)
 - [Charging and sleep](#charging-and-sleep)
+- [Thermal limits](#thermal-limits)
 - [Ambient light](#ambient-light)
 - [USB and privacy](#usb-and-privacy)
 - [NFC Manager](#nfc-manager)
@@ -67,7 +68,8 @@ Results below are from the development handset.
 | Display | N3 panel, 1200 × 2670, 120 Hz target (about 119 Hz measured at vblank). RGB format fix removed the pink tint. Not colour-calibrated. |
 | Touch | Taps and swipes work, using Xiaomi's stock touch processing core. |
 | Rotation | Sensor-driven in Plasma and Game Mode. Touch alignment was tested in Plasma; recheck it in every Game Mode orientation. |
-| Ambient light | The front sensor under the display reports lux through iio-sensor-proxy (`monitor-sensor --light`). It followed room light, a flashlight and a covering hand. Nothing in Plasma or Game Mode adjusts brightness from it yet. See [Ambient light](#ambient-light). |
+| Thermal limits | CPU and GPU limits follow the stock skin-temperature estimate, using Xiaomi's tables. Game Mode keeps the GPU at full speed longer and slows the CPU first. See [Thermal limits](#thermal-limits). |
+| Ambient light | The front sensor under the display reports lux through iio-sensor-proxy (`monitor-sensor --light`). It followed room light, a flashlight and a covering hand. Steam detects it through a small kernel device and reads it about five times a second, but in the first test the screen did not brighten under a flashlight. See [Ambient light](#ambient-light). |
 | Wi-Fi | WCN7850, 2.4 and 5 GHz, two streams at 80 MHz. About 509 Mb/s down and 424 Mb/s up in a local test. Speed depends on signal and access point. |
 | Bluetooth | Controller pairing and control. |
 | Haptics | Short and long vibration. |
@@ -111,6 +113,13 @@ Results below are from the development handset.
   seconds in testing.
 - **Wi-Fi wake-on-LAN (WoWLAN) is off by default.** A faster-wake trial caused a
   network recovery failure, so it was disabled.
+- **Heavy load can reset the phone (brownout).** Starting a game at 46 % battery
+  and about 46 °C skin reset the phone without a shutdown. The PMIC recorded an
+  under-voltage lockout (UVLO), not an over-temperature fault. Stock Android
+  limits the GPU within milliseconds when the battery voltage sags (PMIC BCL
+  alarms); this kernel has no BCL driver yet. The thermal limits below lower the
+  load but do not react to voltage. See
+  [HISTORY.md](HISTORY.md#a-reset-under-load-was-a-brownout).
 - **Charging.** The adapter's 90 W rating is not a measured rate. Computer USB
   ports can supply less than the running system uses. Wireless charging stops.
 - **The bootloader can stall after the big write.** On the development phone the
@@ -538,6 +547,33 @@ not verified.
   watchdog that used to take down audio, battery readings and sensors after
   resume. See [HISTORY.md](HISTORY.md#sleep-and-resume) for the cause.
 
+## Thermal limits
+
+`houji-thermal` limits the CPU and GPU from the phone's estimated skin
+temperature. That estimate is Xiaomi's weighted mix of six board thermistors,
+the same one the charging service uses. The tables come from HyperOS
+(`mi_thermald`, `thermal-normal.conf` and `thermal-mgame.conf`) and follow its
+rules: a CPU cap moves one frequency step per second, and the GPU and
+core-pause limits have stock hysteresis.
+
+| | Plasma | Steam Game Mode |
+| --- | --- | --- |
+| CPU | Stock normal steps from 25 °C skin. At 46 °C: prime 1.13 GHz, gold 1.29 GHz, little 1.34 GHz. | Same as Plasma. |
+| GPU | 770 MHz (stock level 2) above 15 °C skin. | Full speed (834 MHz) up to 46 °C skin, then 770 MHz, and 720 MHz from 48 °C. |
+| Pause cores | cpu3, cpu4 and cpu7 offline from 50 °C until 48 °C. | Same. |
+| Low battery | Stock CPU caps and paused cores at 3 % and 1 %. | Stock game caps, which also lower the GPU. |
+
+- Game Mode is detected by a running `gamescope`.
+- The limits go through the kernel's cpufreq and devfreq cooling devices. They
+  combine with the power profile's limits, and with Steam's own, by taking the
+  lower value, so the services never overwrite each other.
+- The kernel's own 95 °C GPU trip still applies and takes precedence.
+- Stopping the service removes every limit:
+  `sudo systemctl stop houji-thermal`. Its journal logs each change of target.
+
+Not ported: the brightness cap at 51 °C, modem, Wi-Fi, NPU and torch limits,
+and Xiaomi's framework overrides (such as `cpu_nolimit_temp`).
+
 ## Ambient light
 
 The front light sensor (an ams TCS3720 under the display) appears in
@@ -560,6 +596,25 @@ service computes lux on the main processor and sends the value back to the DSP.
 While no client holds the sensor, the service uses no CPU. With a client, it
 measured about 0.7 % of one core. The sleep hook stops it with the other sensor
 services.
+
+Steam adaptive brightness:
+
+- Steam reads light only from a kernel IIO device. It accepts a device named
+  `als` and reads its `in_illuminance_raw` as lux.
+- Kernel patch `0023` adds such a device, and `houji-als` writes each lux value
+  to it.
+- The device counts reads. While something has read it within the last 30
+  seconds, `houji-als` keeps the sensor on; otherwise the sensor stays off.
+- Steam offers the option only when `STEAM_ENABLE_DYNAMIC_BACKLIGHT=1` is set.
+  A drop-in for `gamescope-session-plus@steam.service` sets it.
+- Steam detects the sensor once, when it starts. Its log lists it as
+  `[display] ALS: 1` and `ALS 0 gain 1.000000 model 3`, followed by
+  `adaptive brightness available: 1`.
+- Tested on the phone: Steam reads the value about five times a second, and the
+  value follows the light. Not working yet: with adaptive brightness switched
+  on, a flashlight did not brighten the screen. Why is not known.
+- Because Steam polls even with the option off, the sensor stays on while
+  Steam runs and the screen is on (about 0.7 % of one CPU core).
 
 Limits:
 

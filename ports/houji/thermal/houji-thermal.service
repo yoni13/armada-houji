@@ -1,0 +1,18 @@
+[Unit]
+Description=Houji skin-temperature CPU and GPU limits
+After=systemd-modules-load.service houji-charging.service
+ConditionPathExists=/sys/firmware/devicetree/base
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/libexec/armada/houji-thermal
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=5
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

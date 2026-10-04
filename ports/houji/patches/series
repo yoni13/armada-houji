@@ -19,3 +19,4 @@
 0020-fastrpc-service-suspend.patch
 0021-asoc-drain-resume-before-unbind.patch
 0022-fastrpc-freezable-invoke-wait.patch
+0023-iio-light-houji-virtual-als.patch

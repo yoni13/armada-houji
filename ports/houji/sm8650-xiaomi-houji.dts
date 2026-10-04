@@ -52,6 +52,11 @@
 			     "qcom,pmic-glink";
 	};
 
+	/* The front light sensor's lux, written by houji-als (patch 0023). */
+	virtual-als {
+		compatible = "xiaomi,houji-virtual-als";
+	};
+
 	chosen {
 		/* Preserve bootloader-owned clocks/rails until their drivers exist. */
 		bootargs = "rdinit=/init clk_ignore_unused pd_ignore_unused regulator_ignore_unused";

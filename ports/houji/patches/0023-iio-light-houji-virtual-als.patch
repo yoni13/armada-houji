@@ -1,0 +1,193 @@
+Subject: [PATCH] iio: light: add a user-space-fed ambient light device for houji
+
+The Xiaomi 14's front light sensor sits behind the sensor DSP, and its lux
+value is computed by a user-space service (houji-als). Programs that read
+IIO light sensors, such as Steam's adaptive brightness, never see it.
+
+Add a small IIO device named "als" whose illuminance root can write and
+anyone can read. A read_count attribute counts reads, so the service can
+turn the DSP sensor on only while somebody polls the value.
+
+diff -Nru a/drivers/iio/light/houji-virtual-als.c b/drivers/iio/light/houji-virtual-als.c
+--- a/drivers/iio/light/houji-virtual-als.c
++++ b/drivers/iio/light/houji-virtual-als.c
+@@ -0,0 +1,148 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Ambient light level supplied by user space.
++ *
++ * The Xiaomi 14 (houji) reaches its front light sensor only through the
++ * sensor DSP, and the lux value is computed by a user-space service. That
++ * service writes the value here, so programs that read IIO light sensors,
++ * such as Steam's adaptive brightness, see it. read_count tells the service
++ * when somebody is reading, so it can keep the sensor off otherwise.
++ */
++
++#include <linux/atomic.h>
++#include <linux/iio/iio.h>
++#include <linux/iio/sysfs.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/platform_device.h>
++
++#define VIRTUAL_ALS_MAX_LUX	1000000
++
++struct virtual_als {
++	struct mutex lock;	/* protects lux and micro */
++	int lux;
++	int micro;
++	atomic_t reads;
++};
++
++static const struct iio_chan_spec virtual_als_channels[] = {
++	{
++		.type = IIO_LIGHT,
++		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
++	},
++};
++
++static int virtual_als_read_raw(struct iio_dev *indio_dev,
++				struct iio_chan_spec const *chan,
++				int *val, int *val2, long mask)
++{
++	struct virtual_als *als = iio_priv(indio_dev);
++
++	if (mask != IIO_CHAN_INFO_RAW)
++		return -EINVAL;
++
++	atomic_inc(&als->reads);
++	mutex_lock(&als->lock);
++	*val = als->lux;
++	*val2 = als->micro;
++	mutex_unlock(&als->lock);
++
++	return IIO_VAL_INT_PLUS_MICRO;
++}
++
++static int virtual_als_write_raw(struct iio_dev *indio_dev,
++				 struct iio_chan_spec const *chan,
++				 int val, int val2, long mask)
++{
++	struct virtual_als *als = iio_priv(indio_dev);
++
++	if (mask != IIO_CHAN_INFO_RAW)
++		return -EINVAL;
++	if (val < 0 || val2 < 0 || val > VIRTUAL_ALS_MAX_LUX)
++		return -EINVAL;
++
++	mutex_lock(&als->lock);
++	als->lux = val;
++	als->micro = val2;
++	mutex_unlock(&als->lock);
++
++	return 0;
++}
++
++static int virtual_als_write_raw_get_fmt(struct iio_dev *indio_dev,
++					 struct iio_chan_spec const *chan,
++					 long mask)
++{
++	return IIO_VAL_INT_PLUS_MICRO;
++}
++
++static ssize_t read_count_show(struct device *dev,
++			       struct device_attribute *attr, char *buf)
++{
++	struct virtual_als *als = iio_priv(dev_to_iio_dev(dev));
++
++	return sysfs_emit(buf, "%u\n", (unsigned int)atomic_read(&als->reads));
++}
++
++static IIO_DEVICE_ATTR_RO(read_count, 0);
++
++static struct attribute *virtual_als_attributes[] = {
++	&iio_dev_attr_read_count.dev_attr.attr,
++	NULL
++};
++
++static const struct attribute_group virtual_als_attribute_group = {
++	.attrs = virtual_als_attributes,
++};
++
++static const struct iio_info virtual_als_info = {
++	.read_raw = virtual_als_read_raw,
++	.write_raw = virtual_als_write_raw,
++	.write_raw_get_fmt = virtual_als_write_raw_get_fmt,
++	.attrs = &virtual_als_attribute_group,
++};
++
++static int virtual_als_probe(struct platform_device *pdev)
++{
++	struct iio_dev *indio_dev;
++	struct virtual_als *als;
++	int ret;
++
++	indio_dev = devm_iio_device_alloc(&pdev->dev, sizeof(*als));
++	if (!indio_dev)
++		return -ENOMEM;
++
++	als = iio_priv(indio_dev);
++	ret = devm_mutex_init(&pdev->dev, &als->lock);
++	if (ret)
++		return ret;
++	atomic_set(&als->reads, 0);
++
++	/* "als" is the generic name Steam accepts with a gain of 1.0. */
++	indio_dev->name = "als";
++	indio_dev->info = &virtual_als_info;
++	indio_dev->modes = INDIO_DIRECT_MODE;
++	indio_dev->channels = virtual_als_channels;
++	indio_dev->num_channels = ARRAY_SIZE(virtual_als_channels);
++
++	return devm_iio_device_register(&pdev->dev, indio_dev);
++}
++
++static const struct of_device_id virtual_als_of_match[] = {
++	{ .compatible = "xiaomi,houji-virtual-als" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, virtual_als_of_match);
++
++static struct platform_driver virtual_als_driver = {
++	.driver = {
++		.name = "houji-virtual-als",
++		.of_match_table = virtual_als_of_match,
++	},
++	.probe = virtual_als_probe,
++};
++module_platform_driver(virtual_als_driver);
++
++MODULE_DESCRIPTION("Ambient light level supplied by user space (Xiaomi 14)");
++MODULE_LICENSE("GPL");
+diff -Nru a/drivers/iio/light/Kconfig b/drivers/iio/light/Kconfig
+--- a/drivers/iio/light/Kconfig
++++ b/drivers/iio/light/Kconfig
+@@ -786,6 +786,17 @@
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called veml6075.
+ 
++config HOUJI_VIRTUAL_ALS
++	tristate "Xiaomi 14 ambient light level supplied by user space"
++	depends on OF || COMPILE_TEST
++	help
++	  Say Y or M here on the Xiaomi 14 (houji). Its front light sensor
++	  is read through the sensor DSP; a user-space service writes the
++	  light level to this IIO device so IIO light sensor readers see it.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called houji-virtual-als.
++
+ config VL6180
+ 	tristate "VL6180 ALS, range and proximity sensor"
+ 	depends on I2C
+diff -Nru a/drivers/iio/light/Makefile b/drivers/iio/light/Makefile
+--- a/drivers/iio/light/Makefile
++++ b/drivers/iio/light/Makefile
+@@ -72,5 +72,6 @@
+ obj-$(CONFIG_VEML6046X00)	+= veml6046x00.o
+ obj-$(CONFIG_VEML6070)		+= veml6070.o
+ obj-$(CONFIG_VEML6075)		+= veml6075.o
++obj-$(CONFIG_HOUJI_VIRTUAL_ALS)	+= houji-virtual-als.o
+ obj-$(CONFIG_VL6180)		+= vl6180.o
+ obj-$(CONFIG_ZOPT2201)		+= zopt2201.o

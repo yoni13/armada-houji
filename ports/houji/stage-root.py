@@ -80,13 +80,21 @@ copy(PORT/'sensors/gamescope/houji-gamescope-orientation.service','etc/systemd/s
 copy(users/'sensors/iio-build/data/iio-sensor-proxy.service','etc/systemd/system/iio-sensor-proxy.service')
 copy(users/'sensors/als-build/houji-als','usr/libexec/armada/houji-als',0o755)
 copy(PORT/'sensors/als/houji-als.service','etc/systemd/system/houji-als.service')
-write('etc/udev/rules.d/90-houji-sensors.rules','SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", ENV{IIO_SENSOR_PROXY_TYPE}="ssc-accel ssc-light", ENV{ACCEL_MOUNT_MATRIX}="-1,0,0;0,-1,0;0,0,1", TAG+="systemd", ENV{SYSTEMD_WANTS}+="iio-sensor-proxy.service"\n')
+write('etc/udev/rules.d/90-houji-sensors.rules','SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", ENV{IIO_SENSOR_PROXY_TYPE}="ssc-accel ssc-light", ENV{ACCEL_MOUNT_MATRIX}="-1,0,0;0,-1,0;0,0,1", TAG+="systemd", ENV{SYSTEMD_WANTS}+="iio-sensor-proxy.service"\n'
+      # houji-als feeds the "als" IIO device and watches its reads; the proxy
+      # reads the same light through SSC, so keep it off this device.
+      'SUBSYSTEM=="iio", ATTR{name}=="als", ENV{IIO_SENSOR_PROXY_TYPE}=""\n')
+write('etc/systemd/user/gamescope-session-plus@steam.service.d/20-houji-adaptive-brightness.conf',
+      '[Service]\n# Steam offers adaptive brightness only with this set.\nEnvironment=STEAM_ENABLE_DYNAMIC_BACKLIGHT=1\n')
 write('etc/modules-load.d/houji.conf','qcom-hv-haptics\nhci_uart\n')
 write('etc/modprobe.d/houji-touch.conf','blacklist houji_tcm_probe\n')
 write('etc/udev/rules.d/70-houji-haptics.rules','ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="qcom-hv-haptics", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra"\n')
 for src in ['charge-policy.py','board_thermal.py','stock_thermal.py']:
     copy(PORT/'charging'/src,'usr/libexec/armada/'+('houji-charge-policy' if src=='charge-policy.py' else src),0o755)
 copy(PORT/'charging/houji-charging.service','etc/systemd/system/houji-charging.service')
+copy(PORT/'thermal/houji-thermal','usr/libexec/armada/houji-thermal',0o755)
+copy(PORT/'thermal/thermal_policy.py','usr/libexec/armada/thermal_policy.py')
+copy(PORT/'thermal/houji-thermal.service','etc/systemd/system/houji-thermal.service')
 copy(PORT/'charging/suspend.py','usr/libexec/armada/houji-suspend',0o755)
 for name in ['armada-power-profiles','houji-wait-battery','houji-steam-power']:
     copy(PORT/'power'/name,'usr/libexec/armada/'+name,0o755)
@@ -116,7 +124,7 @@ for name in ['sshd.service','sshd.socket']:
 wifi=root/'usr/lib/firmware/ath12k/WCN7850/hw2.0'
 for path in wifi.glob('board-2.bin*'):path.unlink()
 for name in ['houji-stock-touch','houji-sensors','houji-als','houji-gamescope-orientation','houji-grow-data',
-             'houji-charging','armada-power-profiles','houji-steam-power','armada-nfc']:
+             'houji-charging','houji-thermal','armada-power-profiles','houji-steam-power','armada-nfc']:
     link('etc/systemd/system/multi-user.target.wants/'+name+'.service','../'+name+'.service')
 link('etc/systemd/system/graphical.target.wants/houji-boot-success.service','../houji-boot-success.service')
 link('etc/systemd/system/sleep.target.wants/houji-gamescope-sleep.service',

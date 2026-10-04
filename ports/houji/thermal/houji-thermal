@@ -1,0 +1,193 @@
+#!/usr/bin/python3
+"""Apply the Houji thermal policy through the kernel's cooling devices.
+
+Caps go through the cpufreq and devfreq cooling devices. They are separate
+frequency limits from the power profile's scaling_max_freq and GPU max_freq,
+so armada-powerd, Steam and this service never overwrite each other.
+"""
+import glob
+from pathlib import Path
+import signal
+import sys
+import time
+
+from board_thermal import read_temperatures
+from thermal_policy import Policy, cap_state, gpu_state, step_towards
+
+THERMAL = Path('/sys/class/thermal')
+CPUS = Path('/sys/devices/system/cpu')
+BATTERY = Path('/sys/class/power_supply/qcom-battmgr-bat/capacity')
+INTERVAL = 1
+MODE_INTERVAL = 5
+LOG_INTERVAL = 30
+GAMESCOPE = b'/usr/bin/gamescope'
+
+
+def read(path):
+    return path.read_text().strip()
+
+
+def write(path, value):
+    path.write_text(str(value))
+
+
+def frequencies(path):
+    return sorted({int(v) for v in read(path).split()}, reverse=True)
+
+
+class CpuCap:
+    def __init__(self, policy, cdev):
+        self.policy = policy
+        self.cdev = cdev
+        self.freqs = frequencies(CPUS / f'cpufreq/policy{policy}/scaling_available_frequencies')
+        # The cooling states follow the energy model, which may list boost
+        # frequencies above the cpufreq table.
+        self.extra = int(read(cdev / 'max_state')) + 1 - len(self.freqs)
+        if self.extra < 0:
+            raise RuntimeError(f'cpufreq-cpu{policy}: fewer cooling states than frequencies')
+        self.state = int(read(cdev / 'cur_state'))
+
+    def target_state(self, freq):
+        return 0 if freq is None else cap_state(self.freqs, freq) + self.extra
+
+    def apply(self, freq, jump):
+        target = self.target_state(freq)
+        self.state = target if jump else step_towards(self.state, target)
+        if int(read(self.cdev / 'cur_state')) != self.state:
+            write(self.cdev / 'cur_state', self.state)
+
+    def release(self):
+        write(self.cdev / 'cur_state', 0)
+
+
+class GpuCap:
+    """The kernel's 95 C GPU trip shares this cooling device. A state raised
+    by the kernel is left alone; after resume the kernel resets it to 0."""
+
+    def __init__(self, cdev, devfreq):
+        self.cdev = cdev
+        self.freqs = frequencies(devfreq / 'available_frequencies')
+        self.written = 0
+
+    def apply(self, level):
+        target = gpu_state(self.freqs, level)
+        current = int(read(self.cdev / 'cur_state'))
+        if current > self.written or current == target:
+            return
+        write(self.cdev / 'cur_state', target)
+        self.written = target
+
+    def release(self):
+        if int(read(self.cdev / 'cur_state')) == self.written:
+            write(self.cdev / 'cur_state', 0)
+        self.written = 0
+
+
+class Pauser:
+    def __init__(self):
+        self.offline = set()
+
+    def apply(self, cpus):
+        for cpu in sorted(cpus - self.offline):
+            if cpu and write_online(cpu, 0):
+                self.offline.add(cpu)
+        for cpu in sorted(self.offline - cpus):
+            if write_online(cpu, 1):
+                self.offline.discard(cpu)
+
+    def release(self):
+        self.apply(set())
+
+
+def write_online(cpu, value):
+    try:
+        write(CPUS / f'cpu{cpu}/online', value)
+        return True
+    except OSError as exc:
+        print(f'cpu{cpu} online={value} failed: {exc}', file=sys.stderr, flush=True)
+        return False
+
+
+def discover():
+    cpus, gpu = {}, None
+    for cdev in sorted(THERMAL.glob('cooling_device*')):
+        kind = read(cdev / 'type')
+        if kind.startswith('cpufreq-cpu'):
+            policy = int(kind.removeprefix('cpufreq-cpu'))
+            cpus[policy] = CpuCap(policy, cdev)
+        elif kind.startswith('devfreq-') and kind.endswith('.gpu'):
+            gpu = GpuCap(cdev, Path('/sys/class/devfreq') / kind.removeprefix('devfreq-'))
+    if set(cpus) != {0, 2, 5, 7} or not gpu:
+        raise RuntimeError(f'unexpected cooling devices: cpu {sorted(cpus)}, gpu {bool(gpu)}')
+    return cpus, gpu
+
+
+def game_mode():
+    for cmdline in glob.glob('/proc/[0-9]*/cmdline'):
+        try:
+            with open(cmdline, 'rb') as handle:
+                if handle.read(len(GAMESCOPE) + 1) == GAMESCOPE + b'\0':
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def main():
+    cpus, gpu = discover()
+    pauser = Pauser()
+    stopped = False
+
+    def stop(_signum, _frame):
+        nonlocal stopped
+        stopped = True
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    policy, game, last_mode_check, error, summary, jump = None, None, 0, None, None, True
+    last_major, last_log = None, -LOG_INTERVAL
+    try:
+        while not stopped:
+            now = time.monotonic()
+            if policy is None or now - last_mode_check >= MODE_INTERVAL:
+                last_mode_check = now
+                mode = game_mode()
+                if mode != game:
+                    game, policy, jump = mode, Policy(game=mode), True
+            try:
+                skin = read_temperatures()[1]
+                battery = int(read(BATTERY))
+                caps, level, paused = policy.update(skin, battery)
+                error = None
+            except (OSError, ValueError) as exc:
+                # Keep the last limits while a reading is unavailable.
+                if str(exc) != error:
+                    print(f'thermal reading unavailable, holding limits: {exc}', file=sys.stderr, flush=True)
+                    error = str(exc)
+                time.sleep(INTERVAL)
+                continue
+            for cpu, cap in cpus.items():
+                cap.apply(caps[cpu], jump)
+            gpu.apply(level)
+            pauser.apply(paused)
+            jump = False
+            limits = ' '.join(f'{c}:{caps[c] // 1000 if caps[c] else "-"}' for c in sorted(caps))
+            line = (f"{'game' if game else 'normal'} targets: cpu {limits} MHz, gpu level {level}"
+                    + (f", paused {sorted(paused)}" if paused else ''))
+            # CPU triggers have no hysteresis, so a steady temperature on a
+            # threshold flips targets every few seconds. Log those at most
+            # every LOG_INTERVAL; GPU and pause changes at once.
+            major = (game, level, frozenset(paused))
+            if line != summary and (major != last_major or now - last_log >= LOG_INTERVAL):
+                print(f'skin {skin / 1000:.1f} C, battery {battery}%: {line}', flush=True)
+                summary, last_major, last_log = line, major, now
+            time.sleep(INTERVAL)
+    finally:
+        pauser.release()
+        gpu.release()
+        for cap in cpus.values():
+            cap.release()
+
+
+if __name__ == '__main__':
+    main()

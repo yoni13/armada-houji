@@ -5,6 +5,10 @@
  * standard ambient_light sensor reports real values to iio-sensor-proxy.
  * The raw channels only stream while a client keeps ambient_light enabled
  * and the screen is on, so the service is idle otherwise.
+ *
+ * The lux value is also written to the "als" IIO device (kernel patch 0023)
+ * for programs that read IIO light sensors, such as Steam. While that device
+ * is being read, this service enables ambient_light itself.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -19,10 +23,17 @@
 
 #define REPORT_MEASUREMENT 1025
 #define STATE_POLL_SECONDS 2
+#define IIO_READER_TIMEOUT_US (30 * G_USEC_PER_SEC)
 
 static struct {
 	GMainLoop *loop;
 	SSCSensor *raw;
+	SSCSensor *light;
+	gboolean light_open;
+	gboolean light_pending;
+	char *iio;
+	gint64 iio_reads;
+	gint64 iio_last_read;
 	GObject *client;
 	guint64 uid_high, uid_low;
 	struct als_coef coef;
@@ -33,7 +44,7 @@ static struct {
 	gint64 sent_display;
 	gboolean verbose;
 	int status;
-} st = { .backlight_fd = -1, .sent_display = -1 };
+} st = { .backlight_fd = -1, .sent_display = -1, .iio_reads = -1 };
 
 static void
 send_done (GObject *source, GAsyncResult *result, gpointer user_data)
@@ -103,10 +114,117 @@ backlight_changed (gint fd, GIOCondition condition, gpointer user_data)
 	return G_SOURCE_CONTINUE;
 }
 
+static char *
+find_iio_als (void)
+{
+	g_autoptr (GDir) dir = g_dir_open ("/sys/bus/iio/devices", 0, NULL);
+	const char *entry;
+
+	while (dir && (entry = g_dir_read_name (dir))) {
+		g_autofree char *base = g_build_filename ("/sys/bus/iio/devices", entry, NULL);
+		g_autofree char *name_path = g_build_filename (base, "name", NULL);
+		g_autofree char *count_path = g_build_filename (base, "read_count", NULL);
+		g_autofree char *name = NULL;
+
+		if (g_file_get_contents (name_path, &name, NULL, NULL) &&
+		    g_str_equal (g_strstrip (name), "als") &&
+		    g_file_test (count_path, G_FILE_TEST_EXISTS))
+			return g_steal_pointer (&base);
+	}
+	return NULL;
+}
+
+static void
+write_iio (float lux)
+{
+	g_autofree char *path = NULL;
+	char text[32];
+	int fd, len;
+
+	if (!st.iio)
+		return;
+	path = g_build_filename (st.iio, "in_illuminance_raw", NULL);
+	len = g_snprintf (text, sizeof text, "%.3f", MIN (lux, 1000000.0f));
+	fd = open (path, O_WRONLY | O_CLOEXEC);
+	if (fd < 0 || write (fd, text, len) != len)
+		g_warning ("Writing %s failed: %s", path, g_strerror (errno));
+	if (fd >= 0)
+		close (fd);
+}
+
+static void set_light_client (gboolean want);
+
+static void
+light_done (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+	g_autoptr (GError) error = NULL;
+	gboolean opening = GPOINTER_TO_INT (user_data);
+
+	if (opening ? !ssc_sensor_open_finish (SSC_SENSOR (source), result, &error)
+		    : !ssc_sensor_close_finish (SSC_SENSOR (source), result, &error))
+		g_warning ("%s the ambient light sensor failed: %s", opening ? "Enabling" : "Disabling", error->message);
+}
+
+static void
+light_ready (GObject *source, GAsyncResult *result, gpointer user_data)
+{
+	g_autoptr (GError) error = NULL;
+
+	st.light_pending = FALSE;
+	st.light = ssc_sensor_new_finish (result, &error);
+	if (!st.light) {
+		g_warning ("No ambient light sensor for IIO readers: %s", error->message);
+		return;
+	}
+	set_light_client (GPOINTER_TO_INT (user_data));
+}
+
+/* Keep ambient_light enabled while an IIO reader polls, so the raw
+ * channels stream even without an iio-sensor-proxy client. */
+static void
+set_light_client (gboolean want)
+{
+	if (want == st.light_open || st.light_pending)
+		return;
+	if (!st.light) {
+		st.light_pending = TRUE;
+		ssc_sensor_new ((gchar *) "ambient_light", NULL, light_ready, GINT_TO_POINTER (want));
+		return;
+	}
+	g_message ("IIO light reader %s", want ? "active, enabling the sensor" : "gone, releasing the sensor");
+	st.light_open = want;
+	if (want)
+		ssc_sensor_open (st.light, NULL, light_done, GINT_TO_POINTER (TRUE));
+	else
+		ssc_sensor_close (st.light, NULL, light_done, GINT_TO_POINTER (FALSE));
+}
+
+static void
+poll_iio (void)
+{
+	g_autofree char *path = NULL;
+	gint64 now = g_get_monotonic_time (), reads;
+
+	if (!st.iio && !(st.iio = find_iio_als ()))
+		return;
+	path = g_build_filename (st.iio, "read_count", NULL);
+	reads = read_number (path);
+	if (reads < 0) {
+		g_clear_pointer (&st.iio, g_free);
+		st.iio_reads = -1;
+		return;
+	}
+	if (st.iio_reads >= 0 && reads != st.iio_reads)
+		st.iio_last_read = now;
+	st.iio_reads = reads;
+	set_light_client (st.iio_last_read && now - st.iio_last_read < IIO_READER_TIMEOUT_US);
+}
+
 static gboolean
 poll_state (gpointer user_data)
 {
 	update_display ();
+	poll_iio ();
 	return G_SOURCE_CONTINUE;
 }
 
@@ -125,6 +243,7 @@ report (GObject *client, guint msg_id, guint64 uid_high, guint64 uid_low, GArray
 	if (st.verbose)
 		g_message ("%.1f lux (C %.0f R %.0f G %.0f B %.0f)", lux, values[0], values[1], values[2], values[3]);
 	send_payload (out, als_encode_lux (out, lux, 0.0f), "the lux value");
+	write_iio (lux);
 }
 
 static void
@@ -230,6 +349,8 @@ main (int argc, char **argv)
 		g_signal_handlers_disconnect_by_func (st.client, report, NULL);
 	g_clear_object (&st.client);
 	g_clear_object (&st.raw);
+	g_clear_object (&st.light);
+	g_free (st.iio);
 	g_main_loop_unref (st.loop);
 	if (st.backlight_fd >= 0)
 		close (st.backlight_fd);
