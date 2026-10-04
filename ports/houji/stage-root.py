@@ -73,6 +73,7 @@ copy(users/'sensors/iio-build/src/iio-sensor-proxy','usr/libexec/iio-sensor-prox
 for name,path in {'libssc.so.2':'libssc-build/src/libssc.so.2','libhexagonrpc.so.0.5':'hexagon-build/libhexagonrpc/libhexagonrpc.so.0.5'}.items():
     copy(users/'sensors'/path,'usr/lib64/'+name,0o755)
 copy(users/'gamescope/gamescope','usr/bin/gamescope',0o755)
+copy(users/'mangohud/mangoapp','usr/bin/mangoapp',0o755)
 copy(users/'sensors/gamescope-build/houji-gamescope-rotate','usr/libexec/armada/houji-gamescope-rotate',0o755)
 copy(PORT/'sensors/gamescope/orientation.py','usr/libexec/armada/houji-gamescope-orientation',0o755)
 copy(PORT/'sensors/gamescope/49-houji-orientation.rules','etc/polkit-1/rules.d/49-houji-orientation.rules')

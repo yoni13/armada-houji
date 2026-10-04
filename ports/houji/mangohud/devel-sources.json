@@ -1,0 +1,22 @@
+{
+  "glfw-devel": {
+    "filename": "glfw-devel-3.4-6.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/g/glfw-devel-3.4-6.fc44.aarch64.rpm",
+    "sha256": "ade475c5d891b605431050633a59ae21e7ff5726478275e1d2d5501b9b179675"
+  },
+  "dbus-devel": {
+    "filename": "dbus-devel-1.16.2-1.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/d/dbus-devel-1.16.2-1.fc44.aarch64.rpm",
+    "sha256": "b0366bcdee531f79c5d2a7aca556971cb1babb4558704042360eaa182cb6829a"
+  },
+  "spdlog-devel": {
+    "filename": "spdlog-devel-1.15.3-4.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/s/spdlog-devel-1.15.3-4.fc44.aarch64.rpm",
+    "sha256": "d72142a783303b7d0d3003aef608bd7f068abd8b0f4204db7a9bf50abbfecdc0"
+  },
+  "fmt-devel": {
+    "filename": "fmt-devel-11.2.0-4.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/f/fmt-devel-11.2.0-4.fc44.aarch64.rpm",
+    "sha256": "8671fad04f142606a2f487f3de2c78e320c1dbd82cf4df60c493d30f68868461"
+  }
+}

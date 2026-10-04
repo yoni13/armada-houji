@@ -1,0 +1,60 @@
+Subject: [PATCH] drm/panel: xiaomi-n3: let the panel drop to 1 Hz when idle
+
+Power the N3 on in the stock idle_120_to_1hz DDIC mode instead of fixed
+120 Hz. The panel runs at 120 Hz while frames arrive and steps down to
+1 Hz when none do; TE stays fixed at 120 Hz, so the DSI host and DRM mode
+are unchanged. The commands are the stock mode's on-sequence differences:
+frame skip D0 11, mode 75 01, the D2/D5/D7 step tables and fixed TE CF 09,
+and no later 75 00.
+
+On a static Steam screen this cut the battery draw from about 330 mA to
+240 mA at the same brightness.
+
+--- a/drivers/gpu/drm/panel/panel-xiaomi-n3.c
++++ b/drivers/gpu/drm/panel/panel-xiaomi-n3.c
+@@ -39,7 +39,7 @@
+ 	u8 data[95];
+ };
+ 
+-/* 120 Hz on-sequence, in vendor order. The DCS helper preserves packet types. */
++/* 120 Hz idle-refresh on-sequence, in vendor order. The DCS helper preserves packet types. */
+ static const struct n3_cmd n3_on_cmds[] = {
+ 	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
+ 	{ 0, 2, { 0x65, 0x08 } },
+@@ -158,13 +158,24 @@
+ 	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
+ 	{ 0, 2, { 0x65, 0x01 } },
+ 	{ 0, 2, { 0xd0, 0x04 } },
+-	{ 0, 3, { 0xf0, 0xaa, 0x1b } },
+-	{ 0, 2, { 0xd0, 0x00 } },
+-	{ 0, 2, { 0x75, 0x00 } },
++	/*
++	 * DDIC idle refresh, from the stock idle_120_to_1hz timing: 120 Hz while
++	 * frames arrive, stepping down to 1 Hz when none do. TE stays fixed at
++	 * 120 Hz, so the host side is unchanged.
++	 */
+ 	{ 0, 2, { 0x6c, 0x00 } },
+ 	{ 0, 2, { 0x71, 0x00 } },
++	{ 0, 2, { 0x75, 0x01 } },
++	{ 0, 3, { 0xf0, 0xaa, 0x1b } },
++	{ 0, 2, { 0x65, 0x0c } },
++	{ 0, 5, { 0xd5, 0x77, 0x77, 0x77, 0x77 } },
++	{ 0, 2, { 0x65, 0x0c } },
++	{ 0, 5, { 0xd7, 0x77, 0x77, 0x77, 0x77 } },
++	{ 0, 14, { 0xd2, 0x01, 0x04, 0x0b, 0x03, 0x05, 0x07, 0x09, 0x0b,
++		   0x00, 0x00, 0x00, 0x00, 0x00 } },
++	{ 0, 2, { 0xd0, 0x11 } },
+ 	{ 0, 3, { 0xf0, 0xaa, 0x10 } },
+-	{ 0, 2, { 0xcf, 0x16 } },
++	{ 0, 2, { 0xcf, 0x09 } },
+ 	{ 0, 2, { 0x6d, 0x00 } },
+ 	{ 0, 2, { 0x6f, 0x02 } },
+ 	{ 0, 95, {
+@@ -177,7 +188,6 @@
+ 		0xf8, 0x3b, 0x38, 0x3b, 0x78, 0x3b, 0xb6, 0x4b, 0xb6, 0x4b, 0xf4, 0x4b,
+ 		0xf4, 0x6c, 0x34, 0x84, 0x74, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+ 	} },
+-	{ 0, 2, { 0x75, 0x00 } },
+ 	{ 0, 2, { 0x72, 0x00 } },
+ 	{ 0, 3, { 0xff, 0x5a, 0x80 } },
+ 	{ 0, 2, { 0x65, 0x0a } },

@@ -18,7 +18,8 @@ sysroot = work/'sysroot'
 sysroot.mkdir(parents=True, exist_ok=True)
 if not a.container_root:
     lock = {}
-    for source in [PORT/'sensors/devel-sources.json', PORT/'sensors/gamescope/devel-sources.json']:
+    for source in [PORT/'sensors/devel-sources.json', PORT/'sensors/gamescope/devel-sources.json',
+                   PORT/'mangohud/devel-sources.json']:
         lock.update(json.loads(source.read_text()))
     def download(meta):
         return fetch(meta['url'], work/'rpms'/meta['filename'], meta['sha256'])
@@ -33,7 +34,8 @@ target.mkdir(parents=True, exist_ok=True)
 names = json.loads((PORT/'sensors/gamescope/runtime-libraries.json').read_text())
 names += ['libwayland-client.so.0', 'libglib-2.0.so.0', 'libgobject-2.0.so.0',
           'libgio-2.0.so.0', 'libqmi-glib.so.5', 'libqrtr-glib.so.0',
-          'libprotobuf-c.so.1', 'libgudev-1.0.so.0', 'libpolkit-gobject-1.so.0', 'libudev.so.1']
+          'libprotobuf-c.so.1', 'libgudev-1.0.so.0', 'libpolkit-gobject-1.so.0', 'libudev.so.1',
+          'libGL.so.1', 'libglfw.so.3', 'libspdlog.so.1.15', 'libfmt.so.11', 'libxkbcommon.so.0']
 copied = set()
 while names:
     name = names.pop()

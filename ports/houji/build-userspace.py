@@ -20,6 +20,7 @@ neard=work/'neard';neard.mkdir(exist_ok=True)
 run('bsdtar','-xf',archive,'-C',neard)
 run('python3', PORT/'sensors/build.py','--work',work/'sensors','--sysroot',sysroot)
 run('python3', PORT/'sensors/gamescope/build.py','--work',work/'gamescope','--sysroot',sysroot)
+run('python3', PORT/'mangohud/build.py','--work',work/'mangohud','--sysroot',sysroot)
 run('make','-C',PORT/'touch/native','OUT='+str(out))
 run('sh',PORT/'charging/build-stock-auth.sh',out/'houji-stock-auth')
 for name in ['audioreach-topology','qbootctl']:

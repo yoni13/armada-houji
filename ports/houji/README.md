@@ -65,7 +65,7 @@ Results below are from the development handset.
 | --- | --- |
 | Boot | Stock ABL, unlocked, slot B. No USB root server and no auto-reboot timer. |
 | Plasma Mobile and Steam Game Mode | Both run with GPU rendering, and switching between them works. Game compatibility depends on Armada's translation stack. |
-| Display | N3 panel, 1200 × 2670, 120 Hz target (about 119 Hz measured at vblank). RGB format fix removed the pink tint. Not colour-calibrated. |
+| Display | N3 panel, 1200 × 2670, 120 Hz target (about 119 Hz measured at vblank). RGB format fix removed the pink tint. Not colour-calibrated. The panel runs in its stock idle-refresh mode: 120 Hz while frames arrive, down to 1 Hz on a static screen. |
 | Touch | Taps and swipes work, using Xiaomi's stock touch processing core. |
 | Rotation | Sensor-driven in Plasma and Game Mode. Touch alignment was tested in Plasma; recheck it in every Game Mode orientation. |
 | Thermal limits | CPU and GPU limits follow the stock skin-temperature estimate, using Xiaomi's tables. Game Mode keeps the GPU at full speed longer and slows the CPU first. See [Thermal limits](#thermal-limits). |
@@ -75,7 +75,7 @@ Results below are from the development handset.
 | Haptics | Short and long vibration. |
 | Speakers and microphone | Stereo playback and recording, using the phone's factory speaker calibration. |
 | Battery | Voltage, current, charge level, Steam time estimates and USB-PD. The battery is named `battery`, as elsewhere in Armada, so Steam's performance overlay (MangoHud) shows its level, power while discharging and time remaining. |
-| Performance overlay | Steam's overlay levels show only readings this phone provides; per-component CPU and GPU power have no sensor here and are left out. |
+| Performance overlay | Steam's overlay levels show only readings this phone provides; per-component CPU and GPU power have no sensor here and are left out. The battery percentage matches Steam's: the port builds the overlay (`mangoapp`) with MangoHud patches `0007` and `0008` until the pinned Armada image includes them. With `0008` the overlay only redraws when the app draws, so it doesn't keep the screen busy while Steam is idle. |
 | USB device | Charging by default. File transfer (MTP) on demand through Armada's switch. USB 3 at 5 Gb/s in both cable orientations, USB 2 fallback. No USB shell or network gadget. |
 | USB host (OTG) | Wired gamepad and a Pixel webcam, including 5 Gb/s video. |
 

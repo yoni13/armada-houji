@@ -16,3 +16,7 @@ to a commit, or `armada` if it's original; a URL source with no `notes` is verba
   source: https://github.com/ROCKNIX/distribution/blob/688884af239b13832a928248b3555c36f8d44c31/projects/ROCKNIX/packages/apps/mangohud/patches/common/0003-RAM-name.patch
 - `patches/0006-SM8750-Battery.patch`
   source: https://github.com/ROCKNIX/distribution/blob/7e83d3c918fa52a241ce1e589d629c220af40e1a/projects/ROCKNIX/packages/apps/mangohud/patches/SM8750/0002-SM8750-Battery.patch
+- `patches/0007-Battery-percentage-from-capacity.patch`
+  source: armada
+- `patches/0008-mangoapp-throttle-overlay.patch`
+  source: https://github.com/flightlessmango/MangoHud/commit/2c1dc5283c045e9a7e424dc913fbafcdcc7e3be1

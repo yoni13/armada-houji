@@ -35,6 +35,11 @@
     "url": "https://busybox.net/downloads/busybox-1.37.0.tar.bz2",
     "sha256": "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4"
   },
+  "mangohud": {
+    "version": "0.8.4",
+    "url": "https://github.com/flightlessmango/MangoHud/archive/v0.8.4/mangohud-0.8.4.tar.gz",
+    "sha256": "0f79671dbc825f33d7014088cb7750c166934ade26bbd6007a171aa2d960cd2f"
+  },
   "firmware": {
     "url": "https://bigota.d.miui.com/OS3.0.303.0.WNCTWXM/houji_tw_global_images_OS3.0.303.0.WNCTWXM_20260727.0000.00_16.0_tw_9ffae02e56.tgz",
     "size": 7447487642,

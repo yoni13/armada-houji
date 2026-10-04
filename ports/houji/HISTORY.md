@@ -124,6 +124,37 @@ and build and install steps are in [README.md](README.md).
   MDSS power-off, with the connector off and panel supplies at zero. Wake restored
   everything with the same boot ID.
 
+### The screen refreshed at 120 Hz while Steam was idle
+
+- **Issue:** On a static Steam screen the display still drew about 0.7 A. Steam
+  itself stops drawing when idle, but Gamescope committed a frame on nearly
+  every vblank (about 116 per second), and the panel refreshed itself at
+  120 Hz regardless.
+- **Cause:**
+  - MangoHud 0.8.4's `mangoapp` never reset its new-frame flag, so after the
+    first frame it redrew the overlay continuously while it was shown, and
+    each redraw made Gamescope composite and send a frame. With `mangoapp` paused, an idle Steam sent no frames at all.
+  - The panel driver used the stock fixed 120 Hz mode. The N3's driver chip
+    also has stock "idle" modes that step down to 10 Hz or 1 Hz on their own
+    when no new frame arrives.
+- **Fix:**
+  - MangoHud patch `0008` is upstream's fix (2c1dc5283c04, "throttle overlay
+    to one render per game frame"). `mangoapp` now draws once per app frame,
+    so the overlay sends nothing while Steam is idle. The port's `mangoapp`
+    build picks it up.
+  - Kernel patch `0027` powers the panel on in the stock `idle_120_to_1hz`
+    mode: 120 Hz while frames arrive, down to 1 Hz when idle. TE stays fixed
+    at 120 Hz, so the DSI host, DRM mode and Gamescope are unchanged.
+- **Result:** Tested on the phone, Steam home screen, overlay at level 4,
+  same brightness:
+  - Display commits dropped from about 1745 to 2 per 15 seconds, and battery
+    draw from about 680 mA to 320 mA.
+  - Panel idle mode then took it from about 327 mA (forced 120 Hz) to about
+    245 mA, measured on the built image against a test module that forces
+    each mode.
+  - No flicker at low brightness and smooth motion in a 60 fps game; 30 fps
+    games were not tried.
+
 ### Duplicate DSP interrupts
 
 - **Issue:** Linux 7.2.3 cleared SMP2P's remembered interrupt bits on ordinary
@@ -796,6 +827,21 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   its battery row shows power and remaining time while discharging. While
   charging it shows neither, which is MangoHud's normal behaviour. Separate CPU and GPU power stay
   unavailable because the SoC exposes no power meters to Linux.
+
+### The overlay's battery percentage differed from Steam's
+
+- **Issue:** The overlay showed 70% while Steam's top bar showed 83%.
+- **Cause:** Steam, through UPower, shows the firmware's `capacity`. MangoHud
+  uses `capacity` only for batteries without charge readings; otherwise it
+  divides `charge_now` by `charge_full`, the raw cell charge. On houji the two
+  differ by up to 13 points depending on charge level, so no offset fixes it.
+- **Fix:** MangoHud patch `0007` (in `packages/mangohud`) prefers `capacity`.
+  Its power and remaining time still come from the charge and current
+  readings. The pinned Armada image predates the patch, so the port builds
+  `mangoapp`, the overlay Steam runs, from Armada's MangoHud version and
+  patches (`mangohud/build.py`) and installs it over the image's copy.
+- **Result:** Tested on the phone with the rebuilt `mangoapp`; the overlay
+  shows the same percentage as Steam.
 
 ## Audio, Bluetooth and haptics
 
