@@ -28,5 +28,8 @@ for name,build,extra in [('libssc','libssc-build',[]),('hexagonrpc','hexagon-bui
  if name=='hexagonrpc':run('ninja','-C',dest,'hexagonrpcd/hexagonrpcd')
  else:run('meson','compile','-C',dest)
  if name=='libssc':run('meson','install','-C',dest,'--destdir',sysroot)
+als=work/'als-build'
+if not (als/'build.ninja').exists():run('meson','setup',als,source/'als',*common)
+run('meson','compile','-C',als)
 run('make','-C',source/'gamescope','OUT='+str(work/'gamescope-build'),'WAYLAND_INCLUDE='+str(sysroot/'usr/include'),'WAYLAND_LIBDIR='+str(sysroot/'usr/lib64'),'LDFLAGS=-Wl,-rpath-link,'+str(sysroot/'usr/lib64'))
 print('Built SSC, sensor proxy, registry service and Gamescope rotation helper in',work)

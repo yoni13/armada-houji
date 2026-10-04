@@ -30,6 +30,7 @@ fixed is in [HISTORY.md](HISTORY.md).
 - [Kernel-only updates](#kernel-only-updates)
 - [Continuous integration](#continuous-integration)
 - [Charging and sleep](#charging-and-sleep)
+- [Ambient light](#ambient-light)
 - [USB and privacy](#usb-and-privacy)
 - [NFC Manager](#nfc-manager)
 
@@ -66,6 +67,7 @@ Results below are from the development handset.
 | Display | N3 panel, 1200 × 2670, 120 Hz target (about 119 Hz measured at vblank). RGB format fix removed the pink tint. Not colour-calibrated. |
 | Touch | Taps and swipes work, using Xiaomi's stock touch processing core. |
 | Rotation | Sensor-driven in Plasma and Game Mode. Touch alignment was tested in Plasma; recheck it in every Game Mode orientation. |
+| Ambient light | The front sensor under the display reports lux through iio-sensor-proxy (`monitor-sensor --light`). It followed room light, a flashlight and a covering hand. Nothing in Plasma or Game Mode adjusts brightness from it yet. See [Ambient light](#ambient-light). |
 | Wi-Fi | WCN7850, 2.4 and 5 GHz, two streams at 80 MHz. About 509 Mb/s down and 424 Mb/s up in a local test. Speed depends on signal and access point. |
 | Bluetooth | Controller pairing and control. |
 | Haptics | Short and long vibration. |
@@ -475,7 +477,7 @@ only if all of them pass, so a failed check costs minutes, not hours.
 | --- | --- |
 | Unit tests | Every Python and shell test (sleep, charging, thermal, installer, kernel and userdata updates, session switching, NFC and GPS helpers, panel gamma, and the patch checker itself). |
 | Kernel patches | The shared Armada kernel series plus Houji's apply in build order, with every hunk parsed and no fuzz, onto the SHA-256-pinned Linux tarball. It then replays the Wi-Fi DBS/SBS parser on the phone's captured record. |
-| Userspace patches and native tests | The pinned revisions of hexagonrpc, iio-sensor-proxy, gamescope and tqftpserv take the port's patches. The C and C++ tests are then built and run against those patched trees, ideally in a Fedora 44 container like the image. |
+| Userspace patches and native tests | The pinned revisions of libssc, hexagonrpc, iio-sensor-proxy, gamescope and tqftpserv take the port's patches. The C and C++ tests are then built and run against those patched trees, ideally in a Fedora 44 container like the image. |
 
 The same checks run locally, which is worth doing before a push:
 
@@ -535,6 +537,40 @@ not verified.
   normally. This replaced `systemd-sleep` for native sleep, and fixed a
   watchdog that used to take down audio, battery readings and sensors after
   resume. See [HISTORY.md](HISTORY.md#sleep-and-resume) for the cause.
+
+## Ambient light
+
+The front light sensor (an ams TCS3720 under the display) appears in
+iio-sensor-proxy as the ambient light sensor, in lux. Read it with
+`monitor-sensor --light`, from a local session or as root. Other sessions are
+refused by polkit.
+
+The stock DSP driver always reports 0 lux for this sensor. On Android, a Xiaomi
+service computes lux on the main processor and sends the value back to the DSP.
+`houji-als` does the same job:
+
+- It tells the DSP the backlight level, or 0 while the screen is off. Without
+  this the DSP treats the screen as off and stops the raw channels.
+- It reads the raw channels, which only stream while a client holds the light
+  sensor and the screen is on.
+- It computes lux with Xiaomi's formula and the unit's own channel scales,
+  smooths the result and sends it back to the DSP. Changes under 10 % are not
+  sent.
+
+While no client holds the sensor, the service uses no CPU. With a client, it
+measured about 0.7 % of one core. The sleep hook stops it with the other sensor
+services.
+
+Limits:
+
+- Android also subtracts the light from the pixels above the sensor, using a
+  capture of the screen. This port does not. Bright content near the front
+  camera, or a hand reflecting the screen back, raises low readings: a covered
+  sensor read about 110–180 lux in the test.
+- Readings were checked for response and plausibility only (about 1000 lux in a
+  daylit room), not against a lux meter.
+- The rear light sensor (TCS3408) reports lux natively through the DSP, but it
+  is not exposed to iio-sensor-proxy.
 
 ## USB and privacy
 

@@ -40,13 +40,16 @@ esac
             self.assertEqual({p.stem for p in root.glob('*.service')}, set(active))
             if active:
                 calls = (root / 'log').read_text().splitlines()
-                stop = [s for s in ['houji-gamescope-orientation', 'iio-sensor-proxy'] if s in active]
+                stop = [s for s in ['houji-gamescope-orientation', 'iio-sensor-proxy', 'houji-als'] if s in active]
                 self.assertEqual(calls, ['stop ' + s + '.service' for s in stop] +
                                  ['start ' + s + '.service' for s in reversed(stop)])
             self.assertFalse((root / 'resume').exists())
 
     def test_both_running(self):
         self.check_services(['houji-gamescope-orientation', 'iio-sensor-proxy'])
+
+    def test_light_service_running(self):
+        self.check_services(['houji-gamescope-orientation', 'iio-sensor-proxy', 'houji-als'])
 
     def test_only_proxy_running(self):
         self.check_services(['iio-sensor-proxy'])

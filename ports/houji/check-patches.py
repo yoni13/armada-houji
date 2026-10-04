@@ -246,7 +246,7 @@ def userspace_pins():
     gamescope = json.loads((PORT / 'sensors/gamescope/sources.json').read_text())['compositor']
     gps = json.loads((PORT / 'gps/sources.json').read_text())
     pins = []
-    for name in ('hexagonrpc', 'iio-sensor-proxy'):
+    for name in ('libssc', 'hexagonrpc', 'iio-sensor-proxy'):
         entry = sensors[name]
         pins.append((name, entry['source'], entry['revision'],
                      [(PORT / 'sensors' / entry['local_patch'], entry['patch_sha256'])]))

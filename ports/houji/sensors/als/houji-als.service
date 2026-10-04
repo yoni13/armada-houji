@@ -1,0 +1,13 @@
+[Unit]
+Description=Houji front ambient light sensor
+After=houji-sensors.service
+Wants=houji-sensors.service
+Before=iio-sensor-proxy.service
+
+[Service]
+ExecStart=/usr/libexec/armada/houji-als
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

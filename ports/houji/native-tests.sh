@@ -44,6 +44,10 @@ step 'sensors: an unsupported RPC gets an error reply and the service keeps goin
     "$hex/hexagonrpcd/interface/adsp_listener.c"
 "$work/listener"
 
+step 'sensors: front light lux formula, SSC reports and Xiaomi OEM messages'
+"$cc" -Wall -Wextra -Werror -o "$work/als-math" "$port/sensors/test-als-math.c" -lm
+"$work/als-math"
+
 step 'sensors: iio-sensor-proxy SSC driver stops its measurement on close'
 python3 "$root/tests/houji-ssc-close-test.py" "$trees/iio-sensor-proxy"
 

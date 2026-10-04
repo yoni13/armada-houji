@@ -1,7 +1,9 @@
 {
   "libssc": {
     "revision": "54dd13e36d65c21263cf5b0f4a70c230a77b26bc",
-    "source": "https://codeberg.org/DylanVanAssche/libssc.git"
+    "source": "https://codeberg.org/DylanVanAssche/libssc.git",
+    "local_patch": "libssc-houji-send.patch",
+    "patch_sha256": "8d2516b689fa81d8c8d59ab617f8952118320dcfc99c92ae0591cfead79643e3"
   },
   "iio-sensor-proxy": {
     "revision": "0085ddf8ecb173a1c5fcf2344aa40e561125354f",

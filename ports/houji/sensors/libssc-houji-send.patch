@@ -1,0 +1,88 @@
+diff --git a/libssc.map b/libssc.map
+index d5a2ee2..4d0b008 100644
+--- a/libssc.map
++++ b/libssc.map
+@@ -63,6 +63,8 @@ LIBSSC_0.4.0 {
+ 		ssc_sensor_close;
+ 		ssc_sensor_close_finish;
+ 		ssc_sensor_close_sync;
++		ssc_sensor_send;
++		ssc_sensor_send_finish;
+ 		ssc_sensor_get_type;
+ 		ssc_sensor_accelerometer_get_type;
+ 		ssc_sensor_compass_get_type;
+diff --git a/src/libssc-sensor.c b/src/libssc-sensor.c
+index 5947dba..5a12fd2 100644
+--- a/src/libssc-sensor.c
++++ b/src/libssc-sensor.c
+@@ -262,6 +262,57 @@ ssc_sensor_open_finish (SSCSensor *self, GAsyncResult *result, GError **error)
+ 	return SSC_SENSOR_GET_CLASS (self)->open_finish (self, result, error);
+ }
+ 
++/*****************************************************************************/
++
++static void
++sensor_send_ready (SSCClient *client, GAsyncResult *result, gpointer user_data)
++{
++	GTask *task = G_TASK (user_data);
++	GError *error = NULL;
++
++	if (!ssc_client_send_finish (client, result, &error))
++		g_task_return_error (task, error);
++	else
++		g_task_return_boolean (task, TRUE);
++	g_object_unref (task);
++}
++
++/*
++ * Send a sensor specific request to this sensor, for example a vendor
++ * configuration message. The payload is the encoded request body.
++ */
++void
++ssc_sensor_send (SSCSensor *self, guint32 message_id, GBytes *payload, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data)
++{
++	SSCSensorPrivate *priv = ssc_sensor_get_instance_private (self);
++	GTask *task = g_task_new (self, cancellable, callback, user_data);
++	g_autoptr (GArray) buf = NULL;
++	gsize len = 0;
++	const guint8 *data = payload ? g_bytes_get_data (payload, &len) : NULL;
++
++	if (len) {
++		buf = g_array_sized_new (FALSE, FALSE, 1, len);
++		g_array_append_vals (buf, data, len);
++	}
++
++	ssc_client_send (priv->client,
++			 priv->uid_high,
++			 priv->uid_low,
++			 message_id,
++			 buf,
++			 cancellable,
++			 (GAsyncReadyCallback)sensor_send_ready,
++			 task);
++}
++
++gboolean
++ssc_sensor_send_finish (SSCSensor *self, GAsyncResult *result, GError **error)
++{
++	return g_task_propagate_boolean (G_TASK (result), error);
++}
++
++/*****************************************************************************/
++
+ void
+ ssc_sensor_open (SSCSensor *self, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data)
+ {
+diff --git a/src/libssc-sensor.h b/src/libssc-sensor.h
+index 698be9c..0b84200 100644
+--- a/src/libssc-sensor.h
++++ b/src/libssc-sensor.h
+@@ -56,6 +56,8 @@ void		 ssc_sensor_open (SSCSensor *self, GCancellable *cancellable, GAsyncReadyC
+ gboolean	 ssc_sensor_open_finish (SSCSensor *self, GAsyncResult *result, GError **error);
+ void		 ssc_sensor_close (SSCSensor *self, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
+ gboolean	 ssc_sensor_close_finish (SSCSensor *self, GAsyncResult *result, GError **error);
++void		 ssc_sensor_send (SSCSensor *self, guint32 message_id, GBytes *payload, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
++gboolean	 ssc_sensor_send_finish (SSCSensor *self, GAsyncResult *result, GError **error);
+ 
+ struct _SSCSensorClass {
+ 	GObjectClass parent_class;

@@ -7,7 +7,7 @@ state=/run/armada/houji-sensors-resume
 case "${1:-}" in
     pre)
         mkdir -p "$state"
-        for service in houji-gamescope-orientation iio-sensor-proxy; do
+        for service in houji-gamescope-orientation iio-sensor-proxy houji-als; do
             if systemctl is-active --quiet "$service.service"; then
                 touch "$state/$service"
                 systemctl stop "$service.service"
@@ -15,7 +15,7 @@ case "${1:-}" in
         done
         ;;
     post)
-        for service in iio-sensor-proxy houji-gamescope-orientation; do
+        for service in houji-als iio-sensor-proxy houji-gamescope-orientation; do
             if [ -e "$state/$service" ]; then
                 # user.slice stays frozen until this hook exits. The proxy's
                 # DSP warm-up must not hold Steam's first resumed frame; the

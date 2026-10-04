@@ -467,6 +467,61 @@ for every DSP request.
 - **Limits:** Physical touch alignment in every Steam orientation needs broader
   testing. Gyro input for aiming in games is not implemented.
 
+### Ambient light reported 0 lux
+
+- **Issue:** iio-sensor-proxy had no light sensor. The port's udev rule set the
+  sensor type list to `ssc-accel` only, which replaced the upstream rule that
+  adds `ssc-light`. With the light driver allowed, the DSP's `ambient_light`
+  sensor (`TCS3720ALSPRX`, vendor xiaomi) sent a single 0.0 lux report. It
+  stayed at 0 under a flashlight and with the sensor covered.
+- **Investigation:**
+  - The DSP lists exactly one `ambient_light` sensor. A debug libssc that
+    requested every match showed no hidden alternative. Its registry entries
+    were byte-identical to the stock registry Android had left on `persist`, so
+    the configuration was not the cause.
+  - The calibration stream `ambient_light_cal_strm` showed the hardware working.
+    Channel counts followed the flashlight and the automatic gain stepped
+    correctly, while lux stayed 0 across 2,663 events. The panel backlight
+    barely changed the counts.
+  - The DSP firmware strings mention a backlight value taken from an OEM
+    configuration request, and a "screen off" state that holds back reports.
+  - In Xiaomi's `vendor.xiaomi.sensor.citsensorservice.aidl` (odm; examined in
+    IDA, class names from RTTI), `Displayinfo2SlpiNotifier` reads display
+    events from `/dev/mi_display/disp_feature`. `Lux_Ams_Tcs3720_Fb::sensorSendnotify`
+    and `processOemConfig::transferOemConfig` send them to the
+    `ambient_light_raw` sensor. The request uses message ID 2048 and a Xiaomi
+    `sns_physical_sensor_oem_config` body: field 1 = 5 with field 9 = the
+    backlight. `alsAlgo::process` computes lux on the main processor from the
+    raw channels. It sends the result the same way, with field 1 = 15,
+    field 11 = lux and field 12 = CCT.
+- **Tests on the phone:**
+  - Sending the backlight changed the value the DSP echoes in its events.
+  - Sending lux 123, 456.5, 7 and 250 made `ambient_light` report exactly those
+    values within about 2 ms.
+  - With backlight 0 sent, the raw channels stopped: one event in 4 s, against
+    197 at backlight 61.
+  - The raw channels stream only while a client keeps `ambient_light` enabled.
+    Fields 0–3 are C, R, G and B, and fields 4–7 are the unit's factory channel
+    scales.
+- **Fix:**
+  - A libssc patch exports `ssc_sensor_send()`.
+  - `houji-als` follows the backlight and DPMS state and sends them to the DSP.
+    It computes lux like `alsAlgo::process`: channels × scales, an IR ratio
+    choosing the low- or high-IR coefficients from `lightSensorConfig.json`,
+    minus 0.3, and 200,000 on saturation. It averages 200 ms windows, takes a
+    median of three, ignores changes under 10 % and sends the result back.
+  - The udev rule now allows `ssc-light`, and the sleep hook stops the service.
+- **Result:**
+  - iio-sensor-proxy reports `HasAmbientLight` and a lux level, about 1040 in a
+    daylit room.
+  - A 40-second test followed a flashlight (up to about 5,700 lux) and a
+    covering hand (about 110–180 lux).
+  - CPU use is 0 without a light client and about 0.7 % of one core with one.
+  - The sleep hook's stop and restart cycle was checked by hand.
+- **Not done:** Xiaomi's leak correction (`White_test` and the `panel_Info_cali`
+  tables) uses a capture of the pixels above the sensor, so it is not ported.
+  Readings were not compared with a lux meter.
+
 ## Battery and charging
 
 ### Battery readings
