@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import time
 
-BATTERY = Path('/sys/class/power_supply/qcom-battmgr-bat')
+BATTERY = Path('/sys/class/power_supply/battery')
 
 
 def ready(battery=BATTERY):

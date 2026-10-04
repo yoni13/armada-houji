@@ -22,7 +22,7 @@ loader.exec_module(sleep)
 
 DSP = '6800000.remoteproc:glink-edge.fastrpcglink-apps-dsp.-1.-1'
 PWRKEY = 'c400000.spmi:pmic@0:pon@1300:pwrkey'
-BATTERY = 'qcom-battmgr-bat'
+BATTERY = 'battery'
 UCSI = 'ucsi-source-psy-pmic_glink.ucsi.01'
 RTC = 'c400000.spmi:pmic@0:rtc@6100'
 

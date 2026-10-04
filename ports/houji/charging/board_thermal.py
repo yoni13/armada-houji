@@ -21,7 +21,7 @@ def virtual_temperature(temperatures):
     return value
 
 
-def read_temperatures(bat=Path('/sys/class/power_supply/qcom-battmgr-bat'),
+def read_temperatures(bat=Path('/sys/class/power_supply/battery'),
                       devices='/sys/bus/iio/devices/iio:device*'):
     values = {'battery': int((bat / 'temp').read_text()) * 100}
     found = 0

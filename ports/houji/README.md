@@ -71,10 +71,11 @@ Results below are from the development handset.
 | Thermal limits | CPU and GPU limits follow the stock skin-temperature estimate, using Xiaomi's tables. Game Mode keeps the GPU at full speed longer and slows the CPU first. See [Thermal limits](#thermal-limits). |
 | Ambient light | The front sensor under the display reports lux through iio-sensor-proxy (`monitor-sensor --light`). It followed room light, a flashlight and a covering hand. Steam detects it through a small kernel device and reads it about five times a second, but in the first test the screen did not brighten under a flashlight. See [Ambient light](#ambient-light). |
 | Wi-Fi | WCN7850, 2.4 and 5 GHz, two streams at 80 MHz. About 509 Mb/s down and 424 Mb/s up in a local test. Speed depends on signal and access point. |
-| Bluetooth | Controller pairing and control. |
+| Bluetooth | Controller pairing and control. A `1949:0402` gamepad's Home button reaches Steam through kernel patch `0025`. On the tested unit, A and B are swapped against SDL's mapping, so Steam's quick access shortcut is Home + the physical B. |
 | Haptics | Short and long vibration. |
 | Speakers and microphone | Stereo playback and recording, using the phone's factory speaker calibration. |
-| Battery | Voltage, current, charge level, Steam time estimates and USB-PD. |
+| Battery | Voltage, current, charge level, Steam time estimates and USB-PD. The battery is named `battery`, as elsewhere in Armada, so Steam's performance overlay (MangoHud) shows its level, power while discharging and time remaining. |
+| Performance overlay | Steam's overlay levels show only readings this phone provides; per-component CPU and GPU power have no sensor here and are left out. |
 | USB device | Charging by default. File transfer (MTP) on demand through Armada's switch. USB 3 at 5 Gb/s in both cable orientations, USB 2 fallback. No USB shell or network gadget. |
 | USB host (OTG) | Wired gamepad and a Pixel webcam, including 5 Gb/s video. |
 

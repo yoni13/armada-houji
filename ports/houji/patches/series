@@ -20,3 +20,6 @@
 0021-asoc-drain-resume-before-unbind.patch
 0022-fastrpc-freezable-invoke-wait.patch
 0023-iio-light-houji-virtual-als.patch
+0024-houji-battery-name.patch
+0025-hid-lab126-gamepad-home-button.patch
+0026-houji-battery-unknown-times.patch

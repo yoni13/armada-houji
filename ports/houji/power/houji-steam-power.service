@@ -3,7 +3,7 @@ Description=Houji UPower telemetry for Steam Game Mode
 Wants=upower.service
 After=upower.service
 Before=display-manager.service
-ConditionPathExists=/sys/class/power_supply/qcom-battmgr-bat
+ConditionPathExists=/sys/class/power_supply/battery
 
 [Service]
 Type=notify

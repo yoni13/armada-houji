@@ -1,0 +1,171 @@
+Subject: [PATCH] HID: add a Home button fix for the 1949:0402 gamepad
+
+A white-label Bluetooth and USB gamepad reports vendor 0x1949 and product
+0x0402. It sends Home as the consumer usage AC Home in a Consumer Control
+collection of its own, so hid-generic puts it on a separate input device as
+KEY_HOMEPAGE. Steam and games read only the gamepad device, so Home and
+Steam's Home + A shortcut do nothing.
+
+Rewrite that collection as a Game Pad application, keeping its usages on
+the Consumer page, so it joins the gamepad's input device. SDL's mapping
+for this controller expects Guide at button 17: map AC Back to
+BTN_TRIGGER_HAPPY1 and AC Home to BTN_TRIGGER_HAPPY2, the evdev buttons
+SDL numbers 16 and 17 after the 16 HID buttons. The keyboard and mouse
+collections keep their own devices.
+
+diff -Nru a/drivers/hid/hid-lab126-gamepad.c b/drivers/hid/hid-lab126-gamepad.c
+--- a/drivers/hid/hid-lab126-gamepad.c
++++ b/drivers/hid/hid-lab126-gamepad.c
+@@ -0,0 +1,120 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * HID driver for a white-label gamepad that reports vendor 0x1949 (Lab126)
++ * and product 0x0402.
++ *
++ * The gamepad sends its Home button as the consumer usage AC Home, inside a
++ * Consumer Control collection of its own. Linux therefore puts it on a
++ * separate input device as KEY_HOMEPAGE, and programs that read the
++ * gamepad, such as Steam, never see it: Home and the Home + A shortcut do
++ * nothing. Present that collection as part of the gamepad.
++ *
++ * SDL's mapping for this controller ("Amazon Fire Game Controller") expects
++ * Guide at button 17. SDL numbers evdev buttons by key code: the 16 HID
++ * buttons give 0-15 (BTN_SOUTH to 0x13f), so map AC Back to
++ * BTN_TRIGGER_HAPPY1 (16) and AC Home to BTN_TRIGGER_HAPPY2 (17). BTN_MODE
++ * cannot be used: HID button 13 already reports it.
++ */
++
++#include <linux/hid.h>
++#include <linux/module.h>
++#include <linux/string.h>
++
++#define USB_VENDOR_ID_LAB126		0x1949
++#define USB_DEVICE_ID_LAB126_GAMEPAD	0x0402
++
++#define GAMEPAD_RDESC_SIZE		274
++#define GAMEPAD_CONSUMER_OFFSET		0x42
++
++/* Usage Page (Consumer), Usage (Consumer Control), Collection (Application),
++ * Report ID (2)
++ */
++static const __u8 consumer_collection[] = {
++	0x05, 0x0c, 0x09, 0x01, 0xa1, 0x01, 0x85, 0x02,
++};
++
++/* The same collection as a Game Pad application. The usages inside stay on
++ * the Consumer page.
++ */
++static const __u8 gamepad_collection[] = {
++	0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x05, 0x0c, 0x85, 0x02,
++};
++
++#define GAMEPAD_FIXED_SIZE \
++	(GAMEPAD_RDESC_SIZE + sizeof(gamepad_collection) - sizeof(consumer_collection))
++
++static __u8 gamepad_fixed_rdesc[GAMEPAD_FIXED_SIZE];
++
++static const __u8 *lab126_gamepad_report_fixup(struct hid_device *hdev,
++					       __u8 *rdesc, unsigned int *rsize)
++{
++	const unsigned int tail = GAMEPAD_CONSUMER_OFFSET + sizeof(consumer_collection);
++
++	if (*rsize != GAMEPAD_RDESC_SIZE ||
++	    memcmp(rdesc + GAMEPAD_CONSUMER_OFFSET, consumer_collection,
++		   sizeof(consumer_collection)))
++		return rdesc;
++
++	memcpy(gamepad_fixed_rdesc, rdesc, GAMEPAD_CONSUMER_OFFSET);
++	memcpy(gamepad_fixed_rdesc + GAMEPAD_CONSUMER_OFFSET, gamepad_collection,
++	       sizeof(gamepad_collection));
++	memcpy(gamepad_fixed_rdesc + GAMEPAD_CONSUMER_OFFSET + sizeof(gamepad_collection),
++	       rdesc + tail, GAMEPAD_RDESC_SIZE - tail);
++
++	hid_info(hdev, "reporting the Home button with the gamepad buttons\n");
++	*rsize = GAMEPAD_FIXED_SIZE;
++	return gamepad_fixed_rdesc;
++}
++
++static int lab126_gamepad_input_mapping(struct hid_device *hdev,
++					struct hid_input *hi,
++					struct hid_field *field,
++					struct hid_usage *usage,
++					unsigned long **bit, int *max)
++{
++	switch (usage->hid) {
++	case HID_UP_CONSUMER | 0x224:	/* AC Back */
++		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_TRIGGER_HAPPY1);
++		return 1;
++	case HID_UP_CONSUMER | 0x223:	/* AC Home */
++		hid_map_usage_clear(hi, usage, bit, max, EV_KEY, BTN_TRIGGER_HAPPY2);
++		return 1;
++	}
++	return 0;
++}
++
++static int lab126_gamepad_probe(struct hid_device *hdev,
++				const struct hid_device_id *id)
++{
++	int ret;
++
++	/* Keep the keyboard and mouse collections on their own devices, as
++	 * hid-generic does.
++	 */
++	hdev->quirks |= HID_QUIRK_INPUT_PER_APP;
++
++	ret = hid_parse(hdev);
++	if (ret)
++		return ret;
++
++	return hid_hw_start(hdev, HID_CONNECT_DEFAULT);
++}
++
++static const struct hid_device_id lab126_gamepad_devices[] = {
++	{ HID_BLUETOOTH_DEVICE(USB_VENDOR_ID_LAB126, USB_DEVICE_ID_LAB126_GAMEPAD) },
++	{ HID_USB_DEVICE(USB_VENDOR_ID_LAB126, USB_DEVICE_ID_LAB126_GAMEPAD) },
++	{ }
++};
++MODULE_DEVICE_TABLE(hid, lab126_gamepad_devices);
++
++static struct hid_driver lab126_gamepad_driver = {
++	.name = "lab126-gamepad",
++	.id_table = lab126_gamepad_devices,
++	.report_fixup = lab126_gamepad_report_fixup,
++	.input_mapping = lab126_gamepad_input_mapping,
++	.probe = lab126_gamepad_probe,
++};
++module_hid_driver(lab126_gamepad_driver);
++
++MODULE_DESCRIPTION("Home button fix for the 1949:0402 gamepad");
++MODULE_LICENSE("GPL");
+diff -Nru a/drivers/hid/Kconfig b/drivers/hid/Kconfig
+--- a/drivers/hid/Kconfig
++++ b/drivers/hid/Kconfig
+@@ -492,6 +492,17 @@
+ 	the specification. Currently supported:
+ 		- Keytouch IEC 60945
+ 
++config HID_LAB126_GAMEPAD
++	tristate "1949:0402 gamepad Home button"
++	help
++	  Support for a white-label gamepad that reports vendor 0x1949 and
++	  product 0x0402. Its Home button is reported with the gamepad buttons
++	  instead of as a separate keyboard key, at the position SDL's mapping
++	  for this controller expects for Guide, so Steam and games see it.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called hid-lab126-gamepad.
++
+ config HID_KYE
+ 	tristate "KYE/Genius devices"
+ 	help
+diff -Nru a/drivers/hid/Makefile b/drivers/hid/Makefile
+--- a/drivers/hid/Makefile
++++ b/drivers/hid/Makefile
+@@ -73,6 +73,7 @@
+ obj-$(CONFIG_HID_KENSINGTON)	+= hid-kensington.o
+ obj-$(CONFIG_HID_KEYTOUCH)	+= hid-keytouch.o
+ obj-$(CONFIG_HID_KYE)		+= hid-kye.o
++obj-$(CONFIG_HID_LAB126_GAMEPAD)	+= hid-lab126-gamepad.o
+ obj-$(CONFIG_HID_KYSONA)	+= hid-kysona.o
+ obj-$(CONFIG_HID_LCPOWER)	+= hid-lcpower.o
+ obj-$(CONFIG_HID_LENOVO)	+= hid-lenovo.o

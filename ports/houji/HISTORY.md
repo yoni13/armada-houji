@@ -762,6 +762,41 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   The thermal limits above lower the average load but cannot react within
   milliseconds.
 
+### Steam's performance overlay showed zeros and no battery
+
+- **Issue:** The full overlay showed 0 for GPU and CPU power, GPU voltage, GPU
+  junction and memory temperature, memory clock, fan, VRAM and RAM
+  temperature, and it had no battery line.
+- **Cause:**
+  - Steam only passes MangoHud a preset number. MangoHud 0.8.4's built-in
+    presets include readings that come from AMD, Intel or NVIDIA drivers.
+    MangoHud hides them itself on the Steam Deck and other known handhelds,
+    but not on an Adreno phone.
+  - Armada's MangoHud reads only `/sys/class/power_supply/battery`, which is
+    the name Armada's own kernel gives Qualcomm batteries (patch `0503`,
+    paired with MangoHud patch `0003`). This port's battery was
+    `qcom-battmgr-bat`. MangoHud logged "No battery found".
+- **Fix:**
+  - `MANGOHUD_PRESETSFILE` in the Steam session points to
+    `/usr/share/houji/mangohud-presets.conf`. It holds MangoHud's built-in
+    presets 2–4 without those readings.
+  - Kernel patch `0024` names the battery `battery`, like the rest of Armada.
+    The port's charging, thermal, battery-wait and Steam power services use
+    the new path. `houji-sleep` treats `battery` wakeups as bookkeeping, as
+    it did for `battmgr`.
+  - UPower and Steam's battery reading go by type, so they are unaffected.
+  - A first attempt used `BAT0`, the conventional ACPI laptop name that
+    upstream MangoHud matches. Armada's MangoHud ignored it.
+  - Remaining time then read 00:00. The battery firmware reports
+    `time_to_empty_avg` and `time_to_full_avg` as 0; on stock, the Android
+    framework makes the estimate. Kernel patch `0026` returns "no data" for
+    a 0 on houji. MangoHud then estimates from `charge_now` and
+    `current_now`, like UPower does.
+- **Result:** Tested on the phone. The overlay no longer shows the zeros, and
+  its battery row shows power and remaining time while discharging. While
+  charging it shows neither, which is MangoHud's normal behaviour. Separate CPU and GPU power stay
+  unavailable because the SoC exposes no power meters to Linux.
+
 ## Audio, Bluetooth and haptics
 
 ### Speakers and microphone
@@ -813,6 +848,33 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   with that gamepad. A Pixel 7a webcam negotiated 5 Gbit/s and streamed raw and 1080p
   MJPEG, though its UVC stream occasionally flagged bad frames for an unknown reason.
   USB4 and DisplayPort are not claimed.
+
+### Bluetooth gamepad Home button
+
+- **Issue:** Over Bluetooth, the owner's gamepad identified as `1949:0402`
+  ("Gamepad") and no InputPlumber profile matched it. Home did nothing, and
+  neither did Home + A.
+- **Cause:**
+  - Home is the consumer usage AC Home (`0x0C0223`) in a Consumer Control
+    collection of its own. `hid-generic` creates one input device per
+    collection, so Home became `KEY_HOMEPAGE` on "Gamepad Keyboard", and
+    Steam reads only "Gamepad".
+  - Steam then uses SDL's mapping "Amazon Fire Game Controller", which expects
+    Guide at button 17. SDL numbers evdev buttons by key code; the 16 HID
+    buttons give 0–15. `BTN_MODE` was no option: HID button 13 already
+    reports it, as SDL button 12 (`misc1`).
+- **Fix:** Kernel patch `0025` (`hid-lab126-gamepad`):
+  - It rewrites the Consumer Control collection as a Game Pad application,
+    keeping the Consumer usage page. It does this only when the descriptor
+    matches byte for byte. The collection then joins the gamepad's device.
+  - It maps AC Back to `BTN_TRIGGER_HAPPY1` (SDL 16) and AC Home to
+    `BTN_TRIGGER_HAPPY2` (SDL 17).
+- **Result:** Tested on the phone, first as a loaded module and then in the built image:
+  - Home arrived on the gamepad device and opened the Steam menu.
+  - The physical A sends HID button 2, which SDL's mapping calls B, so A and B
+    are swapped on this unit. Home + the physical B opens quick access. The
+    owner chose to keep this layout. Swapping in the kernel would break a
+    genuine Fire controller, which shares the IDs.
 
 ## GPS
 

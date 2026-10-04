@@ -378,8 +378,8 @@ int main(int argc, char **argv)
 		"authentication runtime directory unavailable");
 	int lock = open("/run/houji-charging/auth.lock", O_CREAT | O_RDWR | O_CLOEXEC, 0600);
 	require(lock >= 0 && !flock(lock, LOCK_EX | LOCK_NB), "authentication already running");
-	long cap = read_number("/sys/class/power_supply/qcom-battmgr-bat/constant_charge_current");
-	long temp = read_number("/sys/class/power_supply/qcom-battmgr-bat/temp");
+	long cap = read_number("/sys/class/power_supply/battery/constant_charge_current");
+	long temp = read_number("/sys/class/power_supply/battery/temp");
 	require(cap > 0 && cap <= 500000 && temp >= 100 && temp <= 400,
 		"authentication requires conservative current and temperature");
 	long usb_online = read_number("/sys/class/power_supply/qcom-battmgr-usb/online");

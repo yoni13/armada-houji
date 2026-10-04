@@ -16,7 +16,7 @@ from thermal_policy import Policy, cap_state, gpu_state, step_towards
 
 THERMAL = Path('/sys/class/thermal')
 CPUS = Path('/sys/devices/system/cpu')
-BATTERY = Path('/sys/class/power_supply/qcom-battmgr-bat/capacity')
+BATTERY = Path('/sys/class/power_supply/battery/capacity')
 INTERVAL = 1
 MODE_INTERVAL = 5
 LOG_INTERVAL = 30

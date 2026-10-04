@@ -1,0 +1,20 @@
+Subject: [PATCH] power: supply: qcom_battmgr: name the houji battery "battery"
+
+Armada names Qualcomm batteries "battery" (its 0503 battery-name patch),
+and its MangoHud, which draws Steam's performance overlay, only reads
+/sys/class/power_supply/battery. With "qcom-battmgr-bat" the overlay shows
+no battery percentage, power or time remaining. Use the same name for the
+houji battery.
+
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -1296,7 +1296,8 @@
+ };
+ 
+ static const struct power_supply_desc houji_bat_psy_desc = {
+-	.name = "qcom-battmgr-bat",
++	/* Armada's battery name, which its MangoHud reads. */
++	.name = "battery",
+ 	.type = POWER_SUPPLY_TYPE_BATTERY,
+ 	.properties = houji_bat_props,
+ 	.num_properties = ARRAY_SIZE(houji_bat_props),

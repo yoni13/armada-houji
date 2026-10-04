@@ -1,0 +1,27 @@
+Subject: [PATCH] power: supply: qcom_battmgr: report houji's missing battery times as no data
+
+Houji's battery firmware reports time_to_empty_avg and time_to_full_avg
+as 0 while it discharges or charges; the estimate is made by the stock
+Android framework, not the firmware. A 0 reads as "empty now": Armada's
+MangoHud shows 00:00 remaining. Return -ENODATA for a 0 on houji, so
+readers fall back to their own estimate, as UPower already does.
+
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -706,9 +706,16 @@
+ 		val->intval = battmgr->status.soh_percent;
+ 		break;
+ 	case POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG:
++		/* Houji's firmware reports 0 when it has no estimate. */
++		if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI &&
++		    !battmgr->status.discharge_time)
++			return -ENODATA;
+ 		val->intval = battmgr->status.discharge_time;
+ 		break;
+ 	case POWER_SUPPLY_PROP_TIME_TO_FULL_AVG:
++		if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI &&
++		    !battmgr->status.charge_time)
++			return -ENODATA;
+ 		val->intval = battmgr->status.charge_time;
+ 		break;
+ 	case POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD:

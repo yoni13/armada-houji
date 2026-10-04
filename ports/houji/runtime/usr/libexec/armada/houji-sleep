@@ -47,7 +47,9 @@ DARK_WINDOW = 20.0         # ... inside this many seconds means a wake loop
 # recorded but does not end a sleep. Anything else (power key, touch, USB
 # peripherals, modem) is treated as a person and ends the loop.
 CAUSE = 'fastrpc'
-BENIGN = ('fastrpc', 'battmgr', 'ucsi', 'rtc')
+# The battery is named "battery" (kernel patch 0024); its USB and
+# wireless supplies keep their qcom-battmgr names.
+BENIGN = ('fastrpc', 'battmgr', 'battery', 'ucsi', 'rtc')
 # A key pressed while the system is briefly awake between two suspends raises
 # an interrupt but neither wakes nor aborts anything, so watch the counters.
 # Matched case-insensitively against the whole interrupt label.

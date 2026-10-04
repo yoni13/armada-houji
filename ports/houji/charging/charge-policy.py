@@ -17,7 +17,7 @@ from collections import deque
 from board_thermal import read_temperatures, virtual_temperature
 from stock_thermal import WiredThermal, WirelessThermal, SicThermal
 
-BAT = Path('/sys/class/power_supply/qcom-battmgr-bat')
+BAT = Path('/sys/class/power_supply/battery')
 USB = Path('/sys/class/power_supply/qcom-battmgr-usb')
 WLS = Path('/sys/class/power_supply/qcom-battmgr-wls')
 AUX = '/sys/bus/auxiliary/devices/pmic_glink.power-supply.*/houji_charger_state'

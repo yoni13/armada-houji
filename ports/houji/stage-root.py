@@ -86,6 +86,9 @@ write('etc/udev/rules.d/90-houji-sensors.rules','SUBSYSTEM=="misc", KERNEL=="fas
       'SUBSYSTEM=="iio", ATTR{name}=="als", ENV{IIO_SENSOR_PROXY_TYPE}=""\n')
 write('etc/systemd/user/gamescope-session-plus@steam.service.d/20-houji-adaptive-brightness.conf',
       '[Service]\n# Steam offers adaptive brightness only with this set.\nEnvironment=STEAM_ENABLE_DYNAMIC_BACKLIGHT=1\n')
+write('etc/systemd/user/gamescope-session-plus@steam.service.d/21-houji-mangohud.conf',
+      '[Service]\n# Performance overlay levels without readings this phone cannot provide.\n'
+      'Environment=MANGOHUD_PRESETSFILE=/usr/share/houji/mangohud-presets.conf\n')
 write('etc/modules-load.d/houji.conf','qcom-hv-haptics\nhci_uart\n')
 write('etc/modprobe.d/houji-touch.conf','blacklist houji_tcm_probe\n')
 write('etc/udev/rules.d/70-houji-haptics.rules','ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="qcom-hv-haptics", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra"\n')
