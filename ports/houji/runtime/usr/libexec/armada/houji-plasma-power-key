@@ -1,0 +1,34 @@
+#!/bin/sh
+# Give Plasma's Power key the power-button action (Sleep, /etc/xdg/powerdevilrc)
+# once; Plasma Mobile binds it to "Turn Off Screen", which leaves the phone
+# awake. Later user changes are preserved.
+set -eu
+config=${XDG_CONFIG_HOME:-"$HOME/.config"}
+marker="$config/houji-power-key-initialized"
+[ ! -e "$marker" ] || exit 0
+key_power_off=16777399 # Qt::Key_PowerOff
+bound() {
+    busctl --user call org.kde.kglobalaccel /kglobalaccel org.kde.KGlobalAccel \
+        shortcutKeys as 4 org_kde_powerdevil PowerOff 'Power Management' 'Power Off' 2>/dev/null |
+        grep -q " $key_power_off "
+}
+# PowerDevil registers its shortcuts shortly after the session starts.
+for attempt in $(seq 1 30); do
+    if busctl --user call org.kde.kglobalaccel /kglobalaccel org.kde.KGlobalAccel \
+        shortcutKeys as 4 org_kde_powerdevil 'Turn Off Screen' 'Power Management' 'Turn Off Screen' \
+        >/dev/null 2>&1; then
+        busctl --user call org.kde.kglobalaccel /kglobalaccel org.kde.KGlobalAccel \
+            setForeignShortcutKeys 'asa(ai)' 4 org_kde_powerdevil 'Turn Off Screen' \
+            'Power Management' 'Turn Off Screen' 0
+        busctl --user call org.kde.kglobalaccel /kglobalaccel org.kde.KGlobalAccel \
+            setForeignShortcutKeys 'asa(ai)' 4 org_kde_powerdevil PowerOff \
+            'Power Management' 'Power Off' 1 4 "$key_power_off" 0 0 0
+        if bound; then
+            mkdir -p "$config"
+            : >"$marker"
+            exit 0
+        fi
+    fi
+    sleep 1
+done
+exit 1

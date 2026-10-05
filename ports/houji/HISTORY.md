@@ -470,6 +470,19 @@ for every DSP request.
   the stock behaviour and with the 0.2 s pause, and did not with watchdogs
   paused. On the build, a suspend restored the watchdogs 5 s after waking.
 
+### Power did not sleep the phone in Plasma
+
+- **Issue:** In Plasma a short Power press locked and blanked the screen but
+  left the phone awake, drawing about 128 mA.
+- **Cause:** PowerDevil's mobile default power-button action toggles the
+  screen, and Plasma Mobile binds the Power key to PowerDevil's "Turn Off
+  Screen" shortcut rather than its power-button action.
+- **Fix:** `/etc/xdg/powerdevilrc` sets the power-button action to Sleep for
+  all profiles, and a once-per-user autostart hook moves the Power key to
+  that action through KGlobalAccel. User changes are kept.
+- **Result:** On the phone, a Power press in Plasma suspended through
+  `houji-sleep` and the next press woke it.
+
 ## Armada 20260926 migration
 
 - **Issue:** The fork was based on the September 19 tree and Houji built Linux 7.2.3,

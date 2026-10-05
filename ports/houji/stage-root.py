@@ -90,6 +90,11 @@ write('etc/systemd/user/gamescope-session-plus@steam.service.d/20-houji-adaptive
 write('etc/systemd/user/gamescope-session-plus@steam.service.d/21-houji-mangohud.conf',
       '[Service]\n# Performance overlay levels without readings this phone cannot provide.\n'
       'Environment=MANGOHUD_PRESETSFILE=/usr/share/houji/mangohud-presets.conf\n')
+# Plasma Mobile's built-in default only toggles the screen, leaving the phone
+# awake. Sleep (1) matches Game Mode; users can still change it in Plasma.
+write('etc/xdg/powerdevilrc', ''.join(
+    f'[{profile}][SuspendAndShutdown]\nPowerButtonAction=1\n\n'
+    for profile in ('AC', 'Battery', 'LowBattery')))
 write('etc/modules-load.d/houji.conf','qcom-hv-haptics\nhci_uart\n')
 write('etc/modprobe.d/houji-touch.conf','blacklist houji_tcm_probe\n')
 write('etc/udev/rules.d/70-houji-haptics.rules','ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="qcom-hv-haptics", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra"\n')

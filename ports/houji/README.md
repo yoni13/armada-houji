@@ -534,6 +534,10 @@ not verified.
 
 - **On battery**, Power uses native `s2idle` (the default). Light sleep remains
   selectable in Armada's sleep-mode setting.
+- **In Plasma**, a short Power press sleeps the phone as in Game Mode. Plasma
+  Mobile's default only turns the screen off; the port sets the power-button
+  action to Sleep and binds the Power key to it once per user. Both can be
+  changed in Plasma's settings.
 - **During an authenticated wired charging session**, Power uses light sleep so the
   host thermal monitor keeps running with the screen off. It returns to the
   configured mode when charging ends or the cable is unplugged.

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Houji Power key sleep
+Exec=/usr/libexec/armada/houji-plasma-power-key
+OnlyShowIn=KDE;
+NoDisplay=true
