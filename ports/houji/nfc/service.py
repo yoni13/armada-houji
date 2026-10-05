@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Persistent NFC modes, controlled by an authorized active local session."""
+import errno
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 
 from gi.repository import Gio, GLib
 
@@ -47,6 +49,24 @@ def load_settings():
     if value['custom_serial'] and not value['serial'].strip():
         raise ValueError('Invalid saved serial')
     return value
+
+
+def describe_failure(error):
+    """Where and how an operation failed, without payloads or card data.
+
+    Controller RuntimeErrors carry fixed messages; other exception text may
+    include transport details, so only its type and errno are reported.
+    """
+    frames = traceback.extract_tb(error.__traceback__)
+    where = (f'{Path(frames[-1].filename).name}:{frames[-1].lineno} in {frames[-1].name}'
+             if frames else 'unknown location')
+    if type(error) is RuntimeError:
+        detail = str(error)
+    elif isinstance(error, OSError) and error.errno:
+        detail = f'errno {errno.errorcode.get(error.errno, error.errno)}'
+    else:
+        detail = ''
+    return f'{type(error).__name__} at {where}' + (f': {detail}' if detail else '')
 
 
 class Service:
@@ -221,8 +241,11 @@ class Service:
                     operation()
                     with self.lock:
                         self.state.update(mode='off', busy=False)
-                except Exception:
-                    # Exceptions may contain transport details. Never log card data.
+                except Exception as error:
+                    with self.lock:
+                        phase = self.state.get('message', '')
+                    print(f'NFC operation failed during "{phase}": {describe_failure(error)}',
+                          file=sys.stderr, flush=True)
                     with self.lock:
                         self.state.update(mode='error', busy=False,
                             message='NFC operation failed. Turn NFC off and on, or restart the phone.')

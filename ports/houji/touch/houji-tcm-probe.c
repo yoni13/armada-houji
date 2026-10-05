@@ -22,6 +22,7 @@
 #include <linux/pm.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/workqueue.h>
 
 struct houji_stream_record {
 	u16 length;
@@ -49,6 +50,11 @@ struct houji_tcm_probe {
 	bool stream_open, stream_dead;
 	int stream_error;
 	int irq_number;
+	/* Packet errors reset and reconfigure the controller instead of
+	 * leaving the stream stopped until the next boot. */
+	struct delayed_work recover_work;
+	unsigned long recovering;
+	unsigned int recover_attempts, recoveries;
 };
 
 struct houji_stream_reader {
@@ -394,6 +400,28 @@ static int houji_tcm_report(struct houji_tcm_probe *t, u16 len)
 	return 0;
 }
 
+static void houji_tcm_recover(struct work_struct *work);
+static int houji_tcm_identify(struct houji_tcm_probe *t);
+static int houji_tcm_configure(struct houji_tcm_probe *t);
+static const u8 houji_touch_report = 0x11;
+
+/* Disable the IRQ once per recovery; recovery re-enables it. */
+static void houji_tcm_schedule_recovery(struct houji_tcm_probe *t, int error, bool sync)
+{
+	if (test_and_set_bit(0, &t->recovering))
+		return;
+	if (sync)
+		disable_irq(t->irq_number);
+	else
+		disable_irq_nosync(t->irq_number);
+	mutex_lock(&t->raw_lock);
+	t->stream_error = error;
+	mutex_unlock(&t->raw_lock);
+	wake_up_interruptible(&t->stream_wait);
+	t->recover_attempts = 0;
+	queue_delayed_work(system_freezable_wq, &t->recover_work, 0);
+}
+
 static irqreturn_t houji_tcm_irq(int irq, void *data)
 {
 	struct houji_tcm_probe *t = data;
@@ -417,36 +445,83 @@ static irqreturn_t houji_tcm_irq(int irq, void *data)
 	if (!ret && code == 0x11)
 		ret = houji_tcm_report(t, len);
 	if (ret) {
-		/* Stop an invalid level-triggered stream, preserving the test timer. */
-		dev_err(&t->spi->dev, "Touch stream stopped after packet error %d\n", ret);
-		disable_irq_nosync(irq);
-		mutex_lock(&t->raw_lock);
-		t->stream_error = ret;
-		mutex_unlock(&t->raw_lock);
-		wake_up_interruptible(&t->stream_wait);
+		/* Quiesce the level-triggered line, end the reader's session and
+		 * reset the controller. A failed SPI transfer (for example a DMA
+		 * completion later than the SPI core's 200 ms limit) used to stop
+		 * touch until reboot.
+		 */
+		dev_err(&t->spi->dev, "Touch packet error %d; resetting controller\n", ret);
+		houji_tcm_schedule_recovery(t, ret, false);
 		input_mt_sync_frame(t->input);
 		input_sync(t->input);
 	}
 	return IRQ_HANDLED;
 }
 
-static int houji_tcm_setup_input(struct houji_tcm_probe *t)
+static void houji_tcm_recover(struct work_struct *work)
 {
-	/* Exact stock format read back from firmware build 4323384. It has
-	 * an 18-byte header (count last), then packed slot/class, X/Y/Z and
-	 * widths. Sensor/gesture header fields and Z/widths are not reported.
-	 */
-	static const u8 format[] = {
-		0x10, 8, 0x1b, 48, 0x16, 4, 0x1e, 4, 0x12, 16,
-		0x20, 16, 0x21, 16, 0x22, 4, 0x23, 4, 0x25, 16,
-		0x18, 8, 0x01, 0x06, 4, 0x07, 4, 0x08, 16, 0x09, 16,
-		0x0a, 16, 0x0b, 8, 0x0c, 8, 0x03, 0x00,
-	};
+	struct houji_tcm_probe *t = container_of(to_delayed_work(work),
+						 struct houji_tcm_probe, recover_work);
+	unsigned int delay;
+	u16 len;
+	int ret;
+
+	/* The IRQ thread may still be returning from the failed packet. */
+	synchronize_irq(t->irq_number);
+	ret = houji_tcm_identify(t);
+	if (!ret)
+		ret = houji_tcm_configure(t);
+	if (!ret)
+		ret = houji_tcm_command(t, 0x05, &houji_touch_report, 1, &len);
+	if (ret) {
+		delay = min(100U << min(t->recover_attempts, 6U), 5000U);
+		t->recover_attempts++;
+		dev_err_ratelimited(&t->spi->dev,
+				    "Touch controller reset failed (%d); retry %u in %u ms\n",
+				    ret, t->recover_attempts, delay);
+		queue_delayed_work(system_freezable_wq, &t->recover_work,
+				   msecs_to_jiffies(delay));
+		return;
+	}
+	t->recover_attempts = 0;
+	t->recoveries++;
+	dev_info(&t->spi->dev, "Touch controller recovered (%u)\n", t->recoveries);
+	clear_bit(0, &t->recovering);
+	enable_irq(t->irq_number);
+}
+
+static ssize_t houji_tcm_recover_write(struct file *file, const char __user *buf,
+				       size_t count, loff_t *ppos)
+{
+	struct houji_tcm_probe *t = file->private_data;
+
+	if (t->irq_number <= 0)
+		return -ENODEV;
+	dev_info(&t->spi->dev, "Touch controller reset requested\n");
+	houji_tcm_schedule_recovery(t, -EIO, true);
+	return count;
+}
+
+/* Exact stock format read back from firmware build 4323384. It has an
+ * 18-byte header (count last), then packed slot/class, X/Y/Z and widths.
+ * Sensor/gesture header fields and Z/widths are not reported.
+ */
+static const u8 houji_tcm_format[] = {
+	0x10, 8, 0x1b, 48, 0x16, 4, 0x1e, 4, 0x12, 16,
+	0x20, 16, 0x21, 16, 0x22, 4, 0x23, 4, 0x25, 16,
+	0x18, 8, 0x01, 0x06, 4, 0x07, 4, 0x08, 16, 0x09, 16,
+	0x0a, 16, 0x0b, 8, 0x0c, 8, 0x03, 0x00,
+};
+
+/* Put an identified controller in the native report mode; probe and
+ * recovery share this. Touch reports are enabled separately (0x05).
+ */
+static int houji_tcm_configure(struct houji_tcm_probe *t)
+{
 	struct device *dev = &t->spi->dev;
-	u8 touch_report = 0x11, raw_report = 0xc0;
+	u8 raw_report = 0xc0;
 	u16 len, config_size;
-	int ret, irq;
-	struct dentry *debug;
+	int ret;
 
 	/* Stock firmware starts in host-processing (THP) mode. Switch to
 	 * the native-coordinate path, as in Xiaomi's enable_touch_raw(0).
@@ -468,14 +543,43 @@ static int houji_tcm_setup_input(struct houji_tcm_probe *t)
 	dev_info(dev, "Houji TCM application: max=%ux%u objects=%u config-size=%u\n",
 		 t->max_x, t->max_y, t->max_objects, config_size);
 	if (!t->max_x || !t->max_y || !t->max_objects || t->max_objects > 32 ||
-	    config_size < sizeof(format) || config_size > sizeof(t->rx) - 3)
+	    config_size < sizeof(houji_tcm_format) || config_size > sizeof(t->rx) - 3)
 		return -EINVAL;
-	ret = houji_tcm_command(t, 0x06, &touch_report, 1, &len);
+	ret = houji_tcm_command(t, 0x06, &houji_touch_report, 1, &len);
 	if (ret)
 		return dev_err_probe(dev, ret, "disable report before setup\n");
 	ret = houji_tcm_command(t, 0x25, NULL, 0, &len);
-	if (ret || len != config_size || len < sizeof(format) || memcmp(t->rx + 2, format, sizeof(format)))
+	if (ret || len != config_size || len < sizeof(houji_tcm_format) ||
+	    memcmp(t->rx + 2, houji_tcm_format, sizeof(houji_tcm_format)))
 		return dev_err_probe(dev, ret ?: -EPROTO, "verify stock touch format\n");
+	return 0;
+}
+
+static ssize_t houji_tcm_recover_write(struct file *file, const char __user *buf,
+				       size_t count, loff_t *ppos);
+static const struct file_operations houji_tcm_recover_fops = {
+	.open = simple_open,
+	.write = houji_tcm_recover_write,
+	.llseek = noop_llseek,
+};
+
+static void houji_tcm_cancel_recovery(void *data)
+{
+	struct houji_tcm_probe *t = data;
+
+	cancel_delayed_work_sync(&t->recover_work);
+}
+
+static int houji_tcm_setup_input(struct houji_tcm_probe *t)
+{
+	struct device *dev = &t->spi->dev;
+	u16 len;
+	int ret, irq;
+	struct dentry *debug;
+
+	ret = houji_tcm_configure(t);
+	if (ret)
+		return ret;
 	t->input = devm_input_allocate_device(dev);
 	if (!t->input)
 		return -ENOMEM;
@@ -489,7 +593,7 @@ static int houji_tcm_setup_input(struct houji_tcm_probe *t)
 	ret = input_register_device(t->input);
 	if (ret)
 		return ret;
-	ret = houji_tcm_command(t, 0x05, &touch_report, 1, &len);
+	ret = houji_tcm_command(t, 0x05, &houji_touch_report, 1, &len);
 	if (ret)
 		return dev_err_probe(dev, ret, "enable touch reports\n");
 	irq = gpiod_to_irq(t->irq);
@@ -499,6 +603,8 @@ static int houji_tcm_setup_input(struct houji_tcm_probe *t)
 	if (IS_ERR(debug))
 		return PTR_ERR(debug);
 	debugfs_create_file("raw_frame", 0400, debug, t, &houji_tcm_raw_fops);
+	debugfs_create_file("recover", 0200, debug, t, &houji_tcm_recover_fops);
+	debugfs_create_u32("recoveries", 0400, debug, &t->recoveries);
 	ret = devm_add_action_or_reset(dev, houji_tcm_debug_remove, debug);
 	if (ret)
 		return ret;
@@ -519,7 +625,60 @@ static int houji_tcm_setup_input(struct houji_tcm_probe *t)
 	if (ret)
 		return dev_err_probe(dev, ret, "touch interrupt\n");
 	t->irq_number = irq;
+	/* Registered after the IRQ, so it is cancelled before the IRQ is freed. */
+	ret = devm_add_action_or_reset(dev, houji_tcm_cancel_recovery, t);
+	if (ret)
+		return ret;
 	dev_info(dev, "Houji TCM Linux input ready on IRQ %d\n", irq);
+	return 0;
+}
+
+/* Reset the powered controller and read its identity report. Returns
+ * -ENODEV for a controller that is not in TCM v1 application mode.
+ */
+static int houji_tcm_identify(struct houji_tcm_probe *t)
+{
+	struct device *dev = &t->spi->dev;
+	unsigned int len;
+	int ret;
+
+	gpiod_set_value_cansleep(t->reset, 1);
+	msleep(10);
+	gpiod_set_value_cansleep(t->reset, 0);
+	msleep(200);
+	dev_info(dev, "Houji TCM identity probe: avdd=%d iovdd=%d IRQ asserted=%d\n",
+		 regulator_get_voltage(t->avdd), regulator_get_voltage(t->iovdd),
+		 gpiod_get_value_cansleep(t->irq));
+	/* The vendor detection path sends this one-byte identification magic. */
+	t->tx[0] = 0x02;
+	ret = spi_write(t->spi, t->tx, 1);
+	if (ret)
+		return dev_err_probe(dev, ret, "identity magic\n");
+	usleep_range(1000, 2000);
+	ret = houji_tcm_read(t, 4);
+	if (ret)
+		return dev_err_probe(dev, ret, "startup header\n");
+	dev_info(dev, "Houji TCM startup header: %4ph\n", t->rx);
+	if (t->rx[0] != 0xa5 || t->rx[1] != 0x10) {
+		return -ENODEV;
+	}
+	len = get_unaligned_le16(t->rx + 2);
+	if (len < 24 || len > sizeof(t->rx) - 7)
+		return dev_err_probe(dev, -EINVAL, "unexpected identity length %u\n", len);
+	usleep_range(1000, 2000);
+	/* Marker/status + payload + EOM + optional CRC/RC/EOM trailer. */
+	ret = houji_tcm_read(t, len + 7);
+	if (ret)
+		return dev_err_probe(dev, ret, "identity payload\n");
+	dev_info(dev, "Houji TCM identity packet: %*ph\n", (int)min(len + 7, 64U), t->rx);
+	if (t->rx[0] != 0xa5 || t->rx[1] != 0x03)
+		return dev_err_probe(dev, -EPROTO, "unexpected continuation\n");
+	dev_info(dev, "Houji TCM v%u mode=0x%02x part=%16ph build=%u max-write=%u\n",
+		 t->rx[2], t->rx[3], t->rx + 4,
+		 get_unaligned_le32(t->rx + 20), get_unaligned_le16(t->rx + 24));
+	if (t->rx[3] != 1 || t->rx[len + 3] != 0x5a || t->rx[len + 4] != 0x5a)
+		return dev_err_probe(dev, -EPROTO, "untested firmware mode or CRC framing\n");
+	t->max_write = get_unaligned_le16(t->rx + 24);
 	return 0;
 }
 
@@ -527,7 +686,6 @@ static int houji_tcm_probe(struct spi_device *spi)
 {
 	struct device *dev = &spi->dev;
 	struct houji_tcm_probe *t;
-	unsigned int len;
 	int ret;
 
 	t = kzalloc(sizeof(*t), GFP_KERNEL);
@@ -538,6 +696,7 @@ static int houji_tcm_probe(struct spi_device *spi)
 	mutex_init(&t->raw_lock);
 	kref_init(&t->refs);
 	init_waitqueue_head(&t->stream_wait);
+	INIT_DELAYED_WORK(&t->recover_work, houji_tcm_recover);
 	ret = devm_add_action_or_reset(dev, houji_touch_put, t);
 	if (ret)
 		return ret;
@@ -574,44 +733,13 @@ static int houji_tcm_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 	msleep(50);
-	gpiod_set_value_cansleep(t->reset, 1);
-	msleep(10);
-	gpiod_set_value_cansleep(t->reset, 0);
-	msleep(200);
-	dev_info(dev, "Houji TCM identity probe: avdd=%d iovdd=%d IRQ asserted=%d\n",
-		 regulator_get_voltage(t->avdd), regulator_get_voltage(t->iovdd),
-		 gpiod_get_value_cansleep(t->irq));
-	/* The vendor detection path sends this one-byte identification magic. */
-	t->tx[0] = 0x02;
-	ret = spi_write(spi, t->tx, 1);
-	if (ret)
-		return dev_err_probe(dev, ret, "identity magic\n");
-	usleep_range(1000, 2000);
-	ret = houji_tcm_read(t, 4);
-	if (ret)
-		return dev_err_probe(dev, ret, "startup header\n");
-	dev_info(dev, "Houji TCM startup header: %4ph\n", t->rx);
-	if (t->rx[0] != 0xa5 || t->rx[1] != 0x10) {
+	ret = houji_tcm_identify(t);
+	if (ret == -ENODEV) {
 		dev_info(dev, "Not a TCM v1 identify report; no further commands\n");
 		return 0;
 	}
-	len = get_unaligned_le16(t->rx + 2);
-	if (len < 24 || len > sizeof(t->rx) - 7)
-		return dev_err_probe(dev, -EINVAL, "unexpected identity length %u\n", len);
-	usleep_range(1000, 2000);
-	/* Marker/status + payload + EOM + optional CRC/RC/EOM trailer. */
-	ret = houji_tcm_read(t, len + 7);
 	if (ret)
-		return dev_err_probe(dev, ret, "identity payload\n");
-	dev_info(dev, "Houji TCM identity packet: %*ph\n", (int)min(len + 7, 64U), t->rx);
-	if (t->rx[0] != 0xa5 || t->rx[1] != 0x03)
-		return dev_err_probe(dev, -EPROTO, "unexpected continuation\n");
-	dev_info(dev, "Houji TCM v%u mode=0x%02x part=%16ph build=%u max-write=%u\n",
-		 t->rx[2], t->rx[3], t->rx + 4,
-		 get_unaligned_le32(t->rx + 20), get_unaligned_le16(t->rx + 24));
-	if (t->rx[3] != 1 || t->rx[len + 3] != 0x5a || t->rx[len + 4] != 0x5a)
-		return dev_err_probe(dev, -EPROTO, "untested firmware mode or CRC framing\n");
-	t->max_write = get_unaligned_le16(t->rx + 24);
+		return ret;
 	return houji_tcm_setup_input(t);
 }
 

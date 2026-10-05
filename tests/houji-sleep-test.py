@@ -106,6 +106,9 @@ class Fake(sleep.Platform):
     def monotonic(self):
         return self.mono
 
+    def restore_watchdogs(self, delay):
+        self.calls.append('restore watchdogs')
+
     def sleep(self, seconds):
         self.boot += seconds
         self.mono += seconds
@@ -169,8 +172,9 @@ class SleepFlowTests(unittest.TestCase):
         phone = Fake([{'irq': '21', 'slept': 120}])
         self.assertEqual(self.run_sleep(phone), 0)
         self.assertEqual(phone.calls, [
-            'systemctl freeze user.slice', 'hooks pre', 'suspend', 'shield',
-            'hooks post', 'systemctl thaw user.slice'])
+            'systemctl freeze user.slice', 'systemctl service-watchdogs no', 'hooks pre',
+            'suspend', 'shield', 'hooks post', 'systemctl thaw user.slice',
+            'restore watchdogs'])
 
     def test_dsp_wakes_are_absorbed_and_the_desktop_thaws_once(self):
         phone = Fake([dsp(), dsp(), dsp(), {'irq': '21'}])
@@ -179,8 +183,8 @@ class SleepFlowTests(unittest.TestCase):
         self.assertEqual(phone.calls.count('hooks pre'), 1)
         self.assertEqual(phone.calls.count('hooks post'), 1)
         self.assertEqual(phone.calls.count('systemctl thaw user.slice'), 1)
-        self.assertEqual(phone.calls.index('hooks post'), len(phone.calls) - 2)
-        self.assertEqual(phone.calls[-3], 'shield')
+        self.assertEqual(phone.calls.index('hooks post'), len(phone.calls) - 3)
+        self.assertEqual(phone.calls[-4], 'shield')
 
     def test_power_key_after_dsp_wake_ends_the_loop_immediately(self):
         phone = Fake([dsp(), {'irq': '21'}, {'irq': '21'}])
@@ -196,20 +200,28 @@ class SleepFlowTests(unittest.TestCase):
         phone = Fake([{'errno': errno.EBUSY}] * 200)
         with self.assertRaises(OSError):
             self.run_sleep(phone)
-        self.assertEqual(phone.calls[-3:], ['shield', 'hooks post', 'systemctl thaw user.slice'])
+        self.assertEqual(phone.calls[-4:], ['shield', 'hooks post', 'systemctl thaw user.slice',
+                                            'restore watchdogs'])
 
     def test_other_suspend_errors_are_not_retried(self):
         phone = Fake([{'errno': errno.EINVAL}, {'irq': '21'}])
         with self.assertRaises(OSError):
             self.run_sleep(phone)
         self.assertEqual(phone.calls.count('suspend'), 1)
-        self.assertEqual(phone.calls[-1], 'systemctl thaw user.slice')
+        self.assertEqual(phone.calls[-2:], ['systemctl thaw user.slice', 'restore watchdogs'])
 
     def test_a_wake_loop_is_cut_short(self):
         phone = Fake([dsp(slept=1.0) for _ in range(40)] + [{'irq': '21'}])
         self.run_sleep(phone)
         self.assertEqual(phone.writes, sleep.DARK_BURST)
-        self.assertEqual(phone.calls[-1], 'systemctl thaw user.slice')
+        self.assertEqual(phone.calls[-2:], ['systemctl thaw user.slice', 'restore watchdogs'])
+
+    def test_service_watchdogs_are_paused_for_the_loop_and_restored_last(self):
+        phone = Fake([dsp(slept=300) for _ in range(3)] + [{'irq': '21'}])
+        self.run_sleep(phone)
+        self.assertLess(phone.calls.index('systemctl service-watchdogs no'),
+                        phone.calls.index('hooks pre'))
+        self.assertEqual(phone.calls[-1], 'restore watchdogs')
 
     def test_spaced_out_dsp_wakes_never_trigger_the_loop_guard(self):
         phone = Fake([dsp(slept=300) for _ in range(30)] + [{'irq': '21'}])
@@ -246,7 +258,8 @@ class SleepFlowTests(unittest.TestCase):
         self.press_after(phone, 2)
         self.run_sleep(phone)
         self.assertEqual(phone.writes, 1)  # never suspended again
-        self.assertEqual(phone.calls[-3:], ['shield', 'hooks post', 'systemctl thaw user.slice'])
+        self.assertEqual(phone.calls[-4:], ['shield', 'hooks post', 'systemctl thaw user.slice',
+                                            'restore watchdogs'])
 
     def test_key_pressed_while_resuming_is_not_swallowed(self):
         # Between the write returning and the classification, which a late
@@ -270,7 +283,8 @@ class SleepFlowTests(unittest.TestCase):
         phone = Fake([dsp()] + [{'errno': errno.EBUSY}] * 200)
         self.assertEqual(self.run_sleep(phone), 0)
         self.assertEqual(phone.writes, 1)
-        self.assertEqual(phone.calls[-3:], ['shield', 'hooks post', 'systemctl thaw user.slice'])
+        self.assertEqual(phone.calls[-4:], ['shield', 'hooks post', 'systemctl thaw user.slice',
+                                            'restore watchdogs'])
 
     def test_a_failing_post_phase_still_thaws(self):
         phone = Fake([{'irq': '21'}])
@@ -283,7 +297,7 @@ class SleepFlowTests(unittest.TestCase):
         phone.run_hooks = hooks
         with self.assertRaises(RuntimeError):
             self.run_sleep(phone)
-        self.assertEqual(phone.calls[-1], 'systemctl thaw user.slice')
+        self.assertEqual(phone.calls[-2:], ['systemctl thaw user.slice', 'restore watchdogs'])
 
     def test_non_suspend_requests_use_systemd_sleep(self):
         phone = Fake([])

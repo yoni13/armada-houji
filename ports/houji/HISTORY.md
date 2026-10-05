@@ -177,6 +177,24 @@ and build and install steps are in [README.md](README.md).
   captured touch frames are build inputs.
 - **Result:** Continuous tapping and swiping work in Plasma and Steam.
 
+### Touch stopped until reboot after one bus error
+
+- **Issue:** During a game launch an SPI transfer from the touch controller
+  timed out, and touch never came back. The touch service restarted about
+  2,000 times, each time reporting "raw stream stalled".
+- **Cause:** The completion arrives through the GPI DMA driver's tasklet,
+  and the SPI core allows only 200 ms for a 1.5 KB frame at 15 MHz, so a busy
+  system can miss it. The driver then disabled its IRQ for good. Reopening
+  the stream cleared the error but never re-enabled the IRQ or reset the
+  controller. Rebinding the SPI controller to recover crashed in the GPI
+  driver, so that is not a recovery path.
+- **Fix:** On any packet error the driver resets and reconfigures the
+  controller from a freezable work item (identity, report mode, touch
+  reports, with backoff) and then re-enables the IRQ. Debugfs
+  `houji-touch/recover` triggers the same path; `recoveries` counts it.
+- **Result:** A forced reset on the phone recovered in about 0.5 s; the touch
+  service restarted once and touch worked.
+
 ## Sleep and resume
 
 The hardest area. It combined a kernel fault, a firmware watchdog, compositor
@@ -434,6 +452,23 @@ for every DSP request.
   FUSE/freezer interaction was not reproduced and the freezer policy was left as is.
 - **Still open:** The intermittent animation freeze has not been explained. The
   later tests did not identify its original cause.
+
+### armada-powerd killed by its watchdog during sleep
+
+- **Issue:** systemd killed `armada-powerd` 16 times in a day (15 s
+  watchdog), each time just after a suspend began, with a core dump each time.
+- **Cause:** Each dark-wake round trip spends about 1.5 s suspending and
+  resuming devices with userspace frozen while `CLOCK_MONOTONIC` runs, and
+  `houji-sleep` re-suspends 2–13 ms after the wake. Every kill followed
+  13–73 s of such back-to-back trips; one followed a single 21.5 s trip with
+  a Wi-Fi resume timeout. `armada-powerd` was idle, not hung; it only trips
+  because its limit is the shortest.
+- **Fix:** `houji-sleep` pauses systemd's service watchdogs for the suspend
+  loop and re-enables them 5 s after the wake, once services have run.
+  A 0.2 s pause per dark wake was tried first and did not prevent the kill.
+- **Result:** A forced burst of 15 RTC suspends killed `armada-powerd` with
+  the stock behaviour and with the 0.2 s pause, and did not with watchdogs
+  paused. On the build, a suspend restored the watchdogs 5 s after waking.
 
 ## Armada 20260926 migration
 
@@ -719,6 +754,25 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   curve, charge-pump transitions, taper and thermal behaviour remain under
   investigation. Charging light sleep is a port workaround to keep host monitoring,
   and stock-equivalent suspend behaviour is unverified.
+
+### The battery percentage stayed far above the charge left
+
+- **Issue:** The percentage read 83% with 70% left, fell 1 point in 8 minutes
+  of heavy use, and dropped 23 points at the next boot.
+- **Cause:** The battery firmware reports a linearized capacity
+  (`en-linear-soc`, as on stock). When a charge completes it ramps the figure
+  to 100%, then moves it at most 1 point per state-machine run. The phone
+  uses the external bq27z561 gauge (platform 5); unplugged, the gauge monitor
+  stops and the state machine runs only on the 8-minute discharge heartbeat.
+  The charge counter (`charge_now`) is the gauge's own value. The firmware's
+  charge limit is off, as read on the phone; an earlier static reading that
+  blamed it was wrong.
+- **Fix:** Kernel patch `0028`: while discharging, `capacity` is the lower of
+  the firmware's figure and `charge_now / charge_full` (rounded up), and it
+  only falls until charging resumes. Charging and full keep the firmware's
+  figure, so a completed charge still reads 100%.
+- **Result:** On battery the phone read 55% with the gauge at 54.3%, where the
+  firmware said 57%.
 
 ## Thermal limits
 
@@ -1011,6 +1065,15 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   boot. Closing the window leaves emulation on, and Stop emulation saves an off choice.
   Tests confirmed that emulation continues after a client disconnect, settings reload
   after a service restart, and an explicit Stop stays off.
+
+### NFC failures were not logged
+
+- **Issue:** Card emulation failed four times in a row and the manager only
+  said "NFC operation failed".
+- **Fix:** The service logs the exception type, where it was raised, the
+  phase it was in, the controller's fixed message and any errno, never
+  payloads or card data. An unsupported activation now names its RF
+  interface, protocol, technology and mode, payload size and credits.
 
 ## Session switching
 

@@ -125,7 +125,10 @@ def exchange(transport, tag, stop, changed):
         body = packet[3:]
         if head == 0x61 and opcode == 5:
             if len(body) < 6 or body[1:4] != b'\x02\x04\x80' or not body[4]:
-                raise RuntimeError('Unsupported card-emulation activation.')
+                # RF interface, protocol, technology/mode, payload size and
+                # credits are protocol settings, not card data.
+                raise RuntimeError('Unsupported card-emulation activation: '
+                                   + ' '.join(f'{b:02x}' for b in body[1:6]))
             max_payload, credits = body[4:6]
             active = True
             tag.reset()

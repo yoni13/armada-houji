@@ -42,6 +42,13 @@ ABORT_SECONDS = 0.5        # a suspend that returns sooner never slept
 MAX_ABORTS = 5
 DARK_BURST = 6             # this many dark wakes ...
 DARK_WINDOW = 20.0         # ... inside this many seconds means a wake loop
+# Each suspend/resume round trip spends about 1.5 s suspending and resuming
+# devices with userspace frozen while CLOCK_MONOTONIC runs, and a dark wake
+# re-suspends within milliseconds. A burst of them starves services of the
+# CPU time to ping their watchdogs (armada-powerd's is 15 s), and a 0.2 s
+# pause per wake did not help, so service watchdogs are paused for the loop
+# and restored once services have run again after the wake.
+WATCHDOG_RESTORE_DELAY = 5
 # Wakeup sources that fire without anyone touching the phone. The sensor DSP
 # is the one we are hiding. Charger and RTC bookkeeping is soft: it is
 # recorded but does not end a sleep. Anything else (power key, touch, USB
@@ -145,6 +152,22 @@ class Platform:
             return subprocess.run(['systemctl', *args], timeout=30).returncode == 0
         except (OSError, subprocess.TimeoutExpired):
             return False
+
+    def restore_watchdogs(self, delay):
+        """Re-enable service watchdogs once services have pinged again.
+
+        A deferred transient job keeps the wake itself quick; if it cannot be
+        queued, re-enable at once rather than leave watchdogs off.
+        """
+        try:
+            queued = subprocess.run(
+                ['systemd-run', '--quiet', '--collect', '--on-active=%d' % delay,
+                 '--description=Restore service watchdogs after sleep',
+                 'systemctl', 'service-watchdogs', 'yes'], timeout=30).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            queued = False
+        if not queued and not self.systemctl('service-watchdogs', 'yes'):
+            log('could not restore service watchdogs')
 
     def shield_signals(self):
         """From here on finish the wake-up work even if asked to stop."""
@@ -279,6 +302,8 @@ def run(platform, argv):
     if not platform.systemctl('freeze', 'user.slice'):
         log('could not freeze user.slice; using systemd-sleep')
         return platform.classic(argv)
+    if not platform.systemctl('service-watchdogs', 'no'):
+        log('could not pause service watchdogs')
     try:
         print("Performing sleep operation 'suspend'...", file=sys.stderr, flush=True)
         platform.run_hooks('pre')
@@ -292,8 +317,11 @@ def run(platform, argv):
         try:
             platform.run_hooks('post')
         finally:
-            if not platform.systemctl('thaw', 'user.slice'):
-                log('could not thaw user.slice')
+            try:
+                if not platform.systemctl('thaw', 'user.slice'):
+                    log('could not thaw user.slice')
+            finally:
+                platform.restore_watchdogs(WATCHDOG_RESTORE_DELAY)
     return 0
 
 

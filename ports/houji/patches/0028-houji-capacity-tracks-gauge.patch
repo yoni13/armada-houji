@@ -1,0 +1,80 @@
+Subject: [PATCH] power: supply: qcom_battmgr: keep houji's capacity at or below the gauge while discharging
+
+Houji's battery firmware reports a "linearized" capacity (en-linear-soc in
+its configuration, as on stock). When a charge completes it ramps the
+figure to 100% at 0.5% per 20 s; afterwards it moves it at most 1% per run
+of its state machine. With no charger attached the fuel-gauge monitor stops
+and the state machine runs only on the 8-minute discharge heartbeat, so
+under load the figure falls far behind: 83% was shown with 70% left, and
+the next boot, which re-estimates, dropped it by 23 points.
+
+The gauge's own value, charge_now / charge_full, is always current and is
+what the firmware converges to. While discharging, report the lower of the
+two; while charging or full, keep the firmware's figure so a completed
+charge still reads 100%.
+
+The gauge reads low under load and recovers at rest, so while
+discharging the figure is kept non-increasing; charging re-arms it.
+
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -378,6 +378,7 @@
+ 
+ 	struct work_struct enable_work;
+ 	struct delayed_work houji_fcc_work;
++	int houji_capacity_floor;
+ 	unsigned long houji_fcc_deadline;
+ 	bool houji_fcc_stopping;
+ 	bool houji_suspending;
+@@ -545,6 +546,42 @@
+ 	return ret;
+ }
+ 
++/*
++ * Houji's firmware "linearizes" the capacity it reports. When a charge
++ * completes it ramps the figure to 100%, and afterwards it moves the figure
++ * at most 1% per run of its state machine. Unplugged, that runs only on the
++ * 8-minute discharge heartbeat, so under load the figure stays far above the
++ * charge left (83% shown with 70% left was measured). The gauge's own value,
++ * the remaining charge over the full charge, is always current and is what
++ * the firmware converges to. While discharging, never report more than it;
++ * while charging or full, keep the firmware's figure so a completed charge
++ * still reads 100%. The gauge dips under load and recovers at rest, so the
++ * figure only falls while discharging and is re-armed by charging.
++ */
++static int houji_capacity(struct qcom_battmgr *battmgr, int reported)
++{
++	int floor = READ_ONCE(battmgr->houji_capacity_floor);
++	u64 gauge;
++
++	if (qcom_battmgr_bat_sm8350_update(battmgr, POWER_SUPPLY_PROP_STATUS) ||
++	    battmgr->status.status != POWER_SUPPLY_STATUS_DISCHARGING) {
++		WRITE_ONCE(battmgr->houji_capacity_floor, 0);
++		return reported;
++	}
++	if (qcom_battmgr_bat_sm8350_update(battmgr, POWER_SUPPLY_PROP_CHARGE_COUNTER) ||
++	    qcom_battmgr_bat_sm8350_update(battmgr, POWER_SUPPLY_PROP_CHARGE_FULL) ||
++	    !battmgr->info.last_full_capacity)
++		return floor ? min(reported, floor) : reported;
++	/* The counter reads about half a percent under the firmware's figure. */
++	gauge = DIV_ROUND_UP_ULL((u64)battmgr->status.capacity * 100,
++				 battmgr->info.last_full_capacity);
++	reported = min_t(u64, reported, gauge);
++	if (floor)
++		reported = min(reported, floor);
++	WRITE_ONCE(battmgr->houji_capacity_floor, reported);
++	return reported;
++}
++
+ static int qcom_battmgr_bat_sc8280xp_update(struct qcom_battmgr *battmgr,
+ 					    enum power_supply_property psp)
+ {
+@@ -695,6 +732,8 @@
+ 		if (battmgr->status.percent == (unsigned int)-1)
+ 			return -ENODATA;
+ 		val->intval = battmgr->status.percent;
++		if (battmgr->variant == QCOM_BATTMGR_XIAOMI_HOUJI)
++			val->intval = houji_capacity(battmgr, val->intval);
+ 		break;
+ 	case POWER_SUPPLY_PROP_TEMP:
+ 		val->intval = battmgr->status.temperature;
