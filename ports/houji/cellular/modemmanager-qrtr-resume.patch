@@ -1,0 +1,60 @@
+From: Armada contributors
+Subject: [PATCH] manager: rescan retained QRTR control nodes after resume
+
+Suspend removes modem objects but the SoC modem and its QRTR services survive.
+The existing resume scan enumerates udev only, losing the control port until
+ModemManager is restarted. Re-announce ready QRTR control nodes on a scan.
+
+diff --git a/src/mm-qrtr-bus-watcher.h b/src/mm-qrtr-bus-watcher.h
+--- a/src/mm-qrtr-bus-watcher.h
++++ b/src/mm-qrtr-bus-watcher.h
+@@ -62,6 +62,7 @@ gboolean mm_qrtr_bus_watcher_start_finish (MMQrtrBusWatcher    *self,
+ 
+ QrtrNode *mm_qrtr_bus_watcher_peek_node (MMQrtrBusWatcher *self,
+                                          guint32           node_id);
++void mm_qrtr_bus_watcher_rescan (MMQrtrBusWatcher *self);
+ 
+ G_END_DECLS
+ 
+diff --git a/src/mm-qrtr-bus-watcher.c b/src/mm-qrtr-bus-watcher.c
+--- a/src/mm-qrtr-bus-watcher.c
++++ b/src/mm-qrtr-bus-watcher.c
+@@ -178,6 +178,24 @@ mm_qrtr_bus_watcher_start_finish (MMQrtrBusWatcher  *self,
+     return g_task_propagate_boolean (G_TASK (res), error);
+ }
+ 
++void
++mm_qrtr_bus_watcher_rescan (MMQrtrBusWatcher *self)
++{
++    GHashTableIter iter;
++    gpointer value;
++
++    /* Suspend removes MMDevice objects, but the modem's QRTR services remain.
++     * Re-announce control nodes when the manager scans after resume. */
++    g_hash_table_iter_init (&iter, self->priv->nodes);
++    while (g_hash_table_iter_next (&iter, NULL, &value)) {
++        QrtrNode *node = value;
++        if (qrtr_node_lookup_port (node, QMI_SERVICE_WDS) >= 0 &&
++            qrtr_node_lookup_port (node, QMI_SERVICE_NAS) >= 0 &&
++            qrtr_node_lookup_port (node, QMI_SERVICE_DMS) >= 0)
++            g_signal_emit (self, signals[QRTR_DEVICE_ADDED], 0, qrtr_node_get_id (node));
++    }
++}
++
+ typedef struct {
+     MMQrtrBusWatcher *self;
+     QrtrNode         *node;
+diff --git a/src/mm-base-manager.c b/src/mm-base-manager.c
+--- a/src/mm-base-manager.c
++++ b/src/mm-base-manager.c
+@@ -867,6 +867,10 @@ mm_base_manager_start (MMBaseManager *self,
+     } else
+ #endif
+         mm_obj_dbg (self, "unsupported %s device scan...", manual_scan ? "manual" : "automatic");
++#if defined WITH_QRTR
++    if (self->priv->qrtr_bus_watcher)
++        mm_qrtr_bus_watcher_rescan (self->priv->qrtr_bus_watcher);
++#endif
+ }
+ 
+ /*****************************************************************************/

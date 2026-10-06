@@ -29,4 +29,4 @@ static int __init houji_modem_init(void)
 }
 module_init(houji_modem_init);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Houji MPSS candidate; supervised first probe, no autostart");
+MODULE_DESCRIPTION("Houji MPSS and IPA; userspace ordered start, no hot removal");

@@ -1,0 +1,11 @@
+[Unit]
+Description=Houji modem private NV storage
+Requires=houji-cellular-prepare.service houji-license.service houji-modem-tftp.service
+After=houji-cellular-prepare.service houji-license.service houji-modem-tftp.service
+
+[Service]
+ExecStartPre=/usr/sbin/modprobe houji_modem_overlay
+# No -P: stock modemst/fsg/fsc are never writable. No -s: stopping this
+# userspace service must not hot-stop MPSS (which resets this board).
+ExecStart=/usr/libexec/houji-gps/rmtfs -o /var/lib/houji-modem/efs
+UMask=0077

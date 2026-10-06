@@ -11,6 +11,7 @@
 		interrupts = <75 IRQ_TYPE_LEVEL_HIGH>, <35 IRQ_TYPE_EDGE_RISING>;
 		interrupt-names = "irq", "clkreq";
 		enable-gpios = <&tlmm 34 GPIO_ACTIVE_HIGH>;
+		nxp,shared-se-power;
 		vddio-supply = <&vreg_l3c>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&nfc_irq_default &nfc_enable_default &nfc_clkreq_default>;

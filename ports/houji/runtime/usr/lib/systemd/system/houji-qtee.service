@@ -1,0 +1,11 @@
+[Unit]
+Description=Houji QTEE secure storage listeners (RPMB read-only)
+Requires=houji-cellular-prepare.service
+After=houji-cellular-prepare.service
+
+[Service]
+UMask=0077
+ExecStartPre=/usr/sbin/modprobe qcomtee
+ExecStart=/usr/bin/unshare --mount /usr/libexec/houji-cellular/run-supplicant
+Restart=on-failure
+RestartSec=2

@@ -1,0 +1,11 @@
+[Unit]
+Description=Prepare Houji private modem storage and firmware
+After=local-fs.target
+Before=houji-qtee.service houji-cellular.service
+ConditionPathExists=/dev/disk/by-partlabel/modemfirmware_b
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/libexec/houji-cellular/prepare.py
+RemainAfterExit=yes

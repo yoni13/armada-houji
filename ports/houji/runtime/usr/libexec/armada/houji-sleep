@@ -220,6 +220,19 @@ class Platform:
     def monotonic(self):
         return time.monotonic()
 
+    def rtc_alarm(self):
+        try:
+            text = Path('/sys/class/rtc/rtc0/wakealarm').read_text().strip()
+            return int(text) if text else None
+        except (OSError, ValueError):
+            return None
+
+    def rtc_now(self):
+        try:
+            return int(Path('/sys/class/rtc/rtc0/since_epoch').read_text().strip())
+        except (OSError, ValueError):
+            return None
+
     def sleep(self, seconds):
         time.sleep(seconds)
 
@@ -263,6 +276,10 @@ def sleep_until_real_wake(platform):
     recent = deque()
     dark = aborts = 0
     awake_inputs = None
+    # Alarm IRQs can coincide with a DSP wake and leave pm_wakeup_irq empty.
+    # Only an explicitly armed alarm matters; ordinary RTC bookkeeping remains
+    # benign. Use the RTC's own clock because its epoch can differ from UTC.
+    alarm = platform.rtc_alarm() if hasattr(platform, 'rtc_alarm') else None
     while True:
         try:
             kind, detail, slept, awake_inputs = suspend_once(platform, awake_inputs)
@@ -273,6 +290,9 @@ def sleep_until_real_wake(platform):
                 return 'sensor request still pending', dark
             raise
         now = platform.boottime()
+        rtc_now = platform.rtc_now() if alarm is not None else None
+        if rtc_now is not None and rtc_now >= alarm:
+            return 'armed RTC alarm expired', dark
         if kind == 'dark':
             dark += 1
             recent.append(now)

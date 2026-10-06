@@ -12,10 +12,33 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import time
 
 
 def sha(path):
     with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
+
+
+def copy_image(source, destination):
+    """Throttle local userdata writes too; pause at the handset thermal limits."""
+    with source.open('rb') as src, destination.open('xb') as dst:
+        while True:
+            hot = False
+            for zone in Path('/sys/class/thermal').glob('thermal_zone*'):
+                kind = (zone/'type').read_text().strip()
+                if 'batt' in kind or kind.startswith(('cpu','soc','gpu')):
+                    hot |= int((zone/'temp').read_text()) >= (41000 if 'batt' in kind else 75000)
+            if hot:
+                time.sleep(1)
+                continue
+            started = time.monotonic()
+            block = src.read(1024*1024)
+            if not block:
+                break
+            dst.write(block)
+            time.sleep(max(0, len(block)/(15*1024*1024)-(time.monotonic()-started)))
+        dst.flush()
+        os.fsync(dst.fileno())
 
 
 def main():
@@ -37,7 +60,7 @@ def main():
     if target.exists():raise ValueError('Update already staged; inspect it before retrying')
     if shutil.disk_usage(data).free<image.stat().st_size+(1<<30):raise ValueError('Insufficient userdata free space')
     target.mkdir(parents=True,mode=0o700)
-    shutil.copyfile(image,target/'rootfs.erofs')
+    copy_image(image,target/'rootfs.erofs')
     if sha(target/'rootfs.erofs')!=layout['rootfs_sha256']:raise ValueError('Staged image verification failed')
     (target/'upper').mkdir();(target/'work').mkdir(mode=0o700)
     # Resolve the currently mounted overlay's backing home, without copying games.
@@ -50,6 +73,8 @@ def main():
     # Copy settings, not old executable/module hotfixes, into the clean system overlay.
     for name in ['etc/NetworkManager/system-connections','var/lib/bluetooth','etc/ssh',
                  'var/lib/armada-nfc/settings.json',
+                 'etc/armada/cellular-sim',
+                 'etc/systemd/system/multi-user.target.wants/houji-cellular.service',
                  'etc/passwd','etc/shadow','etc/group','etc/gshadow',
                  'etc/systemd/system/houji-ssh.service',
                  'etc/systemd/system/multi-user.target.wants/houji-ssh.service',
@@ -62,6 +87,17 @@ def main():
         if src.is_symlink():dst.symlink_to(src.readlink())
         elif src.is_dir():shutil.copytree(src,dst,symlinks=True)
         else:shutil.copy2(src,dst)
+    # This state is created locally from factory NV/secure storage and must
+    # survive preserving updates, but must never be part of a distributable root.
+    # Stage while the radio is off; never stop/restart MPSS just to stage files.
+    private=Path('/var/lib/houji-modem')
+    if private.exists():
+        destination=target/'upper/var/lib/houji-modem'
+        destination.mkdir(parents=True,mode=0o700)
+        for name in ['efs','tee']:
+            source=private/name
+            if source.is_dir():
+                shutil.copytree(source,destination/name,symlinks=True,copy_function=lambda src,dst: copy_image(Path(src),Path(dst)))
     (target/'build-id').write_text(build_id+'\n')
     receipt={'build_id':build_id,'rootfs_sha256':layout['rootfs_sha256'],
              'serial_sha256':hashlib.sha256(a.serial.encode()).hexdigest()}

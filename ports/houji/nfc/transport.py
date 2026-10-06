@@ -40,12 +40,17 @@ def gpio_ioctl(fd, nr, obj):
         raise OSError(err, os.strerror(err))
 
 
-def request(chip, pin, flags):
+def request(chip, pin, flags, high=False):
     req = Request()
     req.offsets[0] = pin
     req.consumer = b'armada-nfc-manager'
     req.num_lines = 1
     req.config.flags = flags
+    if high:
+        req.config.num_attrs = 1
+        req.config.attrs[0].attr.id = 2  # GPIO_V2_LINE_ATTR_ID_OUTPUT_VALUES
+        req.config.attrs[0].attr.value = 1
+        req.config.attrs[0].mask = 1
     gpio_ioctl(chip, 7, req)
     return req.fd
 
@@ -80,6 +85,8 @@ class Transport:
     def __init__(self, bus):
         self.fds = []
         self.i2c = self.ven = None
+        self.shared_se_power = any(Path('/sys/firmware/devicetree/base').glob(
+            'soc@0/**/nfc@28/nxp,shared-se-power'))
         try:
             chip = tlmm_chip()
             self.fds.append(chip)
@@ -87,9 +94,9 @@ class Transport:
             self.fds.append(request(chip, 35, (1 << 2) | (1 << 4)))
             self.irq = request(chip, 75, 1 << 2)
             self.fds.append(self.irq)
-            self.ven = request(chip, 34, 1 << 3)
+            self.ven = request(chip, 34, 1 << 3, high=self.shared_se_power)
             self.fds.append(self.ven)
-            set_value(self.ven, 0)
+            set_value(self.ven, 1 if self.shared_se_power else 0)
             time.sleep(.02)
             self.i2c = os.open('/dev/i2c-' + bus, os.O_RDWR | os.O_CLOEXEC)
             self.fds.append(self.i2c)
@@ -103,7 +110,7 @@ class Transport:
     def close(self):
         if self.ven is not None:
             try:
-                set_value(self.ven, 0)
+                set_value(self.ven, 1 if self.shared_se_power else 0)
             except OSError:
                 pass
         for fd in reversed(self.fds):

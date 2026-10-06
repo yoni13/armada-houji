@@ -1,0 +1,13 @@
+[Unit]
+Description=Houji stock modem-to-QTEE license relay
+Requires=houji-qtee.service
+After=houji-qtee.service
+Before=houji-cellular.service
+
+[Service]
+Type=notify
+ExecStart=/usr/libexec/houji-cellular/license-relay.py
+TimeoutStartSec=45
+Restart=on-failure
+RestartSec=2
+UMask=0077

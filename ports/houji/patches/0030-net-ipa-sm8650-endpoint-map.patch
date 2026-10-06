@@ -1,0 +1,49 @@
+From: Armada contributors
+Subject: [PATCH] net: ipa: use the SM8650 endpoint and IMEM map
+
+SM8650 falls back to SM8550's IPA v5.5 data, but the stock SM8650
+endpoint table (IPA hw type 0x18, application platform) differs for
+AP LAN RX, AP modem RX and modem AP RX. Its IPA IMEM mapping is also
+0x14683000 rather than 0x14688000 (the sram DT property already overrides
+this on current trees). Copy the configuration per device
+before applying those differences; leave SM8550 untouched.
+
+Derived from the stock Houji ipam module's ipa3_ep_mapping table and
+the stock IPA device-tree node. Hardware validation is pending.
+
+diff --git a/drivers/net/ipa/ipa_main.c b/drivers/net/ipa/ipa_main.c
+--- a/drivers/net/ipa/ipa_main.c
++++ b/drivers/net/ipa/ipa_main.c
+@@ -806,6 +806,32 @@ static int ipa_probe(struct platform_device *pdev)
+ 		return -ENODEV;
+ 	}
+ 
++	if (of_device_is_compatible(dev->of_node, "qcom,sm8650-ipa")) {
++		struct ipa_gsi_endpoint_data *endpoints;
++		struct ipa_mem_data *memory;
++		struct ipa_data *sm8650;
++
++		sm8650 = devm_kmemdup(dev, data, sizeof(*data), GFP_KERNEL);
++		if (!sm8650)
++			return -ENOMEM;
++		endpoints = devm_kmemdup(dev, data->endpoint_data,
++			data->endpoint_count * sizeof(*endpoints), GFP_KERNEL);
++		if (!endpoints)
++			return -ENOMEM;
++		memory = devm_kmemdup(dev, data->mem_data, sizeof(*memory),
++				      GFP_KERNEL);
++		if (!memory)
++			return -ENOMEM;
++		endpoints[IPA_ENDPOINT_AP_LAN_RX].channel_id = 14;
++		endpoints[IPA_ENDPOINT_AP_LAN_RX].endpoint_id = 17;
++		endpoints[IPA_ENDPOINT_AP_MODEM_RX].endpoint_id = 24;
++		endpoints[IPA_ENDPOINT_MODEM_AP_RX].endpoint_id = 22;
++		memory->imem_addr = 0x14683000;
++		sm8650->endpoint_data = endpoints;
++		sm8650->mem_data = memory;
++		data = sm8650;
++	}
++
+ 	if (!data->modem_route_count) {
+ 		dev_err(dev, "modem_route_count cannot be zero\n");
+ 		return -EINVAL;

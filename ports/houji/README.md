@@ -86,6 +86,7 @@ Results below are from the development handset.
 | Sleep | Experimental. Native `s2idle` is the default on battery. The sensor DSP's periodic requests wake the phone, are served, and the phone sleeps again without lighting the screen. Tested for a 50-minute sleep with three such wakes, and for Power-key and alarm wakes. Long-term reliability and battery savings are not established. See [Charging and sleep](#charging-and-sleep). |
 | Wired fast charging | Xiaomi authentication and about 19 W at the battery were measured. Stock HyperCharge behaviour and the full 90 W input are not verified. |
 | GPS | A satellite fix works with the opt-in development tools. There is no GeoClue provider or navigation integration, and restarting the modem can reboot the phone. |
+| Cellular | Physical SIM slot 1 and eSIM data work through NetworkManager. LTE/5G registration, HTTPS, KDE SIM/APN controls and RTC-driven native suspend/resume were tested. Slot 2 physical SIM and long-term standby remain untested. Dialer and Spacebar are installed; calls currently fail and need IMS/voice-audio integration. SMS transport is unvalidated. See [cellular support](cellular/README.md). |
 | NFC reader | Experimental. Card discovery and ISO-DEP activation work. Reading NDEF from physical tags, other tag families and writing are unverified. Off by default. |
 | NFC tag emulation | NFC Manager can present a read-only text tag with an automatic or custom 4-byte serial. Verified with another phone. No payment or card copying. |
 | Gyro aiming | Not implemented. Sensors drive screen rotation only. |
@@ -95,7 +96,7 @@ Results below are from the development handset.
 | Feature | State |
 | --- | --- |
 | Wireless charging | Starts, then stops. Unresolved. |
-| Cellular, cameras, fingerprint | Not implemented or validated. A GPS fix does not mean cellular works. |
+| Cameras, fingerprint | Not implemented or validated. |
 | Bluetooth audio and other accessories | Untested. |
 | USB 3 storage, USB4, DisplayPort | Untested or not claimed. |
 | Panel revisions, storage sizes, other regions | Untested. |
@@ -110,6 +111,11 @@ Results below are from the development handset.
   Game Mode only; the Plasma Mobile session is unverified. If sleep ever
   misbehaves, create `/etc/armada/houji-sleep-classic` to go back to plain
   `systemd-sleep`.
+- **An intermittent native-wake reboot is unresolved.** On October 6, short
+  Power taps were followed by a reset; the last retained journal entry was a
+  re-suspend immediately after a zero-duration sensor-DSP wake. No current
+  panic record was retained. RTC, DSP dark-wake and Power-key comparison tests
+  subsequently passed, so those successes do not establish long-term reliability.
 - **Wake from sleep is not instant.** Display wake took roughly one to two
   seconds in testing.
 - **Wi-Fi wake-on-LAN (WoWLAN) is off by default.** A faster-wake trial caused a

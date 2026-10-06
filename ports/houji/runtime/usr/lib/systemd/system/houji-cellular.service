@@ -1,0 +1,16 @@
+[Unit]
+Description=Houji LTE/5G modem and primary SIM initialization
+Requires=houji-modem-storage.service
+Wants=ModemManager.service
+After=houji-modem-storage.service
+Before=ModemManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/houji-cellular/start-modem
+RemainAfterExit=yes
+TimeoutStartSec=90
+# MPSS is started once per boot; stopping the unit does not restart firmware.
+
+[Install]
+WantedBy=multi-user.target

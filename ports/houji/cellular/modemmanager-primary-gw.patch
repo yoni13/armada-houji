@@ -1,0 +1,113 @@
+From: Armada contributors
+Subject: [PATCH] qmi: use the primary GW subscription when multiple slots are active
+
+Dual-SIM Qualcomm SoCs expose more than one active physical slot. Selecting
+the last active slot makes the cached ICCID disagree with the primary GW
+application used for UIM reads, causing an endless SIM-change reprobe loop.
+Query the primary GW application before loading slots and use its logical
+slot. Preserve the single-active-slot fallback when card status is unavailable.
+
+Also fix two crashes encountered during suspend/reconnect: retain the netlink
+completion callback before its transaction is freed, and do not assert that
+all (including disconnected/multiplexed) bearers fit the regular active limit.
+
+diff --git a/src/mm-shared-qmi.c b/src/mm-shared-qmi.c
+--- a/src/mm-shared-qmi.c
++++ b/src/mm-shared-qmi.c
+@@ -3282,6 +3282,7 @@ typedef struct {
+     GPtrArray    *sim_slots;
+     guint         active_slot_number;
+     guint         active_logical_id;
++    guint         primary_gw_logical_id;
+ } LoadSimSlotsContext;
+ 
+ static void
+@@ -3387,7 +3388,9 @@ uim_get_slot_status_ready (QmiClientUim *client,
+ 
+         /* Store active slot info */
+         slot_status = &g_array_index (physical_slots, QmiPhysicalSlotStatusSlot, i);
+-        if (slot_status->physical_slot_status == QMI_UIM_SLOT_STATE_ACTIVE) {
++        if (slot_status->physical_slot_status == QMI_UIM_SLOT_STATE_ACTIVE &&
++            (!ctx->primary_gw_logical_id ||
++             slot_status->logical_slot == ctx->primary_gw_logical_id)) {
+             sim_active = TRUE;
+             ctx->active_logical_id = slot_status->logical_slot;
+             ctx->active_slot_number = i + 1;
+@@ -3447,6 +3450,25 @@ uim_get_slot_status_ready (QmiClientUim *client,
+     g_object_unref (task);
+ }
+ 
++static void
++uim_primary_card_status_ready (QmiClientUim *client,
++                              GAsyncResult *res,
++                              GTask *task)
++{
++    LoadSimSlotsContext *ctx = g_task_get_task_data (task);
++    g_autoptr(QmiMessageUimGetCardStatusOutput) output = NULL;
++    guint16 primary = 0xffff;
++
++    output = qmi_client_uim_get_card_status_finish (client, res, NULL);
++    if (output && qmi_message_uim_get_card_status_output_get_result (output, NULL) &&
++        qmi_message_uim_get_card_status_output_get_card_status (
++            output, &primary, NULL, NULL, NULL, NULL, NULL) && primary != 0xffff)
++        ctx->primary_gw_logical_id = (primary >> 8) + 1;
++
++    qmi_client_uim_get_slot_status (ctx->client_uim, NULL, 10, NULL,
++                                   (GAsyncReadyCallback) uim_get_slot_status_ready, task);
++}
++
+ void
+ mm_shared_qmi_load_sim_slots (MMIfaceModem        *self,
+                               GAsyncReadyCallback  callback,
+@@ -3467,11 +3489,11 @@ mm_shared_qmi_load_sim_slots (MMIfaceModem        *self,
+     ctx->client_uim = QMI_CLIENT_UIM (g_object_ref (client));
+     g_task_set_task_data (task, ctx, (GDestroyNotify) load_sim_slots_context_free);
+ 
+-    qmi_client_uim_get_slot_status (ctx->client_uim,
++    qmi_client_uim_get_card_status (ctx->client_uim,
+                                     NULL,
+                                     10,
+                                     NULL,
+-                                    (GAsyncReadyCallback) uim_get_slot_status_ready,
++                                    (GAsyncReadyCallback) uim_primary_card_status_ready,
+                                     task);
+ }
+ 
+diff --git a/src/mm-netlink.c b/src/mm-netlink.c
+--- a/src/mm-netlink.c
++++ b/src/mm-netlink.c
+@@ -229,9 +229,11 @@ transaction_complete (Transaction     *tr,
+ {
+     GTask *task;
+     guint32 sequence_id;
++    MsgFunc completion_fn;
+ 
+     task = g_steal_pointer (&tr->completion_task);
+     sequence_id = tr->sequence_id;
++    completion_fn = tr->completion_fn;
+ 
+     g_hash_table_remove (tr->self->transactions,
+                          GUINT_TO_POINTER (tr->sequence_id));
+@@ -239,7 +241,7 @@ transaction_complete (Transaction     *tr,
+     if (!saved_errno) {
+         GError *error = NULL;
+ 
+-        if (!tr->completion_fn (task, hdr, &error))
++        if (!completion_fn (task, hdr, &error))
+             g_task_return_error (task, error);
+     } else {
+         g_task_return_new_error (task, G_IO_ERROR, g_io_error_from_errno (saved_errno),
+diff --git a/src/mm-iface-modem.c b/src/mm-iface-modem.c
+--- a/src/mm-iface-modem.c
++++ b/src/mm-iface-modem.c
+@@ -6776,7 +6776,9 @@ mm_iface_modem_count_bearers (MMIfaceModem                   *self,
+         max = mm_bearer_list_get_max_active (list);
+ 
+     mm_bearer_list_foreach (list, (MMBearerListForeachFunc)bearer_count, &ctx);
+-    g_assert (max >= ctx.count);
++    /* A total count includes disconnected bearers, and multiplexed bearers
++     * need not fit the non-multiplexed active limit. Callers use the count
++     * for suspend cleanup as well as connection admission. */
+ 
+     if (out_max)
+         *out_max = max;

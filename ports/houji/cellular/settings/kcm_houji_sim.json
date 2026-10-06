@@ -1,0 +1,11 @@
+{
+  "KPlugin": {
+    "Name": "SIM Cards and eSIM",
+    "Description": "Choose the data SIM and manage eSIM profiles on Xiaomi 14",
+    "Icon": "network-mobile",
+    "FormFactors": ["handset", "tablet", "desktop"]
+  },
+  "X-KDE-System-Settings-Parent-Category": "network",
+  "X-KDE-Keywords": "SIM,eSIM,cellular,modem,mobile data",
+  "X-KDE-Weight": 45
+}

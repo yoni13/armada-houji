@@ -1,0 +1,55 @@
+From: Armada contributors
+Subject: [PATCH] nfc: nxp-nci: retain the shared SN220 eUICC supply on Houji
+
+The eUICC uses the SN220's VEN rail even with the NFC radio off. Keep VEN
+asserted when the board declares a shared secure-element supply. NFC core
+still enters COLD and does not poll; this only preserves the eUICC power.
+
+diff --git a/drivers/nfc/nxp-nci/i2c.c b/drivers/nfc/nxp-nci/i2c.c
+--- a/drivers/nfc/nxp-nci/i2c.c
++++ b/drivers/nfc/nxp-nci/i2c.c
+@@ -37,6 +37,7 @@ struct nxp_nci_i2c_phy {
+ 	struct nci_dev *ndev;
+ 
+ 	struct gpio_desc *gpiod_en;
++	bool shared_se_power;
+ 	struct gpio_desc *gpiod_fw;
+ 
+ 	int hard_fault; /*
+@@ -51,7 +52,8 @@ static int nxp_nci_i2c_set_mode(void *phy_id,
+ 	struct nxp_nci_i2c_phy *phy = (struct nxp_nci_i2c_phy *) phy_id;
+ 
+ 	gpiod_set_value_cansleep(phy->gpiod_fw, (mode == NXP_NCI_MODE_FW) ? 1 : 0);
+-	gpiod_set_value_cansleep(phy->gpiod_en, (mode != NXP_NCI_MODE_COLD) ? 1 : 0);
++	gpiod_set_value_cansleep(phy->gpiod_en,
++				 mode != NXP_NCI_MODE_COLD || phy->shared_se_power);
+ 	usleep_range(10000, 15000);
+ 
+ 	if (mode == NXP_NCI_MODE_COLD)
+@@ -224,6 +226,14 @@ static irqreturn_t nxp_nci_i2c_irq_thread_fn(int irq, void *phy_id)
+ 		r = nxp_nci_i2c_fw_read(phy, &skb);
+ 		break;
+ 	case NXP_NCI_MODE_COLD:
++		/* VEN remains high for the eUICC. Drain unsolicited NCI frames
++		 * while the NFC radio is closed so a level IRQ cannot stick. */
++		if (phy->shared_se_power) {
++			r = nxp_nci_i2c_nci_read(phy, &skb);
++			if (!r)
++				kfree_skb(skb);
++			goto exit_irq_handled;
++		}
+ 		r = -EREMOTEIO;
+ 		break;
+ 	}
+@@ -308,7 +310,10 @@ static int nxp_nci_i2c_probe(struct i2c_client *client)
+ 	if (r)
+ 		dev_dbg(dev, "Unable to add GPIO mapping table\n");
+ 
+-	phy->gpiod_en = devm_gpiod_get(dev, "enable", GPIOD_OUT_LOW);
++	phy->shared_se_power = device_property_read_bool(dev,
++						       "nxp,shared-se-power");
++	phy->gpiod_en = devm_gpiod_get(dev, "enable",
++		phy->shared_se_power ? GPIOD_OUT_HIGH : GPIOD_OUT_LOW);
+ 	if (IS_ERR(phy->gpiod_en)) {
+ 		nfc_err(dev, "Failed to get EN gpio\n");
+ 		return PTR_ERR(phy->gpiod_en);

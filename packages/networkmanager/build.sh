@@ -12,7 +12,7 @@ DIST=".fc44.armada" # sorts above stock .fc44 so dnf upgrades to the armada buil
 
 # Every NM subpackage the image installs must ship at one EVR: they cross-require
 # each other by exact version-release.
-SUBPKGS="NetworkManager NetworkManager-libnm NetworkManager-wifi NetworkManager-tui NetworkManager-cloud-setup"
+SUBPKGS="NetworkManager NetworkManager-libnm NetworkManager-wifi NetworkManager-wwan NetworkManager-tui NetworkManager-cloud-setup"
 
 rm -rf out
 mkdir -p out

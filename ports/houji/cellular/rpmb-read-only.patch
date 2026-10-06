@@ -1,0 +1,86 @@
+diff --git a/listeners/librpmbservice/rpmb_service.c b/listeners/librpmbservice/rpmb_service.c
+--- a/listeners/librpmbservice/rpmb_service.c
++++ b/listeners/librpmbservice/rpmb_service.c
+@@ -82,6 +82,18 @@ static int rpmb_handle_read(void *req, void *rsp)
+ {
+ 	tz_rpmb_rw_req_t *rw_req = (tz_rpmb_rw_req_t *)req;
+ 	tz_rpmb_rw_res_t *rw_rsp = (tz_rpmb_rw_res_t *)rsp;
++	uint32_t command = rw_req->cmd_id;
++	uint32_t version = rw_req->version;
++
++	/* The callback always supplies at least TZ_MAX_BUF_LEN bytes. */
++	if (!rw_req->num_sectors ||
++	    rw_req->num_sectors > (TZ_MAX_BUF_LEN - sizeof(*rw_rsp)) / 512 ||
++	    rw_req->req_buff_offset < sizeof(*rw_req) ||
++	    rw_req->req_buff_offset > TZ_MAX_BUF_LEN ||
++	    rw_req->req_buff_len < 512 ||
++	    rw_req->req_buff_len > TZ_MAX_BUF_LEN - rw_req->req_buff_offset ||
++	    rw_req->num_sectors * 512 > TZ_MAX_BUF_LEN - rw_req->req_buff_offset)
++		return -1;
+ 	void *rpmb_req = (uint8_t *)req + rw_req->req_buff_offset;
+ 	void *rpmb_resp = (uint8_t *)rsp + sizeof(*rw_rsp);
+ 	uint32_t resp_len = 0;
+@@ -90,8 +102,8 @@ static int rpmb_handle_read(void *req, void *rsp)
+ 				   rpmb_resp, &resp_len);
+ 	rw_rsp->res_buff_len = resp_len;
+ 	rw_rsp->res_buff_offset = sizeof(*rw_rsp);
+-	rw_rsp->cmd_id = rw_req->cmd_id;
+-	rw_rsp->version = rw_req->version;
++	rw_rsp->cmd_id = command;
++	rw_rsp->version = version;
+ 
+ 	if (rw_rsp->status != 0)
+ 		RPMB_LOG_ERROR("RPMB read failed: status=%d\n", rw_rsp->status);
+@@ -98,7 +98,7 @@ static int rpmb_handle_read(void *req, void *rsp)
+ 	return 0;
+ }
+ 
+-static int rpmb_handle_write(void *req, void *rsp)
++static int __attribute__((unused)) rpmb_handle_write(void *req, void *rsp)
+ {
+ 	tz_rpmb_rw_req_t *rw_req = (tz_rpmb_rw_req_t *)req;
+ 	tz_rpmb_rw_res_t *rw_rsp = (tz_rpmb_rw_res_t *)rsp;
+@@ -168,7 +168,12 @@ int smci_dispatch(void *buf, size_t buf_len)
+ 	case TZ_CM_CMD_RPMB_READ:
+ 		return rpmb_handle_read(buf, buf);
+ 	case TZ_CM_CMD_RPMB_WRITE:
+-		return rpmb_handle_write(buf, buf);
++		/* Houji uses the existing factory license store, read-only. */
++		RPMB_LOG_ERROR("Houji: RPMB write denied\n");
++		((tz_rpmb_rw_res_t *)buf)->status = -1;
++		((tz_rpmb_rw_res_t *)buf)->res_buff_len = 0;
++		((tz_rpmb_rw_res_t *)buf)->res_buff_offset = sizeof(tz_rpmb_rw_res_t);
++		return 0;
+ 	case TZ_CM_CMD_RPMB_PARTITION:
+ 		return rpmb_handle_partition(buf, buf);
+ 	default:
+diff --git a/listeners/librpmbservice/rpmb_ufs.c b/listeners/librpmbservice/rpmb_ufs.c
+--- a/listeners/librpmbservice/rpmb_ufs.c
++++ b/listeners/librpmbservice/rpmb_ufs.c
+@@ -465,6 +465,9 @@ int rpmb_ufs_read(uint32_t *req_buf, uint32_t blk_cnt, uint32_t *resp_buf,
+ 	unsigned char scsi_sec_in_cmd_cdb[SCSI_SEC_CDB_LEN];
+ 	uint32_t *req_buf_cached = NULL, *req_buf_offset = NULL;
+ 
++	if (!rpmb.info.rel_wr_count || !blk_cnt)
++		return -EINVAL;
++
+ 	num_rpmb_trans = blk_cnt / rpmb.info.rel_wr_count;
+ 	if (blk_cnt % rpmb.info.rel_wr_count)
+ 		num_rpmb_trans++;
+@@ -505,6 +508,16 @@ int rpmb_ufs_read(uint32_t *req_buf, uint32_t blk_cnt, uint32_t *resp_buf,
+ 		num_bytes = temp_blk_cnt * RPMB_BLK_SIZE;
+ 
+ 		/* Send a SPO cmd for a read request */
++		/* OUT is also used by key-program and authenticated-write commands.
++		 * Validate the frame, not just the listener's command number. */
++		unsigned char *frame = (unsigned char *)req_buf_offset;
++		unsigned request_type = ((unsigned)frame[510] << 8) | frame[511];
++		if (request_type != 2 && request_type != 4) {
++			RPMB_LOG_ERROR("Houji: RPMB request type %u denied\n", request_type);
++			ret = -EPERM;
++			goto out;
++		}
++
+ 		memset(&scsi_sec_out_cmd_cdb, 0, SCSI_SEC_CDB_LEN);
+ 		scsi_sec_out_cmd_cdb[0] = SCSI_SEC_OUT_ID;
+ 		scsi_sec_out_cmd_cdb[1] = SCSI_SEC_PROT;

@@ -114,7 +114,7 @@ jobs:
         run: |
           dnf install -y --setopt=install_weak_deps=False \
             gcc gcc-c++ git glib2-devel libgudev-devel libqmi-devel libqrtr-glib-devel \
-            patch pkgconf-pkg-config python3 tar xz
+            patch pkgconf-pkg-config python3 tar xz cmake qt6-qtbase-devel ModemManager-devel dbus-daemon
 
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -153,11 +153,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            alsa-utils bc bison bsdextrautils build-essential ccache cpio curl device-tree-compiler \
+            alsa-utils bc bison bsdextrautils build-essential ccache cmake cpio curl device-tree-compiler \
             dwarves e2fsprogs erofs-utils flex git glslang-tools kmod libarchive-tools libasound2-dev \
             libelf-dev libexpat1-dev libglib2.0-dev-bin libssl-dev m4 mtools ninja-build patch \
             patchelf perl pkgconf podman protobuf-c-compiler protobuf-compiler python3 python3-dev \
-            python3-libfdt python3-venv rsync uidmap xz-utils zstd
+            python3-libfdt python3-venv qemu-user-static rsync uidmap xz-utils zstd
+          # Cellular uses pinned target Qt generators and an x86_64 static IDL
+          # compiler under qemu-user. This build never arms handset RTC alarms:
+          # it only ships support for alarms explicitly scheduled at runtime.
           # The build calls the toolchain by its cross-compiler names. On an arm64
           # host they are the native tools under another name. Ubuntu's gcc also
           # enables stack protection by default, and the guard symbol then fails

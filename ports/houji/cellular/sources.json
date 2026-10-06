@@ -1,0 +1,16 @@
+{
+  "git": {
+    "modemmanager-qt": {"url": "https://invent.kde.org/frameworks/modemmanager-qt.git", "revision": "28d4c5bd41e451aefb2b7c3175c5a18781ead5b6"},
+    "plasma-nm": {"url": "https://invent.kde.org/plasma/plasma-nm.git", "revision": "af9d0f5386a0a2c340e1392689795b2fdbd60035"},
+    "ModemManager": {"url": "https://gitlab.freedesktop.org/mobile-broadband/ModemManager.git", "revision": "f2b9ab1ad78d322f32134a444b5b54c6e8160e19"},
+    "NetworkManager": {"url": "https://gitlab.freedesktop.org/NetworkManager/NetworkManager.git", "revision": "7406dfbcc35beed79bf2734e3e7376ead320bd99"},
+    "minkipc": {"url": "https://github.com/quic/minkipc.git", "revision": "e5e4e7ca1c39505076a43d66afb2f8da31f56c24"},
+    "quic-teec": {"url": "https://github.com/quic/quic-teec.git", "revision": "736419e25a2036aac3292a10a93e394a90750ca3"},
+    "QCBOR": {"url": "https://github.com/laurencelundblade/QCBOR.git", "revision": "ba8924a3baa459f6ce8db37f2959a50a71c05153"},
+    "lpac": {"url": "https://github.com/estkme-group/lpac.git", "revision": "c2fcf5e4b21c712d54e35a11da2ad9ad134fb821"}
+  },
+  "idlc": {
+    "url": "https://github.com/quic/mink-idl-compiler/releases/download/v0.2.0/idlc",
+    "sha256": "2a6dd5b2fdad5e307489849b3a4ce56daf241ff517e89e1eb207813008e558d7"
+  }
+}

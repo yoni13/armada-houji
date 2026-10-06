@@ -38,6 +38,59 @@ and build and install steps are in [README.md](README.md).
 
 ## Boot and storage
 
+### Cellular bring-up (October 2026, ongoing)
+
+- **eSIM:** stock switches slot 2 through the modem's `esim_enable` EFS item.
+  The eUICC also needs the SN220 NFC VEN supply high. With that supply present,
+  lpac read the chip and downloaded/enabled a profile. A 255-byte APDU maximum
+  was required; splitting the first secure-channel segment at 120 bytes failed.
+  A second carrier required retaining the HTTP connection and in-memory cookies
+  between provisioning requests; doing so resolved server verification failures
+  and allowed that data-enabled profile to download and activate.
+- **Registration:** selecting the USIM as the primary GW provisioning session
+  allowed ModemManager to register on LTE/5G and create a multiplexed bearer.
+  The first profile was for provisioning tests. With the second profile and the
+  SM8650 IPA correction, a small HTTPS request succeeded over LTE, routed through
+  NetworkManager. Testing used only a few kilobytes of the prepaid allowance.
+- **License fatal:** the modem deliberately crashed on Smart Transmit checks
+  without the stock QTEELS relay. A Linux relay to QTEE UID 119, FS/GPFS listeners
+  and read-only RPMB access returned successful secure license responses. The
+  license was already factory-installed; no cloud license download was needed.
+- **Remaining failure:** a later modem crash reported an IPA/GSI assertion.
+  Stock SM8650 tables differ from Linux's SM8550 fallback in receive endpoint
+  IDs, LAN RX channel and IMEM fallback address. Patch `0030` has now received
+  cellular data and remained up past the earlier failure window in a live-module
+  test. Automatic recovery is disabled by the new
+  startup helper because hot modem restarts can reset the handset.
+- **Integration:** pinned tool builds, private-storage services and a KDE SIM
+  Settings module were built and flashed. The user verified the new profile
+  manager and existing Cellular Network page. Slot-1 physical SIM registered on
+  LTE/5G and completed HTTPS with roaming disabled. Switching back to eSIM in
+  Settings and listing profiles worked. Physical slot 2 was explicitly skipped.
+  Dialer and Spacebar were installed; actual calls and SMS remain untested.
+- **Suspend follow-up:** ModemManager 1.24.2 needed fixes for a netlink transaction
+  use-after-free, an incorrect bearer-count assertion, and missing QRTR rescan
+  after resume. With those fixes, native s2idle resumed automatically after an
+  armed RTC alarm and both SIM types passed HTTPS after wake. The native sleep
+  loop now recognizes an armed RTC deadline even if the wake IRQ is obscured.
+  It never arms an alarm itself; the timed test hook is not part of any image.
+- **Quick-settings follow-up:** after resume, ModemManager and NetworkManager
+  were connected while Plasma reported no SIM. ModemManagerQt emitted removal
+  before updating its cache, so synchronous list rebuilds retained the removed
+  modem. Its removal/SIM lifecycle ordering is now patched. Plasma NM also waits
+  for profile saves before activation/disconnection and coalesces rapid data
+  toggles. Repeated/rapid on-off tests passed; after an RTC suspend the live UI
+  model selected only the replacement modem with its SIM present, and the user
+  confirmed the quick-settings switch worked. The lifecycle regression test
+  fails against the original KDE source and passes against the patched source.
+- **Call inspection:** the user's outgoing calls reached QMI VOICE, entered
+  dialing, then terminated before connection. Read-only queries on IMSA/IMS
+  binding 0 (the primary subscription) reported IMS not registered and IMS
+  registration disabled; binding 1 accepted the bind but returned
+  `InvalidOperation` for status. CallAudioD independently reported no suitable
+  audio card/voice ports. The current UCM profile is HiFi-only. Calling needs
+  further IMS and voice-audio integration; no test call was placed by the agent.
+
 ### Xiaomi's bootloader rejected early images
 
 - **Issue:** Armada's handheld install path expects a modified ABL and a `/KERNEL`
@@ -307,6 +360,34 @@ Read from the firmware's own `frpc-adsprpc.ko` and `libadsprpc.so`:
 Our kernel has neither `CONFIG_PM_WAKELOCKS` nor `CONFIG_PM_AUTOSLEEP`, and
 systemd-sleep stops at the first wake, so an ordinary resume lit the screen
 for every DSP request.
+
+### Intermittent reboot while waking (2026-10-06)
+
+- **Report:** the first short Power tap did not wake the phone; further short
+  taps were followed by a reboot. No long-button recovery was reported.
+- **Recorded sequence:** the previous boot resumed successfully at 13:00:53 UTC,
+  reconnected Wi-Fi and cellular data, then entered native sleep again at
+  13:01:46. At 13:01:48 a sensor-DSP wake was classified as dark with effectively
+  zero time asleep. The helper immediately wrote `mem` again. The journal ends
+  at that second `PM: suspend entry (s2idle)`; there is no matching exit.
+- **Reset evidence:** no current kernel panic/oops, remoteproc fatal, or orderly
+  system shutdown was retained. Both pstore locations were empty. The newest
+  PMIC PON ring entries describe PS_HOLD, warm reset, count 1, then ON. This
+  records the reset mechanism, not the software/firmware initiator. The PMIC
+  UVLO latch still reads `0x40`, but the retained history does not establish a
+  new UVLO event for this incident. The rawdump partition contains an older
+  Android 6.1 crash and cannot diagnose this Armada reboot.
+- **Comparison tests:** temporary device-PM timing logs captured a successful
+  42-second RTC sleep, a three-minute sleep containing a DSP wake at 143 seconds
+  and successful re-suspend, and a short Power-key wake. Four kernel sleep
+  cycles completed with zero reported suspend failures. ADSP and MPSS stayed
+  running. The Wi-Fi hwmon warning seen near the incident also appears in
+  successful cycles, so it does not identify the failing component.
+- **Conclusion:** intermittent native sleep/wake reset remains unresolved.
+  Immediate re-suspend after an aborted/zero-duration dark wake is a lead, not
+  a proven cause. No speculative kernel or sleep-policy fix was applied.
+  Raw evidence is retained root-only on the handset; diagnostic logging and
+  the temporary alarm/hook were restored/removed after the tests.
 
 ### Quiet resume
 

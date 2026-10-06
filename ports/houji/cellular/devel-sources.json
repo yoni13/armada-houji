@@ -1,0 +1,72 @@
+{
+  "kf6-modemmanager-qt-devel": {
+    "url": "https://kojipkgs.fedoraproject.org/packages/kf6-modemmanager-qt/6.30.0/1.fc44/aarch64/kf6-modemmanager-qt-devel-6.30.0-1.fc44.aarch64.rpm",
+    "sha256": "4c92e4b70bc865061e6b5f89a46815ab92741f41ca1bd36512313e0843d1f9d4",
+    "filename": "kf6-modemmanager-qt-devel-6.30.0-1.fc44.aarch64.rpm"
+  },
+  "kf6-networkmanager-qt-devel": {
+    "url": "https://kojipkgs.fedoraproject.org/packages/kf6-networkmanager-qt/6.30.0/1.fc44/aarch64/kf6-networkmanager-qt-devel-6.30.0-1.fc44.aarch64.rpm",
+    "sha256": "bf31ba299e5ab2df797fa7af1a1d5861e89ef0986c7c7d0ec783cfbc4cef2b53",
+    "filename": "kf6-networkmanager-qt-devel-6.30.0-1.fc44.aarch64.rpm"
+  },
+  "qcoro-qt6-devel": {
+    "url": "https://kojipkgs.fedoraproject.org/packages/qcoro/0.12.0/6.fc44/aarch64/qcoro-qt6-devel-0.12.0-6.fc44.aarch64.rpm",
+    "sha256": "3af20d7aba196f14bcce621d11f2acfb0f2119fe1d4e73d3a24f026b46885c51",
+    "filename": "qcoro-qt6-devel-0.12.0-6.fc44.aarch64.rpm"
+  },
+  "NetworkManager-libnm-devel": {
+    "url": "https://kojipkgs.fedoraproject.org/packages/NetworkManager/1.58.1/1.fc45/aarch64/NetworkManager-libnm-devel-1.58.1-1.fc45.aarch64.rpm",
+    "sha256": "24a5a2409d565f3a208fdcefde8a6bf65c731a0c50fe1489402488ac386061a5",
+    "filename": "NetworkManager-libnm-devel-1.58.1-1.fc45.aarch64.rpm"
+  },
+  "libndp-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libndp-devel-1.9-5.fc44.aarch64.rpm",
+    "sha256": "5203e5792b23013b0559c8828769386c73e064c977e291d69f2788a4ace13950",
+    "filename": "libndp-devel-1.9-5.fc44.aarch64.rpm"
+  },
+  "ModemManager-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/m/ModemManager-devel-1.24.2-3.fc44.aarch64.rpm",
+    "sha256": "6074a36723d2cbc829c2b8119e0665e9ec9eeff9ec01f04b7f3ef67def132324",
+    "filename": "ModemManager-devel-1.24.2-3.fc44.aarch64.rpm"
+  },
+  "ModemManager-glib-devel": {
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/m/ModemManager-glib-devel-1.24.2-3.fc44.aarch64.rpm",
+    "sha256": "c191997c425bb8386225e81f89eb09a96e525f9e7dba24323b3eddaf004ac6c2",
+    "filename": "ModemManager-glib-devel-1.24.2-3.fc44.aarch64.rpm"
+  },
+  "qt6-qtbase-devel": {
+    "url": "https://kojipkgs.fedoraproject.org/packages/qt6-qtbase/6.11.2/1.fc44/aarch64/qt6-qtbase-devel-6.11.2-1.fc44.aarch64.rpm",
+    "sha256": "4f528385de2df4ffa13fad053b80eb3345a6c31c42f842a97a0287d52507b143",
+    "filename": "qt6-qtbase-devel-6.11.2-1.fc44.aarch64.rpm"
+  },
+  "qt6-qtdeclarative-devel": {
+    "url": "https://kojipkgs.fedoraproject.org/packages/qt6-qtdeclarative/6.11.2/1.fc44/aarch64/qt6-qtdeclarative-devel-6.11.2-1.fc44.aarch64.rpm",
+    "sha256": "3fec4e6f3536378333979686aeb076a4e7415c7ee5b63d655a8eb4c6d7b79b58",
+    "filename": "qt6-qtdeclarative-devel-6.11.2-1.fc44.aarch64.rpm"
+  },
+  "kf6-kcmutils-devel": {
+    "url": "https://kojipkgs.fedoraproject.org/packages/kf6-kcmutils/6.30.0/1.fc44/aarch64/kf6-kcmutils-devel-6.30.0-1.fc44.aarch64.rpm",
+    "sha256": "5965eab588cb0d5c3b89a6d5e5870ed5a15379fc4913ed15287f867bfe8fe2f6",
+    "filename": "kf6-kcmutils-devel-6.30.0-1.fc44.aarch64.rpm"
+  },
+  "kf6-kcoreaddons-devel": {
+    "url": "https://kojipkgs.fedoraproject.org/packages/kf6-kcoreaddons/6.30.0/1.fc44/aarch64/kf6-kcoreaddons-devel-6.30.0-1.fc44.aarch64.rpm",
+    "sha256": "dc3986e7050a5bd941f6dc47e31941d3ee7348d9d34ca7aa426d0e76a45bb8f3",
+    "filename": "kf6-kcoreaddons-devel-6.30.0-1.fc44.aarch64.rpm"
+  },
+  "kf6-ki18n-devel": {
+    "url": "https://kojipkgs.fedoraproject.org/packages/kf6-ki18n/6.30.0/1.fc44/aarch64/kf6-ki18n-devel-6.30.0-1.fc44.aarch64.rpm",
+    "sha256": "33fe0546ded2e3ca1bebf48a109c143187b07e1f93e8e4dfa05a22a12372cdf0",
+    "filename": "kf6-ki18n-devel-6.30.0-1.fc44.aarch64.rpm"
+  },
+  "kf6-kconfig-devel": {
+    "url": "https://kojipkgs.fedoraproject.org/packages/kf6-kconfig/6.30.0/1.fc44/aarch64/kf6-kconfig-devel-6.30.0-1.fc44.aarch64.rpm",
+    "sha256": "857b78fe868cd54cacb3576b2019f7640f898557887353af9141d21055616ac9",
+    "filename": "kf6-kconfig-devel-6.30.0-1.fc44.aarch64.rpm"
+  },
+  "libcurl-devel": {
+    "url": "https://kojipkgs.fedoraproject.org/packages/curl/8.18.0/10.fc44/aarch64/libcurl-devel-8.18.0-10.fc44.aarch64.rpm",
+    "sha256": "5dd4cafcd0374b40133c1fbfb3053f91cfae16593f0e9276e593a548b269e659",
+    "filename": "libcurl-devel-8.18.0-10.fc44.aarch64.rpm"
+  }
+}

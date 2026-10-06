@@ -186,6 +186,21 @@ class SleepFlowTests(unittest.TestCase):
         self.assertEqual(phone.calls.index('hooks post'), len(phone.calls) - 3)
         self.assertEqual(phone.calls[-4], 'shield')
 
+    def test_armed_rtc_alarm_ends_a_dsp_dark_wake(self):
+        phone = Fake([dsp()])
+        phone.rtc_alarm = lambda: 1234
+        phone.rtc_now = lambda: 1234
+        self.run_sleep(phone)
+        self.assertEqual(phone.writes, 1)
+        self.assertIn('systemctl thaw user.slice', phone.calls)
+
+    def test_future_rtc_alarm_does_not_end_a_dark_wake(self):
+        phone = Fake([dsp(), {'irq': '21'}])
+        phone.rtc_alarm = lambda: 1234
+        phone.rtc_now = lambda: 1230
+        self.run_sleep(phone)
+        self.assertEqual(phone.writes, 2)
+
     def test_power_key_after_dsp_wake_ends_the_loop_immediately(self):
         phone = Fake([dsp(), {'irq': '21'}, {'irq': '21'}])
         self.run_sleep(phone)

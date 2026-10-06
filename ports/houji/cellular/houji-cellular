@@ -1,0 +1,58 @@
+#!/usr/bin/python3
+"""Houji cellular control. NetworkManager manages APNs and data connections."""
+import argparse
+import fcntl
+import os
+from pathlib import Path
+import subprocess
+
+ROOT = '/usr/libexec/houji-cellular/'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest='command', required=True)
+    sub.add_parser('enable', help='Enable cellular services on this and future boots')
+    sub.add_parser('status')
+    sim = sub.add_parser('sim', help='Select one primary data subscription')
+    sim.add_argument('mode', choices=['auto', 'physical1', 'physical2', 'esim'])
+    lpac = sub.add_parser('esim', help='Run lpac on slot 2 (255-byte APDUs)')
+    lpac.add_argument('args', nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    if args.command == 'status':
+        subprocess.run(['mmcli', '-m', 'any'])
+        return
+    if os.geteuid():
+        parser.error('Run this command with sudo')
+    if args.command == 'enable':
+        subprocess.run(['systemctl', 'stop', 'ModemManager'], check=True)
+        try:
+            subprocess.run(['systemctl', 'enable', '--now', 'houji-cellular.service'], check=True)
+        finally:
+            subprocess.run(['systemctl', 'start', 'ModemManager'], check=True)
+        return
+    if subprocess.run(['systemctl', 'is-active', '--quiet', 'houji-cellular']).returncode:
+        parser.error('Enable cellular first')
+    Path('/run/houji').mkdir(exist_ok=True)
+    with open('/run/houji/cellular-control.lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        subprocess.run(['systemctl', 'stop', 'ModemManager'], check=True)
+        try:
+            if args.command == 'sim':
+                subprocess.run([ROOT+'sim.py', args.mode, '--save'], check=True)
+            else:
+                subprocess.run([ROOT+'sim.py', 'esim', '--save'], check=True)
+                env = dict(os.environ, LPAC_APDU='qmi_qrtr', LPAC_APDU_QMI_UIM_SLOT='2',
+                           LPAC_CUSTOM_ES10X_MSS='255', LPAC_HTTP='curl')
+                result = subprocess.run([ROOT+'lpac', *args.args], env=env)
+                if not result.returncode and args.args[:2] in (
+                        ['profile', 'enable'], ['profile', 'disable'], ['profile', 'delete']):
+                    subprocess.run([ROOT+'sim.py', 'refresh'], check=True)
+                if result.returncode:
+                    raise SystemExit(result.returncode)
+        finally:
+            subprocess.run(['systemctl', 'start', 'ModemManager'], check=True)
+
+
+if __name__ == '__main__':
+    main()

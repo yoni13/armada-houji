@@ -19,7 +19,7 @@ sysroot.mkdir(parents=True, exist_ok=True)
 if not a.container_root:
     lock = {}
     for source in [PORT/'sensors/devel-sources.json', PORT/'sensors/gamescope/devel-sources.json',
-                   PORT/'mangohud/devel-sources.json']:
+                   PORT/'mangohud/devel-sources.json', PORT/'cellular/devel-sources.json']:
         lock.update(json.loads(source.read_text()))
     def download(meta):
         return fetch(meta['url'], work/'rpms'/meta['filename'], meta['sha256'])
@@ -35,7 +35,13 @@ names = json.loads((PORT/'sensors/gamescope/runtime-libraries.json').read_text()
 names += ['libwayland-client.so.0', 'libglib-2.0.so.0', 'libgobject-2.0.so.0',
           'libgio-2.0.so.0', 'libqmi-glib.so.5', 'libqrtr-glib.so.0',
           'libprotobuf-c.so.1', 'libgudev-1.0.so.0', 'libpolkit-gobject-1.so.0', 'libudev.so.1',
-          'libGL.so.1', 'libglfw.so.3', 'libspdlog.so.1.15', 'libfmt.so.11', 'libxkbcommon.so.0']
+           'libGL.so.1', 'libglfw.so.3', 'libspdlog.so.1.15', 'libfmt.so.11', 'libxkbcommon.so.0',
+           'libcurl.so.4', 'libQt6Core.so.6', 'libQt6Gui.so.6', 'libQt6Quick.so.6',
+           'libQt6Qml.so.6', 'libQt6DBus.so.6', 'libKF6CoreAddons.so.6',
+           'libKF6I18n.so.6', 'libKF6KCMUtilsQuick.so.6', 'libKF6ConfigCore.so.6',
+           'libmm-glib.so.0', 'libndp.so.0', 'libQt6Xml.so.6',
+           'libKF6ModemManagerQt.so.6', 'libKF6NetworkManagerQt.so.6',
+           'libQCoro6Core.so.0', 'libQCoro6DBus.so.0', 'libplasmanm_editor.so']
 copied = set()
 while names:
     name = names.pop()
@@ -44,6 +50,11 @@ while names:
     src = mount/'usr/lib64'/name
     if not src.exists():
         src = mount/'usr/lib'/name
+    if not src.exists():
+        # Some Qt dependencies keep private SONAMEs in package subdirectories.
+        matches = list((mount/'usr/lib64').glob('*/'+name))
+        if len(matches) == 1:
+            src = matches[0]
     src = src.resolve()
     if not src.is_relative_to(mount):
         raise ValueError('Library escaped OCI root: '+name)

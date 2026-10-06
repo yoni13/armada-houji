@@ -1,0 +1,231 @@
+From: Armada contributors
+Subject: [PATCH] cellular: serialize data toggles and discard removed modem state
+
+Wait for profile updates before activation/disconnection. Coalesce overlapping
+requests to the latest desired state and allow a never-used APN to be enabled.
+Clear stale NM profiles when a device disappears and rebuild only valid modem
+objects. Keep old QObject models alive until consumers have seen the new list.
+
+diff --git a/libs/cellular/cellularmodem.cpp b/libs/cellular/cellularmodem.cpp
+--- a/libs/cellular/cellularmodem.cpp
++++ b/libs/cellular/cellularmodem.cpp
+@@ -44,6 +44,7 @@ CellularModem::CellularModem(QObject *parent, ModemManager::ModemDevice::Ptr mmM
+     connect(NetworkManager::notifier(), &NetworkManager::Notifier::activeConnectionRemoved, this, &CellularModem::mobileDataEnabledChanged);
+     connect(NetworkManager::notifier(), &NetworkManager::Notifier::deviceAdded, this, &CellularModem::findNetworkManagerDevice);
+     connect(NetworkManager::notifier(), &NetworkManager::Notifier::deviceRemoved, this, &CellularModem::findNetworkManagerDevice);
++    connect(NetworkManager::notifier(), &NetworkManager::Notifier::wwanEnabledChanged, this, &CellularModem::mobileDataEnabledChanged);
+ 
+     // this is guaranteed to be a GSM modem
+     m_mm3gppDevice = m_mmModem->interface(ModemManager::ModemDevice::GsmInterface).objectCast<ModemManager::Modem3gpp>();
+@@ -77,6 +78,9 @@ CellularModem::CellularModem(QObject *parent, ModemManager::ModemDevice::Ptr mmM
+ 
+ void CellularModem::findNetworkManagerDevice()
+ {
++    if (m_nmModem) {
++        disconnect(m_nmModem.data(), nullptr, this, nullptr);
++    }
+     m_nmModem = nullptr;
+ 
+     for (NetworkManager::Device::Ptr nmDevice : NetworkManager::networkInterfaces()) {
+@@ -99,9 +103,9 @@ void CellularModem::findNetworkManagerDevice()
+             Q_EMIT activeConnectionUniChanged();
+         });
+ 
+-        m_profiles->setNmModem(m_nmModem);
+-        refreshProfiles();
+     }
++    m_profiles->setNmModem(m_nmModem);
++    refreshProfiles();
+ 
+     Q_EMIT nmModemChanged();
+     Q_EMIT mobileDataEnabledChanged();
+@@ -161,6 +165,9 @@ bool CellularModem::needsAPNAdded() const
+ 
+ bool CellularModem::mobileDataEnabled() const
+ {
++    if (m_dataChangeRunning) {
++        return m_requestedDataEnabled;
++    }
+     // if wwan is globally disabled
+     if (!NetworkManager::isWwanEnabled()) {
+         return false;
+@@ -194,54 +201,80 @@ bool CellularModem::mobileDataEnabled() const
+ 
+ void CellularModem::setMobileDataEnabled(bool enabled)
+ {
+-    // ensure that wwan is on
+-    if (enabled && !NetworkManager::isWwanEnabled()) {
+-        NetworkManager::setWwanEnabled(true);
+-    }
+-
+-    if (!m_nmModem) {
+-        return;
++    m_requestedDataEnabled = enabled;
++    if (!m_dataChangeRunning) {
++        applyMobileDataEnabled();
++    } else {
++        Q_EMIT mobileDataEnabledChanged();
+     }
++}
+ 
+-    if (enabled) {
+-        // enable mobile data...
+-        m_nmModem->setAutoconnect(true);
+-
+-        // activate the connection that was last used
+-        QDateTime latestTimestamp;
+-        NetworkManager::Connection::Ptr latestCon;
+-        for (NetworkManager::Connection::Ptr con : m_nmModem->availableConnections()) {
+-            QDateTime timestamp = con->settings()->timestamp();
+-            // if con was not used yet, skip it, otherwise:
+-            // if we have no latestTimestamp yet, con is the latest
+-            // otherwise, compare the timestamps
+-            // in case of a tie, use the first connection that was found
+-            if (!timestamp.isNull() && (latestTimestamp.isNull() || timestamp > latestTimestamp)) {
+-                latestTimestamp = timestamp;
+-                latestCon = con;
++QCoro::Task<void> CellularModem::applyMobileDataEnabled()
++{
++    m_dataChangeRunning = true;
++    Q_EMIT mobileDataEnabledChanged();
++    QPointer<CellularModem> guard(this);
++    bool enabled;
++    do {
++        enabled = m_requestedDataEnabled;
++        const auto modem = m_nmModem;
++        if (!modem) {
++            break;
++        }
++        if (enabled && !NetworkManager::isWwanEnabled()) {
++            NetworkManager::setWwanEnabled(true);
++        }
++        // Block autoactivation while settings are saved, then perform the
++        // requested operation. Never race a pending disconnect with activation.
++        modem->setAutoconnect(false);
++        const auto connections = modem->availableConnections();
++        NetworkManager::Connection::Ptr latest;
++        for (const auto &con : connections) {
++            if (!latest || con->settings()->timestamp() > latest->settings()->timestamp()) {
++                latest = con;
+             }
+         }
+-
+-        // if we found the last used connection, set it to autoconnect and connect it immediately
+-        if (!latestCon.isNull()) {
+-            latestCon->settings()->setAutoconnect(true);
+-            latestCon->update(latestCon->settings()->toMap());
+-            NetworkManager::activateConnection(latestCon->path(), m_nmModem->uni(), QString());
++        bool failed = false;
++        for (const auto &con : connections) {
++            auto settings = con->settings();
++            settings->setAutoconnect(enabled && con == latest);
++            QDBusReply<void> reply = co_await con->update(settings->toMap());
++            if (!guard) {
++                co_return;
++            }
++            if (!reply.isValid()) {
++                addError(i18n("Could not update mobile data: %1", reply.error().message()));
++                failed = true;
++                break;
++            }
+         }
+-
+-    } else {
+-        // disable mobile data...
+-
+-        // we do not call NetworkManager::setWwanEnabled(false), because it turns off cellular
+-        m_nmModem->setAutoconnect(false);
+-        // we need to also set all connections to not autoconnect (#182)
+-        for (NetworkManager::Connection::Ptr con : m_nmModem->availableConnections()) {
+-            con->settings()->setAutoconnect(false);
+-            con->update(con->settings()->toMap());
++        if (failed) {
++            break;
+         }
+-        // disconnect network
+-        m_nmModem->disconnectInterface();
+-    }
++        if (enabled) {
++            if (latest) {
++                QDBusReply<QDBusObjectPath> reply = co_await NetworkManager::activateConnection(latest->path(), modem->uni(), QString());
++                if (!guard) {
++                    co_return;
++                }
++                if (!reply.isValid()) {
++                    addError(i18n("Could not enable mobile data: %1", reply.error().message()));
++                }
++            }
++            modem->setAutoconnect(true);
++        } else {
++            QDBusReply<void> reply = co_await modem->disconnectInterface();
++            if (!guard) {
++                co_return;
++            }
++            if (!reply.isValid()) {
++                addError(i18n("Could not disable mobile data: %1", reply.error().message()));
++            }
++        }
++    } while (enabled != m_requestedDataEnabled);
++    m_dataChangeRunning = false;
++    refreshProfiles();
++    Q_EMIT mobileDataEnabledChanged();
+ }
+ 
+ bool CellularModem::hasSim() const
+@@ -323,6 +356,8 @@ void CellularModem::refreshSims()
+     Q_EMIT simsChanged();
+     Q_EMIT hasSimChanged();
+     Q_EMIT simEmptyChanged();
++    Q_EMIT mobileDataSupportedChanged();
++    Q_EMIT mobileDataEnabledChanged();
+ }
+ 
+ void CellularModem::refreshProfiles()
+diff --git a/libs/cellular/cellularmodem.h b/libs/cellular/cellularmodem.h
+--- a/libs/cellular/cellularmodem.h
++++ b/libs/cellular/cellularmodem.h
+@@ -123,6 +123,9 @@ private:
+     void refreshSims();
+     void refreshProfiles();
+     void addError(const QString &message);
++    QCoro::Task<void> applyMobileDataEnabled();
++    bool m_dataChangeRunning = false;
++    bool m_requestedDataEnabled = false;
+ 
+     CellularModemDetails *m_details = nullptr;
+     CellularConnectionProfile *m_profiles = nullptr;
+diff --git a/libs/cellular/cellularmodemlist.cpp b/libs/cellular/cellularmodemlist.cpp
+--- a/libs/cellular/cellularmodemlist.cpp
++++ b/libs/cellular/cellularmodemlist.cpp
+@@ -17,6 +17,7 @@ CellularModemList::CellularModemList(QObject *parent)
+ 
+     connect(ModemManager::notifier(), &ModemManager::Notifier::modemAdded, this, &CellularModemList::updateModemList);
+     connect(ModemManager::notifier(), &ModemManager::Notifier::modemRemoved, this, &CellularModemList::updateModemList);
++    connect(ModemManager::notifier(), &ModemManager::Notifier::serviceDisappeared, this, &CellularModemList::updateModemList);
+ }
+ 
+ QList<CellularModem *> CellularModemList::modems() const
+@@ -49,11 +50,14 @@ QList<CellularSim *> CellularModemList::sims() const
+ void CellularModemList::updateModemList()
+ {
+     // Clean up old modems
+-    qDeleteAll(m_modemList);
++    const auto previousModems = m_modemList;
+     m_modemList.clear();
+ 
+     for (ModemManager::ModemDevice::Ptr device : ModemManager::modemDevices()) {
+         ModemManager::Modem::Ptr modem = device->modemInterface();
++        if (!modem) {
++            continue;
++        }
+ 
+         qCDebug(PLASMA_NM_CELLULAR_LOG) << "Found modem:" << device->uni();
+ 
+@@ -70,4 +74,7 @@ void CellularModemList::updateModemList()
+     Q_EMIT primaryModemChanged();
+     Q_EMIT modemAvailableChanged();
+     Q_EMIT simsChanged();
++    for (auto modem : previousModems) {
++        modem->deleteLater();
++    }
+ }

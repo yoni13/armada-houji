@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Supervised bring-up candidate. This is not included in production images.
+// Loaded by the cellular service after stock firmware and licensing are ready.
 /dts-v1/;
 /plugin/;
 
 / {
 	compatible = "xiaomi,houji";
-	fragment@0 {
+	fragment@100 {
 		target-path = "/soc@0/remoteproc@4080000";
 		__overlay__ {
 			firmware-name = "qcom/houji/modem/modem.mdt",
@@ -13,4 +13,11 @@
 			status = "okay";
 		};
 	};
+};
+
+&ipa {
+	qcom,gsi-loader = "self";
+	memory-region = <&ipa_fw_mem>;
+	firmware-name = "ipa_fws.mdt";
+	status = "okay";
 };

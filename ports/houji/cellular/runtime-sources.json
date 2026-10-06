@@ -1,0 +1,21 @@
+{
+  "libmbim-utils-1.32.0-3.fc44.aarch64.rpm": ["libmbim", "1.32.0", "3.fc44", "0c1ae77a68df8eaabadcdae7bef66d87560a44b7a62ec18f54fc1e050237e4c9"],
+  "ModemManager-1.24.2-3.fc44.aarch64.rpm": ["ModemManager", "1.24.2", "3.fc44", "795792c076cdedc5206019f334a3a0e788d8da4232dce96e95d954b4828f3026"],
+  "libqmi-utils-1.36.0-3.fc44.aarch64.rpm": ["libqmi", "1.36.0", "3.fc44", "476ef1d656c0698ba257c9be6fd611fb47ed256510e2fa7e39fe29f56bbb5b11"],
+  "mobile-broadband-provider-info-20240407-5.fc44.noarch.rpm": ["mobile-broadband-provider-info", "20240407", "5.fc44", "9839bca6b0405aec5b57d07af27a21734ce59c73ce6dc2eecfd84b0e11df3bb6"],
+  "plasma-dialer-6.7.5-1.fc44.aarch64.rpm": ["plasma-dialer", "6.7.5", "1.fc44", "a42bb35bb6a932f2776bd1b3dee07442ebbca228a50f98839f34c310dfe9611a"],
+  "spacebar-6.7.5-1.fc44.aarch64.rpm": ["spacebar", "6.7.5", "1.fc44", "bdd797eb6bba849ce7ff0cd0c3a39d895d547511aa4527cfe0d3c405e91a6a87"],
+  "boost-atomic-1.90.0-7.fc44.aarch64.rpm": ["boost", "1.90.0", "7.fc44", "1103551abfdd57da6e9764a6bb81bcd337925050712d908769cffb73463ebbe4"],
+  "boost-chrono-1.90.0-7.fc44.aarch64.rpm": ["boost", "1.90.0", "7.fc44", "da9bc259f5dff94c0f03308532019aa69a9976af0527a60f2b10c4551025881e"],
+  "boost-container-1.90.0-7.fc44.aarch64.rpm": ["boost", "1.90.0", "7.fc44", "54a5889ca5906e3dab32c5140e3458554f01fca00a98a306556281320a6871fe"],
+  "boost-date-time-1.90.0-7.fc44.aarch64.rpm": ["boost", "1.90.0", "7.fc44", "ee007c9cffdbddfb22dc4a470062e97c0ff146936d816b3ee0215a655c7a471e"],
+  "boost-thread-1.90.0-7.fc44.aarch64.rpm": ["boost", "1.90.0", "7.fc44", "8e3f20f7e06d1e6afebf6a60388eef07f9945722898540d0b47a57f531650c93"],
+  "callaudiod-0.1.99-3.fc44.aarch64.rpm": ["callaudiod", "0.1.99", "3.fc44", "b9d8ac1c70b08f3a8fe15fd7888c79372fe8bac89bb244a81efae325aba4a52d"],
+  "dbus-glib-0.112-13.fc44.aarch64.rpm": ["dbus-glib", "0.112", "13.fc44", "8aeec234bb3ca013199e265a56621776bd53604e8a33ca88ba862df46312332c"],
+  "futuresql-qt6-0.1.1-7.fc44.aarch64.rpm": ["futuresql", "0.1.1", "7.fc44", "8156f30e65eeba909c49fef866df4762ae9b812f84d1572de53b7d9997d68cdd"],
+  "kf6-kcontacts-6.30.0-1.fc44.aarch64.rpm": ["kf6-kcontacts", "6.30.0", "1.fc44", "7ca55e4b7f5fc7af7418b5d5a7d24b5d3447716abc332279a19f8e0dc2cf5eb6"],
+  "kf6-kpeople-6.30.0-1.fc44.aarch64.rpm": ["kf6-kpeople", "6.30.0", "1.fc44", "2c3d74af8bb9e7f577dc99cfa17a59dc5a70e3b9bc7ecfff92dc26a52de15134"],
+  "libphonenumber-8.13.55-9.fc44.aarch64.rpm": ["libphonenumber", "8.13.55", "9.fc44", "77799b020b9ed804941ae56e0562be5950e1c419b9a2065f23096c7c362b4adc"],
+  "telepathy-glib-0.24.2-15.fc44.aarch64.rpm": ["telepathy-glib", "0.24.2", "15.fc44", "ddd0f62c9f1f595adef4790cacf9020fe605db4fdb1937b3a237eb9cbc8f61b1"],
+  "telepathy-mission-control-5.16.5-15.fc44.aarch64.rpm": ["telepathy-mission-control", "5.16.5", "15.fc44", "0afa9ffb73e835f735cec385674e20f5840bb6775843a2a94b5eac56dc40616f"]
+}

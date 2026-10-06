@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+mount --make-rprivate /
+D=/var/lib/houji-modem/tee
+mkdir -p /persist /mnt/vendor/persist /data /var/lib/tee/qtee_supplicant /var/lib/qtee_supplicant/vendor/tzstorage
+mount --bind "$D/persist" /persist
+mount --bind "$D/persist" /mnt/vendor/persist
+mount --bind "$D/data" /data
+mount --bind "$D/persist/data" /var/lib/tee/qtee_supplicant
+mount --bind "$D/data" /var/lib/qtee_supplicant/vendor/tzstorage
+export LD_LIBRARY_PATH=/usr/libexec/houji-cellular/lib
+exec /usr/libexec/houji-cellular/qtee_supplicant

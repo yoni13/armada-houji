@@ -1,0 +1,79 @@
+From: Armada contributors
+Subject: [PATCH] publish modem and SIM removals after updating the cached state
+
+Signal handlers can synchronously rebuild their modem/SIM lists. Publishing
+removal before erasing the cached object leaves Plasma retaining a removed
+modem after suspend. Also watch SIM path changes when no SIM exists initially,
+and never create a SIM object for the D-Bus null path.
+
+diff --git a/src/manager.cpp b/src/manager.cpp
+--- a/src/manager.cpp
++++ b/src/manager.cpp
+@@ -153,8 +153,12 @@ void ModemManager::ModemManagerPrivate::daemonRegistered()
+ 
+ void ModemManager::ModemManagerPrivate::daemonUnregistered()
+ {
+-    Q_EMIT serviceDisappeared();
++    const auto removed = modemList.keys();
+     modemList.clear();
++    for (const auto &uni : removed) {
++        Q_EMIT modemRemoved(uni);
++    }
++    Q_EMIT serviceDisappeared();
+ }
+ 
+ void ModemManager::ModemManagerPrivate::onInterfacesAdded(const QDBusObjectPath &object_path, const MMVariantMapMap &interfaces_and_properties)
+@@ -200,8 +204,8 @@ void ModemManager::ModemManagerPrivate::onInterfacesRemoved(const QDBusObjectPat
+ 
+     // Remove modem when there is no interface or Modem interfaces has been removed
+     if (!uni.isEmpty() && (interfaces.isEmpty() || (modem && modem->interfaces().isEmpty()) || interfaces.contains(QLatin1String(MMQT_DBUS_INTERFACE_MODEM)))) {
+-        Q_EMIT modemRemoved(uni);
+         modemList.remove(uni);
++        Q_EMIT modemRemoved(uni);
+     }
+ }
+ 
+diff --git a/src/modemdevice.cpp b/src/modemdevice.cpp
+--- a/src/modemdevice.cpp
++++ b/src/modemdevice.cpp
+@@ -105,11 +105,11 @@ void ModemManager::ModemDevicePrivate::initInterfaces()
+                 interfaceList.insert(ModemManager::ModemDevice::ModemInterface, ModemManager::Modem::Ptr());
+                 if (interfaceList.contains(ModemManager::ModemDevice::ModemInterface)) {
+                     ModemManager::Modem::Ptr modemInterface = interface(ModemManager::ModemDevice::ModemInterface).objectCast<ModemManager::Modem>();
+-                    if (!modemInterface->simPath().isEmpty()) {
++                    QObject::connect(modemInterface.data(), SIGNAL(simPathChanged(QString, QString)), this, SLOT(onSimPathChanged(QString, QString)));
++                    if (!modemInterface->simPath().isEmpty() && modemInterface->simPath() != QLatin1String("/")) {
+                         simCard = ModemManager::Sim::Ptr(new ModemManager::Sim(modemInterface->simPath()), &QObject::deleteLater);
+                         // q->simAdded(modemInterface->simPath());
+ 
+-                        QObject::connect(modemInterface.data(), SIGNAL(simPathChanged(QString, QString)), this, SLOT(onSimPathChanged(QString, QString)));
+                     }
+                 }
+             } else if (name == QLatin1String(MMQT_DBUS_INTERFACE_MODEM_SIMPLE)) {
+@@ -449,8 +449,9 @@ void ModemManager::ModemDevicePrivate::onInterfacesRemoved(const QDBusObjectPath
+ 
+     if (interfaces.contains(QLatin1String(MMQT_DBUS_INTERFACE_MODEM)) || interfaces.isEmpty()) {
+         if (simCard) {
+-            Q_EMIT q->simRemoved(simCard->uni());
++            const QString oldPath = simCard->uni();
+             simCard = ModemManager::Sim::Ptr();
++            Q_EMIT q->simRemoved(oldPath);
+         }
+     }
+ 
+@@ -511,12 +512,12 @@ void ModemManager::ModemDevicePrivate::onSimPathChanged(const QString &oldPath,
+ {
+     Q_Q(ModemDevice);
+ 
+-    if (!oldPath.isEmpty() && simCard->uni() == oldPath) {
+-        Q_EMIT q->simRemoved(oldPath);
++    if (simCard && simCard->uni() == oldPath) {
+         simCard = ModemManager::Sim::Ptr();
++        Q_EMIT q->simRemoved(oldPath);
+     }
+ 
+-    if (!newPath.isEmpty()) {
++    if (!newPath.isEmpty() && newPath != QLatin1String("/")) {
+         simCard = ModemManager::Sim::Ptr(new ModemManager::Sim(newPath), &QObject::deleteLater);
+         Q_EMIT q->simAdded(newPath);
+     }

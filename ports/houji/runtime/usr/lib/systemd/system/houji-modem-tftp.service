@@ -1,0 +1,9 @@
+[Unit]
+Description=Houji modem firmware and carrier configuration service
+Requires=houji-cellular-prepare.service
+After=houji-cellular-prepare.service
+
+[Service]
+ExecStart=/usr/libexec/houji-gps/tqftpserv
+Restart=on-failure
+RestartSec=2

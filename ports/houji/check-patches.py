@@ -254,6 +254,16 @@ def userspace_pins():
                  [(PORT / 'sensors/gamescope' / patch, None) for patch in gamescope['patches']]))
     pins.append(('tqftpserv', 'https://github.com/linux-msm/tqftpserv.git', gps['tqftpserv'],
                  [(PORT / 'gps/tqftpserv-mbnconfig.patch', None)]))
+    cellular = json.loads((PORT/'cellular/sources.json').read_text())['git']
+    for name, patch in [('minkipc','rpmb-read-only.patch'), ('lpac','lpac-activation-stdin.patch'),
+                        ('ModemManager','modemmanager-primary-gw.patch'),
+                        ('modemmanager-qt','modemmanager-qt-lifecycle.patch'),
+                        ('plasma-nm','plasma-nm-data-toggle.patch')]:
+        pin = cellular[name]
+        patches = [(PORT/'cellular'/patch, None)]
+        if name == 'ModemManager':
+            patches.append((PORT/'cellular/modemmanager-qrtr-resume.patch', None))
+        pins.append((name, pin['url'], pin['revision'], patches))
     return pins
 
 

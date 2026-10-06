@@ -8,8 +8,9 @@
 # check-patches.py leaves behind. The tests exercise the patched sources
 # themselves, so they must be built from those trees, not from the repository.
 #
-# Needs: gcc, g++, python3, pkg-config and the development files for glib,
-# gio-unix, gudev, libqmi-glib and libqrtr-glib. Everything else is built in a
+# Needs: gcc, g++, python3, cmake, dbus-run-session, pkg-config and the development
+# files for Qt6 (Core, DBus, Xml), ModemManager, glib, gio-unix, gudev,
+# libqmi-glib and libqrtr-glib. Everything else is built in a
 # temporary directory.
 set -euo pipefail
 
@@ -21,7 +22,7 @@ hex=$trees/hexagonrpc
 cc=${CC:-gcc}
 cxx=${CXX:-g++}
 
-for tree in hexagonrpc iio-sensor-proxy; do
+for tree in hexagonrpc iio-sensor-proxy modemmanager-qt; do
     [[ -d $trees/$tree ]] || { echo "missing patched tree: $trees/$tree" >&2; exit 2; }
 done
 
@@ -63,5 +64,8 @@ for test in test-sv-parser test-position-frame; do
         "$port/gps/$test.c" $gps_flags
     "$work/$test"
 done
+
+step 'cellular UI: re-entrant modem and SIM lifecycle notifications'
+bash "$port/cellular/test-ui-native.sh" "$trees/modemmanager-qt"
 
 printf '\nAll native tests passed\n'

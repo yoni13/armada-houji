@@ -19,6 +19,10 @@ dnf5 -y install --setopt=install_weak_deps=False \
     atheros-firmware \
     NetworkManager \
     NetworkManager-wifi \
+    NetworkManager-wwan \
+    ModemManager \
+    libqmi-utils \
+    mobile-broadband-provider-info \
     wpa_supplicant \
     bluez \
     dbus-broker \
@@ -118,6 +122,8 @@ dnf5 -y install --setopt=install_weak_deps=False \
     plasma-workspace \
     plasma-desktop \
     plasma-mobile \
+    plasma-dialer \
+    spacebar \
     plasma-settings \
     plasma-pa \
     plasma-nm \

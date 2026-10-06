@@ -1,0 +1,39 @@
+#!/usr/bin/python3
+"""Start MPSS once after its services are ready; never hot-restart it."""
+from pathlib import Path
+import subprocess
+import time
+from qmi import Client
+from sim import qmi
+
+modem = next((p for p in Path('/sys/class/remoteproc').glob('remoteproc*')
+              if (p/'name').read_text().strip() == 'modem'), None)
+if modem is None:
+    raise RuntimeError('MPSS device missing')
+# Type=simple is process readiness, not QMI-service readiness. The modem must
+# not request EFS before the RMTFS socket has actually been published.
+storage = Client(14, timeout=10, modem=False)
+storage.close()
+(modem/'recovery').write_text('disabled')
+state = (modem/'state').read_text().strip()
+if state == 'offline':
+    (modem/'state').write_text('start')
+elif state != 'running':
+    raise RuntimeError('Modem requires a normal reboot; state='+state)
+deadline = time.monotonic()+45
+while True:
+    try:
+        client = Client(11, timeout=1)
+        client.close()
+        break
+    except (TimeoutError, OSError):
+        if time.monotonic() >= deadline:
+            raise RuntimeError('UIM service did not become ready')
+        time.sleep(.2)
+# This firmware can boot reporting shutting-down. Transition through radio-off
+# before ModemManager assumes control; do not issue a remoteproc stop.
+qmi('--dms-set-operating-mode=low-power')
+mode_path = Path('/etc/armada/cellular-sim')
+mode = mode_path.read_text().strip() if mode_path.exists() else 'auto'
+subprocess.run(['/usr/libexec/houji-cellular/sim.py', mode], check=True)
+subprocess.run(['udevadm', 'trigger', '--subsystem-match=net'], check=True)

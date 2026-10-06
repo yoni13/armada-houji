@@ -11,6 +11,7 @@ p.add_argument('root',type=Path)
 p.add_argument('work',type=Path)
 a=p.parse_args(); root=a.root.resolve();work=a.work.resolve();users=work/'userspace'
 release=(kernel_source(work)/'include/config/kernel.release').read_text().strip()
+run('python3',PORT/'cellular/runtime-packages.py','--work',work/'cellular','--root',root)
 # The pinned Armada base provides these through python3-gobject and zenity.
 # Fail clearly when an alternative OCI image omits the NFC application's UI.
 for name in ['Gtk-4.0','Adw-1']:
@@ -141,9 +142,43 @@ link('etc/systemd/system/sleep.target.wants/houji-gamescope-sleep.service',
 for name in ['bluetooth','NetworkManager']:
     link('etc/systemd/system/multi-user.target.wants/'+name+'.service','/usr/lib/systemd/system/'+name+'.service')
 link('etc/systemd/system/dbus-org.bluez.service','/usr/lib/systemd/system/bluetooth.service')
-# GPS remains opt-in. Nothing here enables the modem or a location logger.
+# GPS remains opt-in; cellular startup below does not start a location logger.
 for name in ['rmtfs','qrtr-lookup','tqftpserv','houji-loc-test']:
     copy(work/'gps'/name,'usr/libexec/houji-gps/'+name,0o755)
 copy(PORT/'gps/nmea-bridge.py','usr/libexec/houji-gps/nmea-bridge.py',0o755)
+# The modem is gated by verified factory-license access before it is started.
+cell=work/'cellular/stage'
+for name in ['prepare.py','qmi.py','license-relay.py','sim.py','service.py','start-modem','run-supplicant']:
+    copy(PORT/'cellular'/name,'usr/libexec/houji-cellular/'+name,0o755)
+copy(PORT/'cellular/houji-cellular','usr/bin/houji-cellular',0o755)
+for name in ['qtee_supplicant','lpac']:
+    copy(cell/'bin'/name,'usr/libexec/houji-cellular/'+name,0o755)
+copy(cell/'bin/ModemManager','usr/sbin/ModemManager',0o755)
+copy(cell/'lib/libhouji-qtee.so','usr/libexec/houji-cellular/libhouji-qtee.so',0o755)
+copy(cell/'lib/kcm_houji_sim.so','usr/lib64/qt6/plugins/plasma/kcms/systemsettings/kcm_houji_sim.so',0o755)
+for name in ['libKF6ModemManagerQt.so.6', 'libplasmanm_cellular.so']:
+    copy(cell/'lib'/name,'usr/lib64/'+name,0o755)
+for name in ['minkadaptor','timeservice','fsservice','gpfsservice','taautoload','rpmbservice']:
+    copy(cell/'lib'/('lib'+name+'.so.1'),'usr/libexec/houji-cellular/lib/lib'+name+'.so.1',0o755)
+link('usr/lib/firmware/qcom/houji/modem','/run/houji/modemfw/image')
+link('etc/systemd/system/multi-user.target.wants/houji-cellular.service',
+     '/usr/lib/systemd/system/houji-cellular.service')
+nm_plugins = root/'usr/lib64/NetworkManager/1.58.1-1.fc44.armada'
+if not nm_plugins.is_dir():
+    raise ValueError('Cellular WWAN plugin needs the pinned NetworkManager 1.58.1-1.fc44.armada base')
+for name in ['libnm-wwan.so','libnm-device-plugin-wwan.so']:
+    copy(cell/'lib'/name,'usr/lib64/NetworkManager/1.58.1-1.fc44.armada/'+name,0o755)
+for source, filename in [('minkipc','LICENSE.txt'),('quic-teec','LICENSE.txt'),
+                         ('QCBOR','LICENSE'),('NetworkManager','COPYING'),('ModemManager','COPYING')]:
+    copy(work/'cellular/sources'/source/filename,'usr/share/licenses/houji-cellular/'+source+'-'+filename)
+for src in (work/'cellular/sources/lpac/LICENSES').glob('*.txt'):
+    copy(src,'usr/share/licenses/houji-cellular/lpac/'+src.name)
+for source in ['modemmanager-qt', 'plasma-nm']:
+    for src in (work/'cellular/sources'/source/'LICENSES').glob('*.txt'):
+        copy(src,'usr/share/licenses/houji-cellular/'+source+'/'+src.name)
+write('usr/share/applications/kcm_houji_sim.desktop',
+      '[Desktop Entry]\nType=Application\nName=SIM Cards and eSIM\nIcon=network-mobile\n'
+      'Exec=plasma-open-settings kcm_houji_sim\nNoDisplay=true\n'
+      'Categories=Qt;KDE;Settings;Network;\n')
 run('depmod','-b',root,release)
 print('Staged clean Houji userspace and modules:',release)

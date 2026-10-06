@@ -1,0 +1,76 @@
+diff --git a/src/applet/profile/download.c b/src/applet/profile/download.c
+--- a/src/applet/profile/download.c
++++ b/src/applet/profile/download.c
+@@ -101,6 +101,19 @@ static int applet_main(int argc, char **argv) {
+             break;
+         case 'a':
+             activation_code = strdup(optarg);
++            /* Keep activation codes out of process arguments and journals. */
++            if (strcmp(optarg, "-") == 0) {
++                char input[4096];
++                if (!fgets(input, sizeof(input), stdin) ||
++                    !strchr(input, '\n')) {
++                    free(activation_code);
++                    return -1;
++                }
++                input[strcspn(input, "\r\n")] = '\0';
++                free(activation_code);
++                activation_code = strdup(input);
++                memset(input, 0, sizeof(input));
++            }
+             if (strncmp(activation_code, "LPA:", 4) == 0) {
+                 activation_code += 4; // ignore uri scheme
+             }
+diff --git a/driver/http/curl.c b/driver/http/curl.c
+--- a/driver/http/curl.c
++++ b/driver/http/curl.c
+@@ -36,6 +36,10 @@ struct http_trans_response_data {
+     size_t size;
+ };
+ 
++/* Preserve TLS connections and in-memory cookies for one provisioning session.
++ * Some SM-DP+ frontends require this to keep requests on the same backend. */
++static CURL *session_curl;
++
+ static struct libcurl_interface {
+     CURLcode (*_curl_global_init)(long flags);
+     CURL *(*_curl_easy_init)(void);
+@@ -79,7 +83,12 @@ static int http_interface_transmit(struct euicc_ctx *ctx, const char *url, uint32_t
+     (*rx) = NULL;
+     (*rcode) = 0;
+ 
+-    curl = libcurl._curl_easy_init();
++    if (!session_curl) {
++        session_curl = libcurl._curl_easy_init();
++        if (session_curl)
++            libcurl._curl_easy_setopt(session_curl, CURLOPT_COOKIEFILE, "");
++    }
++    curl = session_curl;
+     if (!curl) {
+         goto err;
+     }
+@@ -122,7 +131,10 @@ err:
+     fret = -1;
+     free(responseData.data);
+ exit:
+-    libcurl._curl_easy_cleanup(curl);
++    if (curl) {
++        libcurl._curl_easy_setopt(curl, CURLOPT_HTTPHEADER, NULL);
++        libcurl._curl_easy_setopt(curl, CURLOPT_POSTFIELDS, NULL);
++    }
+     libcurl._curl_slist_free_all(headers);
+     return fret;
+ }
+@@ -176,7 +188,11 @@ static int libhttpinterface_init(struct euicc_http_interface *ifstruct) {
+ 
+ static int libhttpinterface_main(int argc, char **argv) { return 0; }
+ 
+-static void libhttpinterface_fini(struct euicc_http_interface *ifstruct) {}
++static void libhttpinterface_fini(struct euicc_http_interface *ifstruct) {
++    if (session_curl)
++        libcurl._curl_easy_cleanup(session_curl);
++    session_curl = NULL;
++}
+ 
+ const struct euicc_driver driver_http_curl = {
+     .type = DRIVER_HTTP,
