@@ -241,8 +241,10 @@ class PackagingTests(Scratch):
         self.assertGreater(phone.read_archive(self.root / 'm.tar.zst', RELEASE), 0)
 
 
-def write_archive(path, members):
-    """members: [(name, type, data)] -> .tar.zst. Types: file, dir, symlink, hardlink, chardev, fifo."""
+def write_archive(path, members, padding=0):
+    """members: [(name, type, data)] -> .tar.zst. Types: file, dir, symlink, hardlink, chardev, fifo.
+
+    padding adds that many zero bytes after the end-of-archive marker, as tar does when it fills a block."""
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode='w') as tar:
         for name, kind, data in members:
@@ -261,7 +263,7 @@ def write_archive(path, members):
             else:
                 info.size = len(data)
                 tar.addfile(info, io.BytesIO(data))
-    subprocess.run(['zstd', '-q', '-f', '-o', str(path)], input=raw.getvalue(), check=True)
+    subprocess.run(['zstd', '-q', '-f', '-o', str(path)], input=raw.getvalue() + bytes(padding), check=True)
 
 
 class ArchiveReaderTests(Scratch):
@@ -279,6 +281,17 @@ class ArchiveReaderTests(Scratch):
         destination.mkdir()
         self.assertEqual(self.read(self.good(), destination), 4)
         self.assertEqual((destination / 'modules' / RELEASE / 'a.ko').read_bytes(), b'data')
+
+    def test_padding_after_the_end_marker_is_not_corruption(self):
+        # tarfile stops at the end marker. If zstd is still writing the padding behind it
+        # (more than a pipe buffer's worth here), it must not turn into "corrupt".
+        archive = self.root / 'm.tar.zst'
+        write_archive(archive, self.good(), padding=8 << 20)
+        for _ in range(5):
+            self.assertEqual(phone.read_archive(archive, RELEASE), 4)
+        destination = self.root / 'out'
+        destination.mkdir()
+        self.assertEqual(phone.read_archive(archive, RELEASE, destination), 4)
 
     def test_hostile_archives_are_rejected_and_never_create_the_hostile_path(self):
         cases = {

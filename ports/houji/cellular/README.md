@@ -102,6 +102,17 @@ Use SIM-bound NetworkManager profiles to prevent an APN intended for one SIM
 from automatically activating on another. Roaming is a per-connection choice;
 the tested physical SIM used home-only data, while the travel eSIM allowed roaming.
 
+### Wi-Fi preference
+
+Routed Wi-Fi takes priority over cellular for both address families. A higher
+cellular route metric alone is insufficient: IPv4-only Wi-Fi otherwise leaves
+the modem's IPv6 default route available, and applications such as Steam may
+prefer it. The NetworkManager dispatcher temporarily suppresses WWAN IPv4/IPv6
+default routes and automatic DNS while an infrastructure Wi-Fi connection has a
+default route. When Wi-Fi disconnects, it restores the saved cellular settings
+without changing APNs, roaming preferences or the data toggle. Local-only Wi-Fi
+and Wi-Fi hotspots do not suppress cellular fallback.
+
 `lpac` is pinned to v2.3.0 with QMI_QRTR and curl, plus stdin activation-code
 input and per-process HTTP connection/cookie retention. The latter resolved
 SM-DP+ "Unknown transaction" and "Verification Failed" responses during a real

@@ -20,6 +20,22 @@ BASE_FEX_CONFIG = pathlib.Path("/usr/share/fex-emu/Config.json")
 FEX_PROFILES_CONFIG = pathlib.Path("/usr/share/armada/fex-profiles.json")
 PROTON_INJECT_SRC = pathlib.Path("/usr/share/armada/proton-inject/x86_64-linux-gnu")
 SYSTEM_EXEC_PATHS = ("/usr/bin", "/usr/local/bin", "/bin")
+# pressure-vessel exposes the guest Vulkan loader from Armada's Arch-layout x86 graphics
+# provider (/usr/share/guestos/fex-mesa) as a link in its overrides directory. Steam's
+# FEX does not expand @PREFIX_LIB@ to that directory for this provider, so the Vulkan
+# thunk never engaged and native x86 games ran the emulated x86 Turnip (Counter-Strike 2
+# drew most of the world black). The depot's own entries are kept; FEX's per-app
+# ThunksDB replaces the whole Vulkan entry.
+FEX_VULKAN_THUNK = {
+    "Library": "libvulkan-guest.so",
+    "Overlay": [
+        "@PREFIX_LIB@/libvulkan.so",
+        "@PREFIX_LIB@/libvulkan.so.1",
+        "@HOME@/.local/share/Steam/ubuntu12_32/steam-runtime/pinned_libs_64/libvulkan.so.1",
+        "/usr/lib/pressure-vessel/overrides/lib/x86_64-linux-gnu/libvulkan.so",
+        "/usr/lib/pressure-vessel/overrides/lib/x86_64-linux-gnu/libvulkan.so.1",
+    ],
+}
 
 def is_appimage(command):
     try:
@@ -133,6 +149,47 @@ def apply_fex(settings, game_id, profiles, env):
             f.write("\n")
         os.replace(tmp, target)
         env["FEX_APP_CONFIG"] = str(target)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def fex_local_config_dir(env):
+    # Where Steam's FEX looks for its per-app ThunksDB.json (FEX GetConfigDirectory).
+    override = env.get("FEX_APP_CONFIG_LOCATION")
+    if override:
+        path = pathlib.Path(override)
+        return path if path.is_absolute() else None
+    data_path = env.get("STEAM_COMPAT_DATA_PATH")
+    if data_path and pathlib.Path(data_path).is_absolute():
+        return pathlib.Path(data_path) / "fex-emu"
+    return None
+
+
+def install_fex_thunk_overlays(args, env):
+    # Only Steam's Linux FEX compat tool uses these thunks; arm64ec Proton does not.
+    if not any(pathlib.PurePath(arg).name == "fex-compat-tool" for arg in args):
+        return
+    config_dir = fex_local_config_dir(env)
+    if config_dir is None:
+        return
+    target = config_dir / "ThunksDB.json"
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    db = data.get("DB")
+    if not isinstance(db, dict):
+        db = data["DB"] = {}
+    if db.get("Vulkan") == FEX_VULKAN_THUNK:
+        return
+    db["Vulkan"] = FEX_VULKAN_THUNK
+    config_dir.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(".ThunksDB.json.armada-tmp")
+    try:
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -271,6 +328,11 @@ def main():
         apply_perf(settings, game_id)
     except Exception as exc:
         print(f"armada-game-launch: perf settings skipped: {exc}", file=sys.stderr)
+
+    try:
+        install_fex_thunk_overlays(args, os.environ)
+    except Exception as exc:
+        print(f"armada-game-launch: FEX thunk overlays skipped: {exc}", file=sys.stderr)
 
     try:
         inject_x86_protocol_libs()

@@ -52,6 +52,15 @@ step 'sensors: front light lux formula, SSC reports and Xiaomi OEM messages'
 step 'sensors: iio-sensor-proxy SSC driver stops its measurement on close'
 python3 "$root/tests/houji-ssc-close-test.py" "$trees/iio-sensor-proxy"
 
+step 'charging: battery percentage stays near the gauge on plug-in, unplug and full'
+# The function under test is taken from kernel patch 0028 itself.
+awk '/^\+#define HOUJI_CHARGING_CAPACITY_MARGIN/ {on=1} on {line=$0; sub(/^\+/, "", line); print line} on && /^\+\}$/ {exit}' \
+    "$port/patches/0028-houji-capacity-tracks-gauge.patch" > "$work/houji-capacity.inc"
+[[ -s $work/houji-capacity.inc ]] || { echo 'houji_capacity() not found in patch 0028' >&2; exit 1; }
+"$cc" -Wall -Wextra -Werror -DHOUJI_CAPACITY_INC="\"$work/houji-capacity.inc\"" \
+    -o "$work/capacity-clamp" "$port/charging/test-capacity-clamp.c"
+"$work/capacity-clamp"
+
 step 'gamescope: wake waits for a fresh frame'
 "$cxx" -std=c++17 -Wall -Werror -o "$work/frame-wake" "$root/tests/houji-frame-wake-test.cpp"
 "$work/frame-wake"

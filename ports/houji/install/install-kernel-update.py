@@ -101,6 +101,12 @@ def read_archive(archive, release, destination=None):
                 require(unpacked <= MAX_UNPACKED, 'Archive unpacks to more than expected')
                 if destination is not None:
                     tar.extract(member, destination, filter='data')
+        # tarfile stops at the end marker. Let zstd finish writing what follows, or it can
+        # exit with a broken pipe and a sound archive looks corrupt, depending on timing.
+        trailing = 0
+        while chunk := decompress.stdout.read(1 << 20):
+            trailing += len(chunk)
+            require(trailing <= MAX_UNPACKED, 'Archive has too much data after its end')
     finally:
         decompress.stdout.close()
         status = decompress.wait()

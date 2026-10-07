@@ -1,4 +1,4 @@
-Subject: [PATCH] power: supply: qcom_battmgr: keep houji's capacity at or below the gauge while discharging
+Subject: [PATCH] power: supply: qcom_battmgr: keep houji's capacity from running far above the gauge
 
 Houji's battery firmware reports a "linearized" capacity (en-linear-soc in
 its configuration, as on stock). When a charge completes it ramps the
@@ -10,8 +10,13 @@ the next boot, which re-estimates, dropped it by 23 points.
 
 The gauge's own value, charge_now / charge_full, is always current and is
 what the firmware converges to. While discharging, report the lower of the
-two; while charging or full, keep the firmware's figure so a completed
-charge still reads 100%.
+two.
+
+The stale figure also appears the moment a charger is plugged in: 23% left
+jumped to 54%, then walked down 1% per run until it met the gauge. While
+charging, report at most the gauge plus a margin of 3 points. When full,
+keep the firmware's figure: it ramps to 100% a little ahead of the counter,
+and a full battery must read 100%.
 
 The gauge reads low under load and recovers at rest, so while
 discharging the figure is kept non-increasing; charging re-arms it.
@@ -26,7 +31,7 @@ discharging the figure is kept non-increasing; charging re-arms it.
  	unsigned long houji_fcc_deadline;
  	bool houji_fcc_stopping;
  	bool houji_suspending;
-@@ -545,6 +546,42 @@
+@@ -545,6 +546,57 @@
  	return ret;
  }
  
@@ -37,28 +42,43 @@ discharging the figure is kept non-increasing; charging re-arms it.
 + * 8-minute discharge heartbeat, so under load the figure stays far above the
 + * charge left (83% shown with 70% left was measured). The gauge's own value,
 + * the remaining charge over the full charge, is always current and is what
-+ * the firmware converges to. While discharging, never report more than it;
-+ * while charging or full, keep the firmware's figure so a completed charge
-+ * still reads 100%. The gauge dips under load and recovers at rest, so the
-+ * figure only falls while discharging and is re-armed by charging.
++ * the firmware converges to. While discharging, never report more than it.
++ * The gauge dips under load and recovers at rest, so the figure only falls
++ * while discharging and is re-armed by charging.
++ *
++ * The same stale figure is shown the moment a charger is plugged in (54%
++ * with 23% left was seen) and then walks down 1% per run until it meets the
++ * gauge. While charging, never report more than the gauge plus a small
++ * margin. When full, keep the firmware's figure: it ramps to 100% a little
++ * ahead of the counter, and a full battery must read 100%.
 + */
++#define HOUJI_CHARGING_CAPACITY_MARGIN	3
++
 +static int houji_capacity(struct qcom_battmgr *battmgr, int reported)
 +{
 +	int floor = READ_ONCE(battmgr->houji_capacity_floor);
++	bool discharging;
 +	u64 gauge;
 +
-+	if (qcom_battmgr_bat_sm8350_update(battmgr, POWER_SUPPLY_PROP_STATUS) ||
-+	    battmgr->status.status != POWER_SUPPLY_STATUS_DISCHARGING) {
++	if (qcom_battmgr_bat_sm8350_update(battmgr, POWER_SUPPLY_PROP_STATUS)) {
 +		WRITE_ONCE(battmgr->houji_capacity_floor, 0);
 +		return reported;
 +	}
++	discharging = battmgr->status.status == POWER_SUPPLY_STATUS_DISCHARGING;
++	if (!discharging)
++		WRITE_ONCE(battmgr->houji_capacity_floor, 0);
++	if (battmgr->status.status == POWER_SUPPLY_STATUS_FULL)
++		return reported;
 +	if (qcom_battmgr_bat_sm8350_update(battmgr, POWER_SUPPLY_PROP_CHARGE_COUNTER) ||
 +	    qcom_battmgr_bat_sm8350_update(battmgr, POWER_SUPPLY_PROP_CHARGE_FULL) ||
 +	    !battmgr->info.last_full_capacity)
-+		return floor ? min(reported, floor) : reported;
++		return discharging && floor ? min(reported, floor) : reported;
 +	/* The counter reads about half a percent under the firmware's figure. */
 +	gauge = DIV_ROUND_UP_ULL((u64)battmgr->status.capacity * 100,
 +				 battmgr->info.last_full_capacity);
++	if (!discharging)
++		return min_t(u64, reported,
++			     gauge + HOUJI_CHARGING_CAPACITY_MARGIN);
 +	reported = min_t(u64, reported, gauge);
 +	if (floor)
 +		reported = min(reported, floor);
@@ -69,7 +89,7 @@ discharging the figure is kept non-increasing; charging re-arms it.
  static int qcom_battmgr_bat_sc8280xp_update(struct qcom_battmgr *battmgr,
  					    enum power_supply_property psp)
  {
-@@ -695,6 +732,8 @@
+@@ -695,6 +747,8 @@
  		if (battmgr->status.percent == (unsigned int)-1)
  			return -ENODATA;
  		val->intval = battmgr->status.percent;

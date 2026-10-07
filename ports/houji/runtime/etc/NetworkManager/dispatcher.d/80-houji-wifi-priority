@@ -1,0 +1,7 @@
+#!/bin/sh
+# Reconcile both IP families after Wi-Fi/WWAN activation, disconnect or reapply.
+case "$2" in
+    up|down|dhcp4-change|dhcp6-change|reapply|connectivity-change)
+        exec /usr/libexec/houji-cellular/wifi-priority.py
+        ;;
+esac

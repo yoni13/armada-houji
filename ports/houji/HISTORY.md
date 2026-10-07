@@ -90,6 +90,14 @@ and build and install steps are in [README.md](README.md).
   `InvalidOperation` for status. CallAudioD independently reported no suitable
   audio card/voice ports. The current UCM profile is HiFi-only. Calling needs
   further IMS and voice-audio integration; no test call was placed by the agent.
+- **Download routing:** with IPv4-only Wi-Fi and cellular IPv6 active together,
+  Steam selected IPv6 CDN endpoints over the modem and downloaded at roughly
+  0.08–0.12 Mbps despite a healthy 5 GHz Wi-Fi link. After the physical SIM was
+  removed, Wi-Fi-only downloads reached about 31 Mbps. The new dispatcher makes
+  this preference persistent by temporarily suppressing cellular defaults in
+  both families while routed Wi-Fi is active, restoring saved preferences on
+  Wi-Fi loss. Unit and typed D-Bus replay tests cover the policy; live dual-link
+  fallback still needs checking with a SIM present.
 
 ### Xiaomi's bootloader rejected early images
 
@@ -383,9 +391,18 @@ for every DSP request.
   cycles completed with zero reported suspend failures. ADSP and MPSS stayed
   running. The Wi-Fi hwmon warning seen near the incident also appears in
   successful cycles, so it does not identify the failing component.
+- **Second occurrence (2026-10-07):** with ETS2 left running, the phone
+  entered native sleep, slept 131 s, served a sensor-DSP dark wake, and logged
+  `dark wake 1 after 131 s ... sleeping again`. The journal ends there, with no
+  further suspend entry, no panic, empty pstore and no orderly shutdown. Unlike
+  the first case, the dark wake followed real sleep, so a zero-duration wake is
+  not required. Going back to sleep after a DSP dark wake is still the common
+  point. `FAULT_REASON1` again read `0x40`, which is the latched value noted
+  above and cannot date the event. Logs are kept root-only in
+  `/var/lib/houji-modem/crash-20261007/` on the handset.
 - **Conclusion:** intermittent native sleep/wake reset remains unresolved.
-  Immediate re-suspend after an aborted/zero-duration dark wake is a lead, not
-  a proven cause. No speculative kernel or sleep-policy fix was applied.
+  Re-suspending after a sensor-DSP dark wake is a lead, not a proven cause.
+  No speculative kernel or sleep-policy fix was applied.
   Raw evidence is retained root-only on the handset; diagnostic logging and
   the temporary alarm/hook were restored/removed after the tests.
 
@@ -863,10 +880,40 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   blamed it was wrong.
 - **Fix:** Kernel patch `0028`: while discharging, `capacity` is the lower of
   the firmware's figure and `charge_now / charge_full` (rounded up), and it
-  only falls until charging resumes. Charging and full keep the firmware's
-  figure, so a completed charge still reads 100%.
+  only falls until charging resumes. Charging and full kept the firmware's
+  figure, so a completed charge still reads 100% (charging is capped as well
+  since the plug-in fix below).
 - **Result:** On battery the phone read 55% with the gauge at 54.3%, where the
   firmware said 57%.
+
+### The percentage jumped up when the charger was plugged in
+
+- **Issue:** Plugging in the charger changed 23% to 54% within a second. The
+  charge counter was unchanged at about 21%. The figure then fell about 1 point
+  every 5–10 seconds (50, 44, 36, 29) while the status said Charging, until it
+  met the gauge.
+- **Cause:** The same stale linearized figure as above. Patch `0028` only
+  clamped it while discharging, so the clamp ended the moment the status became
+  Charging and the firmware's old figure showed through. With the charger
+  attached the state machine runs often, which is why it then walked down. In
+  that session the battery was also still draining while it read Charging: about
+  3 W came in at 9 V and 0.35 A, the phone drew about 5.5 W, and the battery was
+  at 44.8 °C, above the 38 °C limit for high charging current.
+- **Fix:** Patch `0028` now also caps the figure while charging, at the gauge
+  plus 3 points. The cap is not a floor, so the figure still follows the
+  firmware down and the gauge up. When the status is Full the firmware's figure
+  is kept, because it ramps to 100% a little ahead of the counter and a full
+  battery must read 100%. A host test (`charging/test-capacity-clamp.c`, run by
+  `native-tests.sh`) compiles `houji_capacity()` out of the patch and covers
+  plug-in, unplug, full, the charge limit and unreadable gauge values. It
+  reproduces the old behaviour (54 shown with 23 left) against the previous patch.
+- **Status:** Flashed as a kernel-only update (`7.2.6-armada-houji-kcap2`). The
+  phone booted it, the out-of-tree modules loaded, and while charging the figure
+  read 15% with the gauge at 13.8%, inside the cap. The plug-in jump itself was
+  not reproduced on the phone: the firmware re-estimates at boot, so its figure
+  matched the gauge, and a gap of this size only builds up over a long discharge
+  under load. It needs a check the next time the percentage has run well ahead of
+  the gauge. Until then the fix rests on the host test of the shipped function.
 
 ## Thermal limits
 
@@ -1382,6 +1429,15 @@ Against the build that was flashed and booted:
 - **A command-line bug only a real build could find:** `--localversion -kNAME`
   failed in `argparse`, which reads the value as another option, in both the
   documentation and the first workflow draft. The option now takes `kNAME`.
+- **A sound archive reported as corrupt, by chance:** on the phone the installer
+  said `Module archive is corrupt` for a bundle whose checksums matched and which
+  `zstd -t` accepted. Repeating the same check-only run gave one failure in three.
+  `tarfile` in streaming mode stops at the end-of-archive marker, so `zstd` could
+  still be writing the padding behind it when the pipe closed, and it then exited
+  with a broken pipe. The reader now drains what follows the marker (capped at the
+  size limit) before it reads `zstd`'s exit status. A test with 8 MB of padding
+  reproduced the error every time before the change and passes after it. The bundle
+  was repackaged, and the images and modules came out byte-identical.
 
 ## Installing over stock Android
 
@@ -1456,6 +1512,46 @@ Against the build that was flashed and booted:
   partition's own bytes looked at. A console on the failing system is worth more
   than photographs of its screen.
 
+### Counter-Strike 2 drew most of the world black
+
+- **Symptom:** In native (Linux) CS2, from the first frame, large meshes rendered
+  pure black except where direct sunlight fell on them. Sky, weapons, HUD,
+  decals and some indirectly lit walls were correct. Seen on Dust II and Mirage.
+- **Cause:** CS2 never used the phone's Turnip. It ran Armada's x86 build of
+  Turnip (`/usr/share/guestos/fex-mesa`) under FEX emulation, and that driver
+  misrenders the game. Steam's FEX should forward Vulkan to the native driver
+  through its Vulkan thunk, which Armada enables, but the thunk only engages when
+  the guest opens a library path listed in Steam's FEX `ThunksDB.json`.
+  pressure-vessel exposes the guest loader as
+  `/usr/lib/pressure-vessel/overrides/lib/x86_64-linux-gnu/libvulkan.so.1`, a
+  link into the provider's Arch-layout `/run/gfx/main/usr/lib`, and Steam's FEX
+  build does not expand `@PREFIX_LIB@` to that directory. `/proc/<pid>/maps`
+  showed `libvulkan-guest.so` was never loaded, so the earlier "thunk off" test
+  had changed nothing.
+- **Fix:** `armada-game-launch` writes a per-game FEX `ThunksDB.json`
+  (`$STEAM_COMPAT_DATA_PATH/fex-emu/`, FEX's per-app config directory) whose
+  Vulkan entry keeps the depot's paths and adds the pressure-vessel link. It
+  only does so for launches through Steam's Linux FEX compat tool; arm64ec
+  Proton launches are untouched. Steam's FEX depot is not modified. Tested by
+  `tests/fex-vulkan-thunk-test.sh`. The houji image stages the launcher from this
+  checkout until the pinned Armada image includes it.
+- **Result:** With only the launcher change and the original depot, CS2 loaded
+  `libvulkan-guest.so`, `libvulkan-host.so` and the host
+  `/run/host/usr/lib64/libvulkan_freedreno.so`. Dust II rendered correctly,
+  including the shaded CT-spawn interior and shaded streets that were black.
+  The first run with the native driver compiled shaders for about ten minutes
+  before the menu appeared; later launches reach it much sooner. Memory
+  stays tight (available memory briefly reached 0 MB while loading a map).
+- **Tests that did not help, all made on the emulated x86 Turnip:** Valve's
+  `tu_override_uncached_as_cache_coherent`, `TU_DEBUG` render-path switches, ir3
+  optimisation switches (`IR3_SHADER_DEBUG`, full recompiles), a Turnip build
+  without Armada's patch `0001`, FEX's strict `compatible` profile and CS2's
+  graphics settings. Why the x86 Turnip build misrenders CS2 is not known.
+- **Memory:** Any change that invalidates Steam's precompiled shaders makes CS2
+  recompile in-process. One such run froze the phone and another was killed by
+  the OOM killer. A temporary swap file on `/run/houji/data` let full recompiles
+  finish.
+
 ## Open problems
 
 - Intermittent animation freeze around Steam wake: never reproduced or explained.
@@ -1468,6 +1564,8 @@ Against the build that was flashed and booted:
 - Heavy load can reset the phone through a brownout (PMIC UVLO). Stock BCL
   voltage alarms, which cut the GPU quickly, have no kernel driver yet.
 - GPS: restarting the modem can reboot the phone.
+- The x86 Turnip build used under FEX when the Vulkan thunk is off misrenders
+  Counter-Strike 2. The cause is unknown; native CS2 now uses the thunk.
 - NFC: NDEF reads from physical tags, other tag families and writes are unverified.
 - Gyro aiming, cellular, cameras and fingerprint are not implemented.
 - Other panel revisions, storage sizes and regional firmware are untested.

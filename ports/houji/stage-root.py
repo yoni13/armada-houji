@@ -41,7 +41,9 @@ for directory in [PORT/'runtime',PORT/'firmware/root']:
     for src in directory.rglob('*'):
         # Tests that import scripts from here must not leak bytecode into images.
         if src.is_file() and '__pycache__' not in src.parts:copy(src,str(src.relative_to(directory)))
-for name in ['armada-powerd','device-env','fake-suspend','mtp-gadget']:
+# armada-game-launch carries the FEX Vulkan thunk fix for native x86 games (Counter-Strike 2)
+# until the pinned Armada image includes it.
+for name in ['armada-powerd','device-env','fake-suspend','mtp-gadget','armada-game-launch']:
     rel='usr/libexec/armada/'+name;copy(REPO/'system_files'/rel,rel,0o755)
 for name in ['defaults.conf','xiaomi-14.conf']:
     rel='usr/lib/armada/devices/'+name;copy(REPO/'system_files'/rel,rel)
@@ -148,7 +150,7 @@ for name in ['rmtfs','qrtr-lookup','tqftpserv','houji-loc-test']:
 copy(PORT/'gps/nmea-bridge.py','usr/libexec/houji-gps/nmea-bridge.py',0o755)
 # The modem is gated by verified factory-license access before it is started.
 cell=work/'cellular/stage'
-for name in ['prepare.py','qmi.py','license-relay.py','sim.py','service.py','start-modem','run-supplicant']:
+for name in ['prepare.py','qmi.py','license-relay.py','sim.py','service.py','wifi-priority.py','start-modem','run-supplicant']:
     copy(PORT/'cellular'/name,'usr/libexec/houji-cellular/'+name,0o755)
 copy(PORT/'cellular/houji-cellular','usr/bin/houji-cellular',0o755)
 for name in ['qtee_supplicant','lpac']:
