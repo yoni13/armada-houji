@@ -47,11 +47,18 @@ for name in ['armada-powerd','device-env','fake-suspend','mtp-gadget','armada-ga
     rel='usr/libexec/armada/'+name;copy(REPO/'system_files'/rel,rel,0o755)
 for name in ['defaults.conf','xiaomi-14.conf']:
     rel='usr/lib/armada/devices/'+name;copy(REPO/'system_files'/rel,rel)
+# The device profile's cursor scale needs gamescope-session support; apply Armada's
+# package patch until the pinned image ships it.
+session_script=target('usr/share/gamescope-session-plus/gamescope-session-plus')
+if 'ARMADA_GAMESCOPE_CURSOR_SCALE_HEIGHT' not in session_script.read_text():
+    run('patch','-p1','-F0','--no-backup-if-mismatch','-d',root,
+        '-i',REPO/'packages/gamescope-session/patches/0008-armada-cursor-scale-height.patch')
 # Native suspend lets NetworkManager disconnect before the radio powers down.
 # Armada's sleep-mode switch recreates this marker if the owner selects light sleep.
 target('etc/NetworkManager/ignore-sleep').unlink(missing_ok=True)
-for src in (REPO/'system_files/usr/share/inputplumber').rglob('*shanwan*'):
-    if src.is_file():copy(src,str(src.relative_to(REPO/'system_files')))
+for pattern in ('*shanwan*','*gamesir*'):
+    for src in (REPO/'system_files/usr/share/inputplumber').rglob(pattern):
+        if src.is_file():copy(src,str(src.relative_to(REPO/'system_files')))
 # Base kernels cannot load modules built for this kernel release.
 stage_modules(work,release,target('usr/lib/modules'))
 for name in ['houji-stock-core','houji-stock-auth']:

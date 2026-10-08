@@ -27,7 +27,7 @@ opts = ['--reconfigure', '--clearcache'] if (work/'out/build.ninja').exists() el
 run('meson', 'setup', *opts, work/'out', source, '--cross-file', work/'cross.ini',
     '-Dcpp_link_args='+json.dumps(['-L'+str(sysroot/'usr/lib64'), '-Wl,-rpath-link,'+str(sysroot/'usr/lib64'), '-lmvec']),
     '--prefix=/usr', '--libdir=lib64', '-Dbuildtype=release', '-Dpipewire=disabled',
-    '-Dsdl2_backend=disabled', '-Davif_screenshots=disabled', '-Dinput_emulation=disabled',
+    '-Dsdl2_backend=disabled', '-Davif_screenshots=disabled', '-Dinput_emulation=enabled',
     '-Denable_openvr_support=false', '-Denable_gamescope_wsi_layer=false',
     '-Denable_tests=false', '-Dbenchmark=disabled', '-Dwlroots:color-management=disabled')
 run('ninja', '-C', work/'out', '-j8', 'src/gamescope')

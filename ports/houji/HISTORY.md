@@ -1117,6 +1117,53 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
     owner chose to keep this layout. Swapping in the kernel would break a
     genuine Fire controller, which shares the IDs.
 
+### GameSir X2s record button as Quick Access
+
+- **Issue:** The owner wanted the GameSir X2s Type-C (USB `3537:0105`) record
+  button to open Quick Access.
+- **Cause:** The button sends no gamepad button. Its Consumer Control interface
+  reports Volume Down and Power together for about 5 ms (Android's screenshot
+  shortcut), so it lowered the volume and logind saw a power key press.
+  `powerbuttond` only follows the phone's own power key, so it never slept.
+- **Fix:** InputPlumber profile `11-gamesir-x2s.yaml` combines the gamepad and
+  Consumer Control interfaces into a virtual Xbox 360 pad. Its stick and trigger
+  map matches the SHANWAN one; the face buttons already use Xbox codes. The record
+  map turns Volume Down + Power into Quick Access, which the Xbox 360 target sends
+  as Guide, then A 160 ms later.
+  - A plain chord fired on the 5 ms press, so A was held for 0–9 ms. Steam then
+    sometimes saw Guide alone and opened the Steam menu.
+  - A delayed chord fires on release and holds Quick Access for 100 ms. In this
+    InputPlumber version a delayed chord only fires for presses it tracked, and
+    only chord mappings track presses, so a second chord that can never complete
+    (it also needs `KEY_F24`, which the device cannot send) tracks both keys.
+- **Result:** Five presses in a row opened or closed Quick Access. Volume and
+  power are no longer affected, and Steam reads the virtual pad instead of the
+  raw controller.
+
+### The controller-as-mouse pointer was invisible
+
+- **Issue:** In CS2's menus the stick moved an invisible pointer: menu items
+  highlighted, but nothing was drawn.
+- **Cause:** Steam sends controller-as-mouse motion to the game's Xwayland as
+  XTEST. Xwayland passes XTEST to the compositor only through libei, and the
+  port's Gamescope was built with `input_emulation` disabled. It logged
+  "Gamescope built without libei, XTEST will not be available!". The X pointer
+  moved, but Gamescope never saw motion, so it kept the cursor hidden
+  (`GAMESCOPE_CURSOR_VISIBLE_FEEDBACK` stayed 0).
+- **Fix:**
+  - The Gamescope build enables `input_emulation`. It is built against Fedora 44's
+    `libeis-devel` 1.5.0 and runs on the image's `libeis` 1.6.0 (same
+    `libeis.so.1` ABI). Gamescope now logs "Successfully initialized libei" and
+    exports `LIBEI_SOCKET`; Xwayland already links `libei`.
+  - Gamescope draws a game's cursor at its native size; CS2's is 24×24, about
+    1.3 mm on this 460 ppi panel. The gamescope-session package patch `0008` adds
+    `ARMADA_GAMESCOPE_CURSOR_SCALE_HEIGHT`, and the Xiaomi 14 profile sets 600:
+    the 1200 px landscape output gets a 72 px cursor. The houji image applies
+    the patch until the pinned Armada image ships it.
+- **Result:** The pointer showed while moving (feedback 1 in 117 samples) and the
+  owner judged its size good. The scaling alone, without libei, still left it
+  invisible.
+
 ## GPS
 
 - **Issue:** The stock modem rejected generic QMI LOC registration and first reported

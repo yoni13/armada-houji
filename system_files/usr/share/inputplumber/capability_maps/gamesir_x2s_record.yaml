@@ -1,0 +1,53 @@
+version: 2
+kind: CapabilityMap
+name: GameSir X2s record button
+id: gamesir_x2s_record
+# The record button reports Volume Down and Power in one HID report and releases
+# them about 5 ms later. Both keys are consumed, so the button neither changes the
+# volume nor reaches anything as a power key. Volume Up passes through unchanged.
+#
+# The Xbox 360 target turns Quick Access into Guide, then A 160 ms later, and
+# releases A 160 ms after Quick Access is released. A 5 ms pulse would leave A
+# down for about 5 ms (sometimes 0), and Steam then opens the Steam menu instead.
+# A delayed chord emits Quick Access when the button is released and releases it
+# 100 ms later, so A is held for 100 ms.
+mapping:
+  - name: Record as Quick Access
+    mapping_type:
+      evdev: delayed_chord
+    source_events:
+      - evdev:
+          event_type: KEY
+          event_code: KEY_VOLUMEDOWN
+          value_type: button
+      - evdev:
+          event_type: KEY
+          event_code: KEY_POWER
+          value_type: button
+    target_event:
+      gamepad:
+        button: QuickAccess
+  # InputPlumber only records presses for keys that belong to a chord mapping,
+  # and a delayed chord fires only for recorded presses. KEY_F24 cannot come from
+  # this device (its keys are Volume Down, Volume Up and Power), so this chord
+  # never completes; it only makes the two keys above tracked.
+  - name: Track record button keys
+    mapping_type:
+      evdev: chord
+    source_events:
+      - evdev:
+          event_type: KEY
+          event_code: KEY_VOLUMEDOWN
+          value_type: button
+      - evdev:
+          event_type: KEY
+          event_code: KEY_POWER
+          value_type: button
+      - evdev:
+          event_type: KEY
+          event_code: KEY_F24
+          value_type: button
+    target_event:
+      gamepad:
+        button: QuickAccess
+filtered_events: []

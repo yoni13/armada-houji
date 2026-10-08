@@ -25,6 +25,7 @@
   "libdecor-0.so.0",
   "libdisplay-info.so.3",
   "libdrm.so.2",
+  "libeis.so.1",
   "libevdev.so.2",
   "libexpat.so.1",
   "libffi.so.8",

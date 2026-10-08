@@ -1,0 +1,41 @@
+version: 2
+kind: CapabilityMap
+name: GameSir X2s stick and trigger axes
+id: gamesir_x2s_axes
+# Android HID layout: Z/RZ are a centred stick; GAS/BRAKE are triggers.
+mapping:
+  - name: Right stick
+    source_events:
+      - evdev:
+          event_type: ABS
+          event_code: ABS_Z
+          value_type: joystick_x
+      - evdev:
+          event_type: ABS
+          event_code: ABS_RZ
+          value_type: joystick_y
+    target_event:
+      gamepad:
+        axis:
+          name: RightStick
+  - name: Right trigger
+    source_events:
+      - evdev:
+          event_type: ABS
+          event_code: ABS_GAS
+          value_type: trigger
+    target_event:
+      gamepad:
+        trigger:
+          name: RightTrigger
+  - name: Left trigger
+    source_events:
+      - evdev:
+          event_type: ABS
+          event_code: ABS_BRAKE
+          value_type: trigger
+    target_event:
+      gamepad:
+        trigger:
+          name: LeftTrigger
+filtered_events: []

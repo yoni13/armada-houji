@@ -77,7 +77,8 @@ Results below are from the development handset.
 | Battery | Voltage, current, charge level, Steam time estimates and USB-PD. The battery is named `battery`, as elsewhere in Armada, so Steam's performance overlay (MangoHud) shows its level, power while discharging and time remaining. While discharging, the percentage never reads above the gauge's remaining charge, and while charging it reads at most 3 points above it, so plugging in the charger no longer jumps the figure up. A full battery reads 100%. |
 | Performance overlay | Steam's overlay levels show only readings this phone provides; per-component CPU and GPU power have no sensor here and are left out. The battery percentage matches Steam's: the port builds the overlay (`mangoapp`) with MangoHud patches `0007` and `0008` until the pinned Armada image includes them. With `0008` the overlay only redraws when the app draws, so it doesn't keep the screen busy while Steam is idle. |
 | USB device | Charging by default. File transfer (MTP) on demand through Armada's switch. USB 3 at 5 Gb/s in both cable orientations, USB 2 fallback. No USB shell or network gadget. |
-| USB host (OTG) | Wired gamepad and a Pixel webcam, including 5 Gb/s video. |
+| USB host (OTG) | Wired gamepad and a Pixel webcam, including 5 Gb/s video. A GameSir X2s Type-C clip-on controller works through an InputPlumber profile that turns its record button into Steam's Quick Access. |
+| Mouse pointer | Steam's controller-as-mouse pointer shows in games, scaled for the high-density panel (`ARMADA_GAMESCOPE_CURSOR_SCALE_HEIGHT=600`). |
 
 ### Partly working
 

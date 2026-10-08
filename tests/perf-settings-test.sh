@@ -352,6 +352,11 @@ check("device-env MANGMI profile",
       mangmi.get("ARMADA_SOC_CLASS") == "SM8250" and
       mangmi.get("ARMADA_GAMESCOPE_FAKE_OUTPUT_MM") == "120x90" and
       mangmi.get("ARMADA_IP_TARGETS") == "ds5")
+xiaomi = run_device_env("Xiaomi 14")
+check("device-env Xiaomi 14 scales the cursor",
+      xiaomi.get("ARMADA_GAMESCOPE_CURSOR_SCALE_HEIGHT") == "600")
+check("device-env cursor scale defaults off",
+      mangmi.get("ARMADA_GAMESCOPE_CURSOR_SCALE_HEIGHT") == "''")
 pocket_max = run_device_env("MANGMI Pocket Max")
 check("device-env MANGMI Pocket Max profile",
       pocket_max.get("ARMADA_DEVICE_ID") == "mangmi-pocket-max" and

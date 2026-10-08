@@ -24,3 +24,5 @@ to a commit, or `armada` if it is original; a URL source with no `notes` is verb
   source: armada
 - `patches/0010-armada-force-vulkan-realtime-option.patch`
   source: armada
+- `patches/0008-armada-cursor-scale-height.patch`
+  source: armada

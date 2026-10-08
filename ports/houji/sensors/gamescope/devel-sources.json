@@ -114,6 +114,11 @@
     "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libdrm-devel-2.4.131-1.fc44.aarch64.rpm",
     "sha256": "3a5464de4a2e911774e84428b70488d40ae1d4a982ec02f4ef32ee9ce8e07a5d"
   },
+  "libeis-devel": {
+    "filename": "libeis-devel-1.5.0-2.fc44.aarch64.rpm",
+    "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libeis-devel-1.5.0-2.fc44.aarch64.rpm",
+    "sha256": "0ff9442dfae5b37c7463c617cefabf4cea44fd0d44677b66660335ecff512b5e"
+  },
   "libevdev-devel": {
     "filename": "libevdev-devel-1.13.6-2.fc44.aarch64.rpm",
     "url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Everything/aarch64/os/Packages/l/libevdev-devel-1.13.6-2.fc44.aarch64.rpm",

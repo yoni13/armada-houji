@@ -1,0 +1,29 @@
+# GameSir X2s Type-C (USB, 3537:0105). Xbox button order (X = BTN_X, Y = BTN_Y)
+# on a generic Android HID layout: right stick on Z/RZ, triggers on GAS/BRAKE.
+# Its record button is a separate Consumer Control report of Volume Down + Power
+# (Android's screenshot shortcut); it is mapped to Steam's Quick Access.
+version: 1
+kind: CompositeDevice
+name: GameSir X2s Type-C
+matches: []
+single_source: false
+source_devices:
+  - group: gamepad
+    evdev:
+      name: GAMESIR GameSir-X2s Type-C
+      vendor_id: "3537"
+      product_id: "0105"
+      handler: event*
+    capability_map_id: gamesir_x2s_axes
+  - group: keyboard
+    evdev:
+      name: GAMESIR GameSir-X2s Type-C Consumer Control
+      vendor_id: "3537"
+      product_id: "0105"
+      handler: event*
+    capability_map_id: gamesir_x2s_record
+options:
+  auto_manage: true
+target_devices:
+  - xb360
+  - keyboard
