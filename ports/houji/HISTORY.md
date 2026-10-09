@@ -1236,18 +1236,29 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
 
 - **Request:** Home should open Quick Access and the record button should be the
   Steam button, on the X2s only.
-- **Finding:** the virtual pad showed Home arriving as `BTN_MODE` held for only
-  3 ms, however long it was pressed. Home is a pulse, like the record button, so
-  a plain Home to Quick Access mapping would hold A for about 3 ms. That is the
-  failure that sometimes opened the Steam menu instead.
-- **Fix:** the gamepad interface's map (renamed `gamesir_x2s_gamepad`, as it now
-  holds more than axes) turns `BTN_MODE` into Quick Access with the same delayed
-  chord and never-completing tracking chord as the record button. The record map
-  now emits Guide, held for 100 ms. Both mappings apply only to the X2s profile.
-- **Result:** in a capture of the virtual pad, four Home presses each gave Guide
-  for about 345 ms with A held 96–104 ms starting 160 ms in, which is the full
-  Quick Access sequence. Four record presses each gave a 100 ms Guide. The owner
-  confirmed Home opens Quick Access and record opens the Steam menu.
+- **Finding:** the X2s firmware sends Home and record only when they are
+  released, as a press and release about 5 ms apart, however long the button was
+  held. Raw HID captures during 2-second holds showed this, and the owner saw both
+  menus open only on letting go. Neither delay can be removed in software.
+- **First version:** on the Xbox 360 target, Home became Quick Access through the
+  record button's delayed chord, and record became Guide. Both menus felt slower.
+  After each button's release report, the virtual pad sent Guide within 1 ms for
+  record and within 10 ms for Home. But that target has no Quick Access button:
+  it sends Guide, then A 160 ms later. The swap had moved those 160 ms onto Home.
+  Holding Guide for 100 ms on record only delayed the menu, because Steam opens it
+  when Guide is released.
+- **Fix:** the X2s profile now targets `deck-uhid`, so Steam sees a Steam Deck
+  controller with real Steam and Quick Access buttons. That target holds a press
+  shorter than its 8 ms frame over to the next frame, so plain mappings suffice.
+  The gamepad interface's map, renamed `gamesir_x2s_gamepad` because it now holds
+  more than axes, maps `BTN_MODE` straight to Quick Access. The record map is a
+  plain chord to Guide.
+- **Result:** the owner found Quick Access quicker, the Steam menu on record, and
+  sticks, triggers, face buttons and D-pad working.
+- **Caveat:** Armada's controller-type setting applies to every InputPlumber
+  device. Its default here, the first of `ARMADA_IP_TARGETS`, is `deck-uhid`.
+  Choosing an Xbox type in Armada Control would put the X2s back on the Xbox 360
+  target, where a 5 ms Quick Access can open the Steam menu instead.
 
 ### The controller-as-mouse pointer was invisible
 

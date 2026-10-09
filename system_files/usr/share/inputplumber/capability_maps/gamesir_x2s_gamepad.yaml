@@ -38,34 +38,14 @@ mapping:
       gamepad:
         trigger:
           name: LeftTrigger
-  # Home reports BTN_MODE for about 3 ms however long it is held, so it opens Quick
-  # Access the way the record button used to: a delayed chord emits Quick Access when
-  # Home is released and holds it for 100 ms, long enough for the Xbox 360 target's
-  # Guide + A sequence (see gamesir_x2s_record).
+  # Home reports BTN_MODE for about 5 ms, sent when it is released. The Steam Deck
+  # target has a real Quick Access button and holds a press shorter than its 8 ms
+  # frame over to the next frame, so a direct mapping reaches Steam.
   - name: Home as Quick Access
-    mapping_type:
-      evdev: delayed_chord
     source_events:
       - evdev:
           event_type: KEY
           event_code: BTN_MODE
-          value_type: button
-    target_event:
-      gamepad:
-        button: QuickAccess
-  # Only chord mappings record presses, and a delayed chord fires only for recorded
-  # ones. The pad has no KEY_F24, so this chord never completes; it tracks Home.
-  - name: Track Home presses
-    mapping_type:
-      evdev: chord
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: BTN_MODE
-          value_type: button
-      - evdev:
-          event_type: KEY
-          event_code: KEY_F24
           value_type: button
     target_event:
       gamepad:

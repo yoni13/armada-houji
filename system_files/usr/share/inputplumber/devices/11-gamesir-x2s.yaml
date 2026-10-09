@@ -2,7 +2,9 @@
 # on a generic Android HID layout: right stick on Z/RZ, triggers on GAS/BRAKE.
 # Home and the record button are swapped from their labels: Home opens Steam's
 # Quick Access and the record button (a separate Consumer Control report of Volume
-# Down + Power, Android's screenshot shortcut) is the Steam (Guide) button.
+# Down + Power, Android's screenshot shortcut) is the Steam button. Both are sent
+# by the controller only on release. Steam sees a Steam Deck controller, whose real
+# Quick Access button opens at once; an Xbox 360 pad needs Guide, then A 160 ms later.
 version: 1
 kind: CompositeDevice
 name: GameSir X2s Type-C
@@ -26,5 +28,5 @@ source_devices:
 options:
   auto_manage: true
 target_devices:
-  - xb360
+  - deck-uhid
   - keyboard

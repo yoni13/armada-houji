@@ -6,33 +6,12 @@ id: gamesir_x2s_record
 # them about 5 ms later. Both keys are consumed, so the button neither changes the
 # volume nor reaches anything as a power key. Volume Up passes through unchanged.
 #
-# The button is the X2s's Steam (Guide) button; Home opens Quick Access instead
-# (see gamesir_x2s_gamepad). A 5 ms Guide pulse does open the Steam menu, but a
-# delayed chord emits Guide when the button is released and holds it for 100 ms,
-# so the press is never too short to register. It is the same mechanism Home uses
-# for Quick Access, where the Xbox 360 target sends Guide, then A 160 ms later, and
-# a short pulse would hold A for under 10 ms.
+# The button is the X2s's Steam button; Home opens Quick Access instead (see
+# gamesir_x2s_gamepad). A plain chord sends Guide for as long as the keys are down,
+# about 5 ms; the Steam Deck target holds it to its next 8 ms frame. Steam opens
+# its menu when the button is released, so holding it longer only delays the menu.
 mapping:
   - name: Record as Guide
-    mapping_type:
-      evdev: delayed_chord
-    source_events:
-      - evdev:
-          event_type: KEY
-          event_code: KEY_VOLUMEDOWN
-          value_type: button
-      - evdev:
-          event_type: KEY
-          event_code: KEY_POWER
-          value_type: button
-    target_event:
-      gamepad:
-        button: Guide
-  # InputPlumber only records presses for keys that belong to a chord mapping,
-  # and a delayed chord fires only for recorded presses. KEY_F24 cannot come from
-  # this device (its keys are Volume Down, Volume Up and Power), so this chord
-  # never completes; it only makes the two keys above tracked.
-  - name: Track record button keys
     mapping_type:
       evdev: chord
     source_events:
@@ -43,10 +22,6 @@ mapping:
       - evdev:
           event_type: KEY
           event_code: KEY_POWER
-          value_type: button
-      - evdev:
-          event_type: KEY
-          event_code: KEY_F24
           value_type: button
     target_event:
       gamepad:
