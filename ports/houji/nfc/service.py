@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import secrets
 import sys
 import tempfile
 import threading
@@ -16,6 +17,7 @@ from gi.repository import Gio, GLib
 
 import controller
 from protocol import validate
+from ese import ProtocolError, validate_apdus
 
 NAME = 'org.armada.Nfc'
 PATH = '/org/armada/Nfc'
@@ -28,6 +30,7 @@ XML = '''<node><interface name="org.armada.Nfc1">
   <method name="ScanAgain"/>
   <method name="StartEmulation"><arg type="s" direction="in"/><arg type="s" direction="in"/></method>
   <method name="StopEmulation"/>
+  <method name="TransceiveEse"><arg name="commands" type="aay" direction="in"/><arg name="responses" type="aay" direction="out"/></method>
 </interface></node>'''
 SETTINGS = Path('/var/lib/armada-nfc/settings.json')
 DEFAULTS = dict(text='Armada NFC test', serial='12:34:56:78', custom_serial=False,
@@ -82,6 +85,8 @@ class Service:
         self.emulation = False
         self.closing = False
         self.settings_error = False
+        self.seen_tags = set()
+        self.detection_session = secrets.token_hex(8)
         try:
             self.settings = load_settings()
         except (OSError, ValueError, KeyError, TypeError):
@@ -89,7 +94,8 @@ class Service:
             self.settings_error = True
         self.saved_settings = self.settings.copy()
         self.state = dict(mode='off', message='NFC is off', reads=0,
-                          powered=False, polling=False, tags=0, busy=False)
+                          powered=False, polling=False, tags=0, busy=False,
+                          detections=0, detection_session=self.detection_session)
         self.connection.register_object(PATH, Gio.DBusNodeInfo.new_for_xml(XML).interfaces[0],
                                         self.call, None, None)
         self.name_id = Gio.bus_own_name_on_connection(self.connection, NAME,
@@ -178,6 +184,10 @@ class Service:
                 self.stop.set()
             elif self.worker and self.worker.is_alive():
                 raise ValueError('NFC is busy. Wait for the current operation to finish.')
+            elif method == 'TransceiveEse':
+                apdus = validate_apdus(params.unpack()[0])
+                self.transceive_ese(apdus, invocation)
+                return
             elif method == 'StartEmulation':
                 text, serial = params.unpack()
                 validate(text, serial)
@@ -197,10 +207,12 @@ class Service:
                 enabled = params.unpack()[0]
                 self.settings.update(reader_enabled=enabled, emulation_enabled=False)
                 self.save()
+                self.seen_tags.clear()
                 self.launch(lambda: controller.reader(enabled), 'Updating NFC reader')
             elif method == 'ScanAgain':
                 self.settings.update(reader_enabled=True, emulation_enabled=False)
                 self.save()
+                self.seen_tags.clear()
                 self.launch(lambda: controller.reader(True, restart=True), 'Restarting scan')
             else:
                 raise ValueError('Unknown NFC operation.')
@@ -212,6 +224,30 @@ class Service:
             return
         invocation.return_value(GLib.Variant('()', ()))
 
+    def transceive_ese(self, apdus, invocation):
+        self.changed('ese', 'Exchanging with embedded secure element', None)
+
+        def run():
+            with self.hardware:
+                try:
+                    responses = controller.ese_exchange(apdus)
+                except Exception as error:
+                    # Never print APDUs, response data, or raw exception text.
+                    message = (str(error) if isinstance(error, ProtocolError) else
+                               'eSE exchange failed; NFC reader restoration was attempted.')
+                    with self.lock:
+                        self.state.update(mode='error', busy=False, message=message)
+                    GLib.idle_add(invocation.return_dbus_error, NAME + '.EseFailed', message)
+                else:
+                    with self.lock:
+                        self.state.update(mode='off', busy=False, message='eSE session complete')
+                    GLib.idle_add(invocation.return_value, GLib.Variant('(aay)', (responses,)))
+                finally:
+                    self.refresh()
+
+        self.worker = threading.Thread(target=run, name='nfc-ese', daemon=True)
+        self.worker.start()
+
     def changed(self, mode, message, reads):
         with self.lock:
             self.state.update(mode=mode, message=message, busy=True)
@@ -219,11 +255,17 @@ class Service:
                 self.state['reads'] = reads
 
     def refresh(self):
-        status = controller.reader_status()
+        status = controller.reader_status(include_paths=True)
+        paths = set(status.pop('tag_paths', []))
         with self.lock:
             # A status read may have begun just before a user queued a change.
             if self.state['busy']:
                 return
+            if self.settings['reader_enabled'] and not self.settings['emulation_enabled']:
+                self.state['detections'] += len(paths - self.seen_tags)
+                self.seen_tags = paths
+            else:
+                self.seen_tags.clear()
             self.state.update(status)
             if self.state['mode'] != 'error':
                 mode = 'reader' if status['powered'] else 'off'

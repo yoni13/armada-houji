@@ -34,6 +34,7 @@ fixed is in [HISTORY.md](HISTORY.md).
 - [Ambient light](#ambient-light)
 - [USB and privacy](#usb-and-privacy)
 - [NFC Manager](#nfc-manager)
+- [Embedded secure element APDUs](#embedded-secure-element-apdus)
 - [Houji Settings](#houji-settings)
 
 ## Before you start
@@ -732,6 +733,50 @@ sudo systemctl stop neard
 Debug packet logging is off. Do not publish tag identifiers or card contents from
 separately enabled NFC diagnostic tools.
 
+## Embedded secure element APDUs
+
+`houji-ese` exchanges ISO 7816 APDUs with the NXP SN220's embedded secure
+element through the native NFC service. It uses host `0xc0`, HCI APDU pipe
+`0x19`, over NCI connection 1. The APDU-capable NFCEE `0x10` serves internal
+NDEF tag storage and is a different endpoint.
+
+Run the read-only transport check:
+
+```sh
+sudo houji-ese --probe
+```
+
+On the tested handset, selecting the GlobalPlatform issuer security domain
+returned 108 bytes ending in `9000`; selecting an absent test application
+returned `6A82`. Both prove command/response transport. An application can
+still require its own authentication and access permissions.
+
+For other commands, give one hexadecimal APDU per line on standard input.
+The command sends up to 16 APDUs in one session, preserving application and
+logical-channel state within that batch. The default output shows only the
+response length and status word. To receive the full responses, use
+`--output FILE`; the command creates a new file with mode `0600` and refuses
+to overwrite an existing file. For example, select the issuer domain:
+
+```sh
+printf '%s\n' '00A4040008A000000151000000' | sudo houji-ese
+```
+
+The CLI calls `org.armada.Nfc1.TransceiveEse(aay) → aay` over the system bus.
+The service authorizes the caller through the existing NFC polkit policy and
+serializes controller access. Stop active tag emulation before exchanging
+APDUs. After an exchange or error the service restores the NFC driver and
+the reader's previous powered state, retaining the shared eSIM supply. It
+keeps the saved NFC settings and does not log APDUs or response contents.
+Use stdin rather than command-line arguments for private APDUs, and do not
+publish response files containing chip or application identifiers.
+
+The firmware maintains the APDU pipe. Creating it anew fails with HCI
+`ANY_E_NOK`; opening or closing it with generic HCI commands fails with
+`ANY_E_CMD_NOT_SUPPORTED`. The implementation reads its existing state and
+maximum APDU size, handles credits and HCP fragmentation, and uses that pipe
+directly. No kernel rebuild or Android runtime is required.
+
 ## Houji Settings
 
 **Houji Settings** is a Decky plugin, in Game Mode's Quick Access menu under the
@@ -747,8 +792,20 @@ not have:
   Switching SIMs restarts the modem.
 - **eSIM profiles** (with eSIM chosen as the data SIM): list, switch, rename and
   delete profiles, and download a new one by typing its activation code.
-- **NFC:** the reader on or off, as in NFC Manager. Turning it off also stops tag
-  emulation.
+- **NFC:** Off, Reader or Text-tag emulation, with live status, tag count and text
+  read-request count. **Configure emulated tag** edits the saved text (200 UTF-8
+  bytes maximum) and optional four-byte NFC-A serial. Save it for later or start
+  emulation from the editor. Stop emulation stays available while a reader is
+  connected, and Scan again restarts tag discovery. NFC Manager and the plugin
+  share these settings; emulation continues after closing Quick Access and after
+  reboot until stopped. The supported emulation is a read-only NFC Forum Type 4
+  text tag; setting a serial does not reproduce another card's applications or
+  authentication.
+  - In Reader mode, **Notify when a tag is found** controls Steam notifications
+    for new scans. It defaults to off and persists across reboots. When enabled,
+    the plugin watches even with Quick Access closed, counts each new tag object
+    once, and sends no tag serial or contents in the notification. A plugin or
+    service restart establishes a new baseline rather than replaying old scans.
 
 The plugin sends each request to `/run/houji-settings.sock`, which starts
 `/usr/libexec/armada/houji-settings` as root (`houji-settings.socket`). Decky
@@ -761,4 +818,6 @@ the plugin returns identifies the phone or its SIMs: eSIM profiles are referred
 to by keys that change at every boot, and no IMEI, ICCID, phone number or APN
 login is passed on. An activation code never goes through a Decky call; it is
 sent to the plugin over a one-time local connection and from there only to the
-cellular service, which gives it to `lpac` on standard input.
+cellular service, which gives it to `lpac` on standard input. The NFC editor uses
+the same private channel to load and save tag text and serials, keeping them out
+of Decky's RPC logs. Each single-use token applies only to its intended endpoint.

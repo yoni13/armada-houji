@@ -6,7 +6,8 @@ one JSON request on stdin and writes one JSON reply to stdout. Decky
 records every plugin call's arguments and result in Steam's on-disk JS log, so
 replies carry no subscriber identifiers: eSIM profiles are named by per-boot
 HMAC handles, and ModemManager and NetworkManager data is reduced to fixed
-fields. An eSIM activation code arrives on stdin and leaves only over D-Bus.
+fields. eSIM activation codes and NFC tag settings use the plugin's private
+loopback channel; the helper passes them through the root socket and D-Bus.
 """
 import hashlib
 import hmac
@@ -25,6 +26,7 @@ CHARGE_STATE = Path('/run/houji-charging/charge-limit.json')
 HANDLE_KEY = Path('/run/houji/settings-handle-key')
 SIM_SELECTION = Path('/etc/armada/cellular-sim')
 NFC_SETTINGS = Path('/var/lib/armada-nfc/settings.json')
+NFC_NOTIFICATIONS = Path('/etc/armada/houji-nfc-notifications')
 BATTERY = Path('/sys/class/power_supply/battery')
 ORIENTATIONS = ('normal', 'left', 'right', 'upsidedown')
 SIM_MODES = ('auto', 'physical1', 'physical2', 'esim')
@@ -146,8 +148,44 @@ def nfc_status(system):
         status = json.loads(system.dbus(NFC, 'GetStatus', start=False)[0])
     except Exception:
         pass
+    modes = ('off', 'reader', 'starting', 'emulating', 'stopping', 'error', 'ese')
+    def count(name):
+        value = status.get(name)
+        return value if type(value) is int and value >= 0 else 0
     return {'enabled': reader or emulating, 'emulating': emulating,
+            'desired_mode': 'emulation' if emulating else 'reader' if reader else 'off',
+            'mode': status.get('mode') if status.get('mode') in modes else 'unavailable',
+            'powered': status.get('powered') is True, 'polling': status.get('polling') is True,
+            'reads': count('reads'), 'tags': count('tags'),
+            'notify_on_scan': nfc_notifications_enabled(),
+            'detections': count('detections'),
+            'detection_session': text(status.get('detection_session'), 32),
             'busy': status.get('busy') is True, 'message': text(status.get('message'), 120)}
+
+
+def nfc_notifications_enabled():
+    try:
+        return NFC_NOTIFICATIONS.read_text().strip() == '1'
+    except OSError:
+        return False
+
+
+def set_nfc_notifications(system, request):
+    enabled = request.get('enabled')
+    if type(enabled) is not bool:
+        raise Failure('Invalid scan notification setting.')
+    write_atomic(NFC_NOTIFICATIONS, '1\n' if enabled else '0\n')
+    return nfc_status(system)
+
+
+def nfc_watch(system, request):
+    # Closed-panel monitoring avoids modem/NM reads and does not query NFC at
+    # all when the owner has disabled scan notifications.
+    if not nfc_notifications_enabled():
+        return {'enabled': False}
+    status = nfc_status(system)
+    return {'enabled': True, 'reader': status['desired_mode'] == 'reader',
+            'session': status['detection_session'], 'detections': status['detections']}
 
 
 def set_nfc(system, request):
@@ -160,6 +198,61 @@ def set_nfc(system, request):
         system.dbus(NFC, 'SetReader', '(b)', (enabled,), reply='()')
     except Exception:
         raise Failure('NFC is busy. Try again in a moment.') from None
+    return nfc_status(system)
+
+
+def nfc_tag_settings(system, request):
+    """Private-channel reply only: do not expose tag data through a Decky call."""
+    try:
+        saved = json.loads(system.dbus(NFC, 'GetSettings')[0])
+        return validate_nfc_tag(saved)
+    except Failure:
+        raise
+    except Exception:
+        raise Failure('Could not load the saved NFC tag.') from None
+
+
+def validate_nfc_tag(request):
+    value, serial, custom = request.get('text'), request.get('serial'), request.get('custom_serial')
+    if not isinstance(value, str) or not value.strip():
+        raise Failure('Enter some text for the tag.')
+    if '\x00' in value or len(value.encode('utf-8')) > 200:
+        raise Failure('Tag text must be at most 200 UTF-8 bytes and contain no NULs.')
+    if type(custom) is not bool or not isinstance(serial, str) or len(serial) > 32:
+        raise Failure('Invalid NFC tag settings.')
+    compact = re.sub(r'[: -]', '', serial)
+    if (custom or serial.strip()) and not re.fullmatch(r'[0-9a-fA-F]{8}', compact):
+        raise Failure('Enter a four-byte hexadecimal serial or choose automatic serial.')
+    return {'text': value, 'serial': serial, 'custom_serial': custom}
+
+
+def nfc_tag_update(system, request):
+    action = request.get('action')
+    if action not in ('save', 'start'):
+        raise Failure('Unknown NFC tag action.')
+    saved = validate_nfc_tag(request)
+    try:
+        if action == 'save':
+            system.dbus(NFC, 'SaveTag', '(ssb)',
+                        (saved['text'], saved['serial'], saved['custom_serial']), reply='()')
+        else:
+            system.dbus(NFC, 'StartEmulation', '(ss)',
+                        (saved['text'], saved['serial'] if saved['custom_serial'] else ''), reply='()')
+    except Exception:
+        raise Failure('NFC is busy or unavailable. Stop emulation before editing or restarting it.') from None
+    return nfc_status(system)
+
+
+def nfc_action(system, request):
+    action = request.get('action')
+    if action == 'start_saved':
+        return nfc_tag_update(system, dict(nfc_tag_settings(system, {}), action='start'))
+    if action not in ('stop', 'scan'):
+        raise Failure('Unknown NFC action.')
+    try:
+        system.dbus(NFC, 'StopEmulation' if action == 'stop' else 'ScanAgain', reply='()')
+    except Exception:
+        raise Failure('NFC is busy or unavailable. Try again in a moment.') from None
     return nfc_status(system)
 
 
@@ -456,6 +549,11 @@ OPERATIONS = {
     'rotation.set': lambda system, request: set_rotation(request),
     'charge_limit.set': lambda system, request: set_charge_limit(request),
     'nfc.set': set_nfc,
+    'nfc.action': nfc_action,
+    'nfc.notifications': set_nfc_notifications,
+    'nfc.watch': nfc_watch,
+    'nfc.tag.get': nfc_tag_settings,
+    'nfc.tag.update': nfc_tag_update,
     'cellular.enable': enable_cellular,
     'sim.select': select_sim,
     'esim.refresh': refresh_profiles,

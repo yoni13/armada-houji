@@ -22,6 +22,19 @@ export interface NfcStatus {
   emulating: boolean;
   busy: boolean;
   message: string | null;
+  desired_mode: "off" | "reader" | "emulation";
+  mode: "off" | "reader" | "starting" | "emulating" | "stopping" | "error" | "ese" | "unavailable";
+  powered: boolean;
+  polling: boolean;
+  reads: number;
+  tags: number;
+  notify_on_scan: boolean;
+}
+
+export interface NfcTag {
+  text: string;
+  serial: string;
+  custom_serial: boolean;
 }
 
 export interface EsimProfile {
@@ -73,6 +86,8 @@ export const getStatus = callable<[], Reply<Status>>("status");
 export const setRotation = callable<[mode: Orientation | "auto"], Reply<RotationStatus>>("set_rotation");
 export const setChargeLimit = callable<[limit: number | null], Reply<ChargingStatus>>("set_charge_limit");
 export const setNfc = callable<[enabled: boolean], Reply<NfcStatus>>("set_nfc");
+export const nfcAction = callable<[action: "stop" | "scan" | "start_saved"], Reply<NfcStatus>>("nfc_action");
+export const setNfcNotifications = callable<[enabled: boolean], Reply<NfcStatus>>("set_nfc_notifications");
 export const enableCellular = callable<[], Reply<CellularStatus>>("enable_cellular");
 export const selectSim = callable<[mode: SimMode], Reply<CellularStatus>>("select_sim");
 export const refreshProfiles = callable<[], Reply<CellularStatus>>("refresh_profiles");
@@ -84,6 +99,18 @@ export const setData = callable<[enabled: boolean], Reply<DataStatus>>("set_data
 export const setRoaming = callable<[allowed: boolean], Reply<DataStatus>>("set_roaming");
 
 const beginEsimDownload = callable<[], { url: string; token: string }>("begin_esim_download");
+const beginNfcRequest = callable<[], { url: string; token: string }>("begin_nfc_request");
+
+// Both saved contents and submitted text/serial bypass Decky's logged RPC.
+async function privateNfc<T>(request: Record<string, unknown>): Promise<Reply<T>> {
+  const { url, token } = await beginNfcRequest();
+  const response = await fetch(url, { method: "POST", body: JSON.stringify({ ...request, token }) });
+  return await response.json() as Reply<T>;
+}
+
+export const getNfcTag = () => privateNfc<NfcTag>({ action: "get" });
+export const updateNfcTag = (action: "save" | "start", tag: NfcTag) =>
+  privateNfc<NfcStatus>({ action, ...tag });
 
 // Decky logs every call's arguments in Steam's JS log, so the activation code
 // is posted straight to the plugin's loopback listener instead of passed to a call.

@@ -10,6 +10,7 @@ import time
 
 from protocol import TextTag, validate
 from transport import Transport
+from ese import Session, validate_apdus
 
 DRIVER = Path('/sys/bus/i2c/drivers/nxp-nci_i2c')
 IFACE = 'org.neard.Adapter'
@@ -45,17 +46,23 @@ def properties(path):
     return {key: item['data'] for key, item in value.items()}
 
 
-def reader_status():
+def reader_status(include_paths=False):
     try:
         path = adapter()
         props = properties(path)
         objects = bus('--auto-start=no', '--list', 'tree', 'org.neard').stdout.splitlines()
         tags = [x.strip() for x in objects if x.strip().startswith(path + '/tag')
                 and x.strip().count('/') == 4]
-        return {'powered': bool(props.get('Powered')), 'polling': bool(props.get('Polling')),
-                'tags': len(tags)}
+        result = {'powered': bool(props.get('Powered')), 'polling': bool(props.get('Polling')),
+                  'tags': len(tags)}
+        if include_paths:
+            result['tag_paths'] = tags
+        return result
     except (RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired):
-        return {'powered': False, 'polling': False, 'tags': 0}
+        result = {'powered': False, 'polling': False, 'tags': 0}
+        if include_paths:
+            result['tag_paths'] = []
+        return result
 
 
 def reader(enabled, restart=False):
@@ -111,6 +118,57 @@ def recover():
         reader(True)
         reader(False)
     command('modprobe', '-r', 'houji_nfc_power', check=False)
+
+
+def ese_exchange(apdus):
+    """One wired-eSE session, keeping the NFC reader and shared eSIM power intact."""
+    apdus = validate_apdus(apdus)
+    if b'xiaomi,houji\0' not in Path('/sys/firmware/devicetree/base/compatible').read_bytes():
+        raise RuntimeError('The wired eSE backend supports Xiaomi 14 (Houji).')
+    lock = os.open('/run/armada-nfc/controller.lock', os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return _ese_exchange(apdus)
+    finally:
+        os.close(lock)
+
+
+def _ese_exchange(apdus):
+    name = device_name()
+    previous_reader = reader_status()['powered']
+    held = unbound = False
+    transport = session = None
+    cleanup_errors = []
+    try:
+        reader(False)
+        command('systemctl', 'stop', 'neard')
+        command('modprobe', 'houji_nfc_power')
+        held = True
+        (DRIVER / 'unbind').write_text(name)
+        unbound = True
+        transport = Transport(name.split('-')[0])
+        session = Session(transport)
+        session.open()
+        return [session.exchange(apdu) for apdu in apdus]
+    finally:
+        # A protocol failure must not skip restoration of the kernel driver.
+        def attempt(operation):
+            try:
+                operation()
+            except Exception:
+                cleanup_errors.append(True)
+
+        if session:
+            attempt(session.close)
+        if transport:
+            attempt(transport.close)
+        if unbound:
+            attempt(lambda: (DRIVER / 'bind').write_text(name))
+        attempt(lambda: reader(previous_reader))
+        if held:
+            attempt(lambda: command('modprobe', '-r', 'houji_nfc_power'))
+        if cleanup_errors:
+            raise RuntimeError('eSE exchange ended, but NFC restoration could not be verified.')
 
 
 def exchange(transport, tag, stop, changed):

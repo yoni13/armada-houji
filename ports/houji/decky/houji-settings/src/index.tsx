@@ -1,9 +1,14 @@
-import { definePlugin } from "@decky/api";
+import { addEventListener, definePlugin, removeEventListener, toaster } from "@decky/api";
 import { Content } from "./Content";
 
-export default definePlugin(() => ({
+export default definePlugin(() => {
+  const scanListener = addEventListener("nfc_tag_found", () => {
+    toaster.toast({ title: "NFC tag found", body: "A new tag was detected. Open Houji Settings → NFC for scanner controls." });
+  });
+  return {
   name: "Houji Settings",
   content: <Content />,
+  onDismount() { removeEventListener("nfc_tag_found", scanListener); },
   icon: (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -20,4 +25,5 @@ export default definePlugin(() => ({
       <path d="M11 18h2" />
     </svg>
   ),
-}));
+  };
+});

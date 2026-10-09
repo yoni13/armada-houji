@@ -59,6 +59,7 @@ class FakeSystem:
         self.dbus_calls = []
         self.devices = devices
         self.cellular_active = cellular_active
+        self.nfc_tag = {'text': 'Private tag contents', 'serial': '12:34:56:78', 'custom_serial': False}
         self.state = {'busy': False, 'message': 'Done', 'selection': 'esim', 'profiles': [
             {'iccid': ICCID_A, 'profileName': 'Travel', 'profileNickname': None,
              'serviceProviderName': 'Test Carrier', 'profileState': 'enabled'},
@@ -86,6 +87,8 @@ class FakeSystem:
             return (json.dumps(self.state),)
         if method == 'GetStatus':
             return (json.dumps({'busy': False, 'message': 'NFC is off', 'mode': 'off', 'tags': 1}),)
+        if method == 'GetSettings':
+            return (json.dumps(self.nfc_tag),)
         return ()
 
 
@@ -97,7 +100,8 @@ class Helper(unittest.TestCase):
         for name, relative in (('ROTATION_LOCK', 'etc/houji-rotation-lock'), ('ORIENTATION_STATE', 'run/houji-orientation/current'),
                                ('CHARGE_LIMIT', 'etc/houji-charge-limit'), ('CHARGE_STATE', 'run/charge-limit.json'),
                                ('HANDLE_KEY', 'run/settings-handle-key'), ('SIM_SELECTION', 'etc/cellular-sim'),
-                               ('NFC_SETTINGS', 'nfc/settings.json'), ('BATTERY', 'battery')):
+                               ('NFC_SETTINGS', 'nfc/settings.json'), ('NFC_NOTIFICATIONS', 'etc/nfc-notify'),
+                               ('BATTERY', 'battery')):
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             patcher = mock.patch.object(helper, name, path)
@@ -128,7 +132,10 @@ class Helper(unittest.TestCase):
         self.assertEqual(cellular['data'], {'modem': True, 'ready': True, 'profile': True, 'enabled': True,
                                             'connected': True, 'roaming_allowed': True})
         self.assertEqual(reply['result']['nfc'], {'enabled': False, 'emulating': False, 'busy': False,
-                                                  'message': 'NFC is off'})
+                                                  'message': 'NFC is off', 'desired_mode': 'off',
+                                                  'mode': 'off', 'powered': False, 'polling': False,
+                                                  'reads': 0, 'tags': 1, 'notify_on_scan': False,
+                                                  'detections': 0, 'detection_session': None})
         # Reading NFC status must not start the service.
         self.assertIn(('org.armada.Nfc', 'GetStatus', ()), system.dbus_calls)
 
@@ -272,6 +279,65 @@ class Helper(unittest.TestCase):
         self.assertNotIn('private tag text', json.dumps(reply))
         self.assertNotIn('01:02:03:04', json.dumps(reply))
         self.assertFalse(self.call(system, op='nfc.set', enabled='yes')['ok'])
+
+    def test_nfc_editor_and_start_saved_use_service_without_logging_tag(self):
+        system = FakeSystem()
+        self.assertEqual(self.call(system, op='nfc.tag.get')['result'], system.nfc_tag)
+        for action, method in [('save', 'SaveTag'), ('start', 'StartEmulation')]:
+            reply = self.call(system, op='nfc.tag.update', action=action, **system.nfc_tag)
+            self.assertTrue(reply['ok'], reply)
+            expected = (system.nfc_tag['text'], system.nfc_tag['serial'], False) if action == 'save' else (system.nfc_tag['text'], '')
+            self.assertIn(('org.armada.Nfc', method, expected), system.dbus_calls)
+            self.assertNotIn(system.nfc_tag['text'], json.dumps(reply))
+            self.assertNotIn(system.nfc_tag['serial'], json.dumps(reply))
+        system.nfc_tag['custom_serial'] = True
+        self.assertTrue(self.call(system, op='nfc.action', action='start_saved')['ok'])
+        self.assertEqual(system.dbus_calls[-2], ('org.armada.Nfc', 'StartEmulation',
+            (system.nfc_tag['text'], system.nfc_tag['serial'])))
+        for action, method in [('stop', 'StopEmulation'), ('scan', 'ScanAgain')]:
+            self.assertTrue(self.call(system, op='nfc.action', action=action)['ok'])
+            self.assertIn(('org.armada.Nfc', method, ()), system.dbus_calls)
+
+    def test_nfc_validation_rejects_before_touching_hardware(self):
+        system = FakeSystem()
+        for fields in [dict(text=''), dict(text='é' * 101), dict(text='a\0b'),
+                       dict(serial='1234567890', custom_serial=True),
+                       dict(serial='', custom_serial=True), dict(custom_serial='yes'),
+                       dict(action='shell')]:
+            request = dict(system.nfc_tag, action='start')
+            request.update(fields)
+            reply = self.call(system, op='nfc.tag.update', **request)
+            self.assertFalse(reply['ok'], fields)
+            self.assertNotIn('Private tag contents', json.dumps(reply))
+        self.assertEqual(system.dbus_calls, [])
+        self.assertTrue(self.call(system, op='nfc.tag.update', action='save',
+            text='é' * 100, serial='', custom_serial=False)['ok'])
+
+    def test_active_emulation_status_distinguishes_requested_mode_from_hardware(self):
+        helper.NFC_SETTINGS.write_text(json.dumps({'reader_enabled': False, 'emulation_enabled': True,
+            'text': 'private text', 'serial': '12:34:56:78'}))
+        system = FakeSystem()
+        system.dbus = lambda *a, **kw: (json.dumps({'mode': 'emulating', 'busy': True, 'reads': 3,
+            'tags': 0, 'message': 'Text tag active', 'payload': 'private text'}),)
+        result = helper.nfc_status(system)
+        self.assertTrue(result['busy'])
+        self.assertEqual(result['mode'], 'emulating')
+        self.assertEqual(result['desired_mode'], 'emulation')
+        self.assertEqual(result['reads'], 3)
+        self.assertNotIn('private text', json.dumps(result))
+        self.assertNotIn('12:34:56:78', json.dumps(result))
+
+    def test_notification_preference_is_persistent_and_disabled_watch_is_idle(self):
+        system = FakeSystem()
+        self.assertEqual(self.call(system, op='nfc.watch')['result'], {'enabled': False})
+        self.assertEqual(system.commands, [])
+        self.assertEqual(system.dbus_calls, [])
+        self.assertTrue(self.call(system, op='nfc.notifications', enabled=True)['result']['notify_on_scan'])
+        self.assertEqual(helper.NFC_NOTIFICATIONS.read_text(), '1\n')
+        helper.NFC_SETTINGS.write_text('{"reader_enabled":true,"emulation_enabled":false}')
+        self.assertTrue(self.call(system, op='nfc.watch')['result']['reader'])
+        self.assertFalse(self.call(system, op='nfc.notifications', enabled=False)['result']['notify_on_scan'])
+        self.assertFalse(self.call(system, op='nfc.notifications', enabled='yes')['ok'])
 
     def test_bad_requests_and_unexpected_errors(self):
         system = FakeSystem()

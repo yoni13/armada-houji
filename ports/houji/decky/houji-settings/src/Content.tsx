@@ -18,7 +18,6 @@ import {
   selectSim,
   setChargeLimit,
   setData,
-  setNfc,
   setRoaming,
   setRotation,
   type CellularStatus,
@@ -28,6 +27,7 @@ import {
   type Status,
 } from "./backend";
 import { DownloadModal, ProfileModal } from "./modals";
+import { NfcPanel } from "./Nfc";
 
 const ORIENTATIONS: { data: Orientation; label: string }[] = [
   { data: "normal", label: "Portrait" },
@@ -314,17 +314,7 @@ export function Content() {
         </PanelSection>
       )}
 
-      <PanelSection title="NFC">
-        <PanelSectionRow>
-          <ToggleField
-            label="NFC"
-            description={nfc.emulating ? "Tag emulation is on; turning NFC off stops it." : (nfc.message ?? undefined)}
-            checked={nfc.enabled}
-            disabled={pending || nfc.busy}
-            onChange={(on) => report(setNfc(on))}
-          />
-        </PanelSectionRow>
-      </PanelSection>
+      <NfcPanel status={nfc} pending={pending} report={report} refresh={refresh} />
     </>
   );
 }

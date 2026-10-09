@@ -81,7 +81,7 @@ for name in ['etc/dbus-1/system.d/org.neard.conf',
              'usr/share/man/man8/neard.8.gz']:
     copy(users/'neard'/name,name)
 copy(users/'neard/usr/libexec/nfc/neard','usr/libexec/nfc/neard',0o755)
-for name in ['gui.py','service.py','controller.py','transport.py','protocol.py']:
+for name in ['gui.py','service.py','controller.py','transport.py','protocol.py','ese.py','ese-cli.py']:
     copy(PORT/'nfc'/name,'usr/libexec/armada/nfc-manager/'+name)
 copy(users/'bin/Xiaomi-14-tplg.bin','usr/lib/firmware/qcom/houji/Xiaomi-14-tplg.bin')
 for name,path in {'ssccli':'libssc-build/src/ssccli', 'hexagonrpcd':'hexagon-build/hexagonrpcd/hexagonrpcd',

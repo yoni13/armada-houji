@@ -3,6 +3,7 @@ import json
 import secrets
 import socket
 import time
+from contextlib import suppress
 
 # Decky runs under FEX, where /usr/bin/python3 resolves to the x86 rootfs Python
 # without the system's D-Bus bindings. houji-settings.socket starts the native
@@ -12,8 +13,22 @@ TOKEN_SECONDS = 120
 UNREACHABLE = {"ok": False, "error": "Houji Settings could not reach its system helper."}
 
 
+class ScanNotifications:
+    """Baseline once per enable/service session; notify only about new scans."""
+    def __init__(self):
+        self.previous = None
+
+    def update(self, state):
+        if not state.get('enabled') or not state.get('reader') or not state.get('session'):
+            self.previous = None
+            return False
+        current = (state['session'], state.get('detections', 0))
+        previous, self.previous = self.previous, current
+        return previous is not None and previous[0] == current[0] and current[1] > previous[1]
+
+
 def helper(request):
-    # The request can hold an activation code: it goes over the socket, never
+    # Requests can hold activation codes or NFC tag contents: use the socket, never
     # into arguments, and neither it nor a failure's details are logged here.
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -46,12 +61,16 @@ def respond(status, body):
 class Plugin:
     async def _main(self):
         self.tokens = {}
-        # Decky logs every call's arguments in Steam's JS log, so an activation
-        # code reaches the backend over this loopback listener instead.
+        # Decky logs RPC arguments and results. Private NFC settings and eSIM
+        # codes travel through this listener in both directions instead.
         self.server = await asyncio.start_server(self._receive_code, "127.0.0.1", 0)
         self.port = self.server.sockets[0].getsockname()[1]
+        self.scan_task = asyncio.create_task(self._watch_scans())
 
     async def _unload(self):
+        self.scan_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await self.scan_task
         self.server.close()
         await self.server.wait_closed()
 
@@ -69,6 +88,25 @@ class Plugin:
 
     async def set_nfc(self, enabled):
         return await self._helper("nfc.set", enabled=enabled)
+
+    async def nfc_action(self, action):
+        return await self._helper("nfc.action", action=action)
+
+    async def set_nfc_notifications(self, enabled):
+        return await self._helper("nfc.notifications", enabled=enabled)
+
+    async def _watch_scans(self):
+        detector = ScanNotifications()
+        while True:
+            await asyncio.sleep(2)
+            try:
+                reply = await self._helper('nfc.watch')
+                if reply.get('ok') and detector.update(reply.get('result', {})):
+                    import decky
+                    await decky.emit('nfc_tag_found')
+            except Exception:
+                # Do not log private controller errors. Next poll retries.
+                pass
 
     async def enable_cellular(self):
         return await self._helper("cellular.enable")
@@ -89,11 +127,17 @@ class Plugin:
         return await self._helper("roaming.set", allowed=allowed)
 
     async def begin_esim_download(self):
+        return self._grant("/esim")
+
+    async def begin_nfc_request(self):
+        return self._grant("/nfc")
+
+    def _grant(self, path):
         now = time.monotonic()
-        self.tokens = {token: deadline for token, deadline in self.tokens.items() if deadline > now}
+        self.tokens = {token: grant for token, grant in self.tokens.items() if grant[0] > now}
         token = secrets.token_urlsafe(24)
-        self.tokens[token] = now + TOKEN_SECONDS
-        return {"url": f"http://127.0.0.1:{self.port}/esim", "token": token}
+        self.tokens[token] = (now + TOKEN_SECONDS, path)
+        return {"url": f"http://127.0.0.1:{self.port}{path}", "token": token}
 
     async def _receive_code(self, reader, writer):
         status, body = 400, {"ok": False, "error": "Invalid request."}
@@ -105,14 +149,20 @@ class Plugin:
                        for key, _, value in (line.partition(":") for line in lines[1:] if line)}
             if method == "OPTIONS":
                 status, body = 204, None
-            elif method == "POST" and path == "/esim":
+            elif method == "POST" and path in ("/esim", "/nfc"):
                 length = int(headers.get("content-length", "0"))
                 if 0 < length <= 8192:
                     data = json.loads(await asyncio.wait_for(reader.readexactly(length), 10))
                     token = data.get("token") if isinstance(data, dict) else None
-                    deadline = self.tokens.pop(token, 0) if isinstance(token, str) else 0
-                    if deadline > time.monotonic():
-                        status, body = 200, await self._helper("esim.download", code=data.get("code"))
+                    deadline, allowed_path = self.tokens.pop(token, (0, None)) if isinstance(token, str) else (0, None)
+                    if deadline > time.monotonic() and allowed_path == path:
+                        if path == "/esim":
+                            status, body = 200, await self._helper("esim.download", code=data.get("code"))
+                        elif data.get("action") == "get":
+                            status, body = 200, await self._helper("nfc.tag.get")
+                        elif data.get("action") in ("save", "start"):
+                            status, body = 200, await self._helper("nfc.tag.update", action=data["action"],
+                                text=data.get("text"), serial=data.get("serial"), custom_serial=data.get("custom_serial"))
                     else:
                         status, body = 403, {"ok": False, "error": "The request expired. Try again."}
         except Exception:

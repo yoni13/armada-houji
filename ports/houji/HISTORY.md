@@ -1475,6 +1475,47 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   payloads or card data. An unsupported activation now names its RF
   interface, protocol, technology and mode, payload size and credits.
 
+### Wired eSE APDUs from Linux (2026-10-09)
+
+- **Request:** exchange APDUs with the NXP embedded secure element under Linux.
+- **Transport:** the stock houji wiring exposes the SN220 over I2C, without a
+  separate eSE SPI node. Xiaomi's stock vendor diagnostic scripts describe its
+  wired HCI path: NCI static connection 1, eSE host `0xc0`, APDU gate `0x30`.
+  NFCEE discovery returned `0x80`, `0xc0` and `0x10`. The last advertises an APDU
+  interface but serves internal NDEF storage, not the eSE.
+- **Bring-up:** CORE_RESET (keep configuration), NCI 2.0 CORE_INIT, NFCEE
+  discovery, HCI admin open, host whitelist check, eSE power/link-on and mode
+  enable brought host `0xc0` onto the HCI host list. Creating an APDU pipe then
+  failed with HCI status `03` (`ANY_E_NOK`); opening stock pipe `0x19` failed
+  with `07` (`ANY_E_CMD_NOT_SUPPORTED`). NXP's Android HCI source reads config
+  parameters `A023`/`A022` to find firmware-maintained APDU/connectivity pipes.
+  They reported `01`/`02` on this phone. Using `0x19` directly, after querying
+  its maximum command size (`0x8000`), produced a valid SELECT response.
+- **Implementation:** `ese.py` handles NCI credits, HCP fragmentation and
+  bounded replies/timeouts. It acknowledges incoming HCI connectivity commands
+  and recognizes WTX/ATR events. It leaves firmware-owned pipes intact, releases
+  forced link activity after use, retains eSE/eUICC power, and resets NCI with
+  configuration kept. `controller.py` holds the supply while unbinding the
+  reader driver, then restores the driver and previous reader state in cleanup.
+- **API:** the existing polkit-protected NFC service now has
+  `TransceiveEse(aay) → aay`, serializing a batch with its other operations.
+  `houji-ese` accepts hexadecimal commands on stdin; its default output contains
+  only lengths and status words. `--output` creates an owner-only response file.
+  APDUs and response contents do not enter command arguments, service messages
+  or journal logs. A running tag-emulation session returns busy.
+- **Verified:** the installed service/CLI returned 108 bytes and `9000` for
+  SELECT of the GlobalPlatform issuer security domain, and two bytes `6A82`
+  for an absent private-use test AID, on repeated sessions. A read-only 260-byte
+  SELECT with an overlong AID crossed the HCP fragmentation boundary and got
+  `6A82`. Stdin input and private response-file output worked. NFC settings
+  stayed byte-identical, the reader driver rebound, the temporary supply module
+  unloaded, and the eSIM remained registered on LTE. Tests cover both packet
+  orderings, fragmentation, errors, bounded waits, and cleanup failures.
+- **Scope:** this provides wired transport to installed eSE applications.
+  Application-specific keys, access permissions and applet provisioning remain
+  outside this change. Incoming long-response fragmentation has a protocol test;
+  the tested live responses fit in one packet.
+
 ## Session switching
 
 - **Issue:** Choosing Game Mode in Plasma returned to Plasma.
@@ -1567,6 +1608,34 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   plugin, and the mobile data and roaming switches. Slot 1 reported `sim-missing`
   at the time, and the SIM selection was left unchanged. The charge limit has
   not been tested over a long sleep or with wireless charging.
+
+### NFC controls in Game Mode (2026-10-09)
+
+- **Request:** expose NFC emulation and scanning controls in Houji Settings.
+- **Controls:** replaced the single NFC toggle with Off / Reader / Text-tag
+  emulation, an editor for saved text and automatic/custom four-byte serial,
+  Save / Save and start, Scan again, Stop and Retry emulation, live status,
+  detected-tag count and text read-request count. The editor calls the same
+  NFC Manager service and shares its persistent settings. The owner verified
+  the controls and reading the emulated tag from another device.
+- **Busy state:** the service marks the emulator busy for its entire listening
+  session. Stop and switching back to Reader remain available in that state;
+  edits and competing eSE/reader operations wait for it to stop.
+- **Privacy:** Decky logs RPC arguments and replies. Saved tag text and serials
+  therefore travel through the private loopback endpoint in both directions,
+  using single-use, endpoint-bound tokens. The general status reply contains
+  modes and counters only. A Steam-context check loaded and saved the tag
+  without changing it or returning its contents through the status RPC.
+- **Scan notifications:** the owner requested a Reader-mode toggle for a toast
+  on each new detection. It defaults off and persists in
+  `/etc/armada/houji-nfc-notifications`. While enabled, the plugin monitors NFC
+  outside the panel lifecycle and emits a payload-free event to the frontend.
+  The native service counts arrivals of neard tag objects, keeping object paths
+  private and avoiding duplicate notifications during repeated polls. Enable,
+  reader-mode changes and service restarts establish a fresh baseline. Disabled
+  monitoring reads only the preference file and does not query the modem or NFC.
+  The owner verified one notification with the toggle enabled and none with it
+  disabled, using Scan again between detections.
 
 ## Making the build reproducible
 
