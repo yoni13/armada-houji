@@ -134,6 +134,45 @@ and build and install steps are in [README.md](README.md).
   with forced composition rotation for the portrait panel. See also
   [Session switching](#session-switching).
 
+### The clock started in 1970 and the Decky store crashed (2026-10-09)
+
+- **Report:** the Decky store kept crashing.
+- **Cause:** opening it imports a frontend chunk from Decky Loader's local web
+  server. Steam's JS log showed `Failed to fetch dynamically imported module:
+  http://localhost:1337/frontend/chunk-B1zfxE9I.js`, and Decky's error boundary
+  then showed its crash screen. The server answered 404. Decky Loader is a
+  PyInstaller one-file program that unpacks its frontend into `/tmp/_MEI*` once
+  at start. Its archive held 18 chunks; only 11 files were left on disk. On every
+  boot the `rtc-pm8xxx` driver registered at about 3.7 s, and the kernel copied
+  the PMIC RTC into the system clock: `1970-01-05`. Linux cannot set that RTC.
+  Decky started at 8 s, still in 1970, so everything it unpacked was dated 1970.
+  chrony corrected the clock at 12 s, once Wi-Fi was up. Fifteen minutes after
+  boot, `systemd-tmpfiles-clean` applied `q /tmp ... 10d` and removed every one
+  of those files that had not been read since the clock jump. That included the
+  store's chunks, which load only when the store opens.
+- **Fix:**
+  - Armada's `armada-decky.conf` adds `x /tmp/_MEI*`, so `/tmp` ageing never
+    touches a PyInstaller program's unpacked files. The houji image stages it
+    until the pinned image ships it. This also covers Armada devices with a
+    working RTC, after 10 days of uptime.
+  - The phone's `chronyd` now starts with `-s` and after `dev-rtc0.device`; a
+    udev rule tags `rtc0` for systemd so that ordering is possible. chrony reads
+    the RTC, logs `RTC time before last driftfile modification (ignored)` and
+    steps the clock to the drift file's time. chrony updates that file about
+    hourly, so early services start within about an hour of the real time
+    instead of in 1970.
+- **Status:** restarting Decky Loader re-unpacked all 35 files, and both missing
+  chunks loaded. Both rules were installed live; a `chronyd` restart took the new
+  path, ignored the RTC and left the clock correct.
+- **Verified after a reboot:** the kernel still set 1970 at 3.7 s. `chronyd`
+  started at 4.8 s, after `rtc0`, with no added delay, and logged `System time
+  restored from driftfile`. chrony also writes that file when it stops, so the
+  restored time was only the reboot's length behind. Decky started at 9.3 s
+  with the correct date, and NTP then stepped the clock by 16.75 s instead of
+  56 years. All 35 Decky files were dated today. A manual
+  `systemd-tmpfiles --clean` removed none of them, and the store chunk loaded.
+  No units failed.
+
 ## Display and colour
 
 ### Static and a pink tint

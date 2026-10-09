@@ -59,6 +59,8 @@ target('etc/NetworkManager/ignore-sleep').unlink(missing_ok=True)
 for pattern in ('*shanwan*','*gamesir*'):
     for src in (REPO/'system_files/usr/share/inputplumber').rglob(pattern):
         if src.is_file():copy(src,str(src.relative_to(REPO/'system_files')))
+# Keeps Decky's unpacked frontend out of /tmp ageing until the pinned image ships it.
+copy(REPO/'system_files/usr/lib/tmpfiles.d/armada-decky.conf','usr/lib/tmpfiles.d/armada-decky.conf')
 # Base kernels cannot load modules built for this kernel release.
 stage_modules(work,release,target('usr/lib/modules'))
 for name in ['houji-stock-core','houji-stock-auth']:

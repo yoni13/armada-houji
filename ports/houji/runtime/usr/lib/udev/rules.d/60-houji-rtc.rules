@@ -1,0 +1,2 @@
+# Lets chronyd order itself after the kernel has copied the RTC into the clock.
+SUBSYSTEM=="rtc", KERNEL=="rtc0", TAG+="systemd"
