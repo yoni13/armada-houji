@@ -49,6 +49,11 @@ DARK_WINDOW = 20.0         # ... inside this many seconds means a wake loop
 # pause per wake did not help, so service watchdogs are paused for the loop
 # and restored once services have run again after the wake.
 WATCHDOG_RESTORE_DELAY = 5
+# Every reset in native sleep so far (five by 2026-10-09) came as the system went
+# back to sleep milliseconds after a sensor-DSP dark wake: all devices suspended,
+# then the SoC reset from outside Linux. Give the DSP and its power votes a moment
+# to settle before suspending again. Userspace stays frozen meanwhile.
+DARK_SETTLE = 0.3
 # Wakeup sources that fire without anyone touching the phone. The sensor DSP
 # is the one we are hiding. Charger and RTC bookkeeping is soft: it is
 # recorded but does not end a sleep. Anything else (power key, touch, USB
@@ -302,6 +307,7 @@ def sleep_until_real_wake(platform):
                 return 'too many dark wakes in a row', dark
             log('dark wake %d after %.0f s: %s served; sleeping again'
                 % (dark, slept, detail))
+            platform.sleep(DARK_SETTLE)
             continue
         if kind == 'unknown' and slept < ABORT_SECONDS and aborts < MAX_ABORTS:
             aborts += 1

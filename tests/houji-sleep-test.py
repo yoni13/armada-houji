@@ -186,6 +186,17 @@ class SleepFlowTests(unittest.TestCase):
         self.assertEqual(phone.calls.index('hooks post'), len(phone.calls) - 3)
         self.assertEqual(phone.calls[-4], 'shield')
 
+    def test_dark_wake_settles_before_suspending_again(self):
+        phone = Fake([dsp(), dsp(), {'irq': '21'}])
+        pauses = []
+        real_sleep = phone.sleep
+        phone.sleep = lambda seconds: (pauses.append(seconds), real_sleep(seconds))
+        self.run_sleep(phone)
+        self.assertEqual(phone.writes, 3)
+        # One settle per dark wake, none before the first suspend or after the real wake.
+        self.assertEqual(pauses, [sleep.DARK_SETTLE, sleep.DARK_SETTLE])
+        self.assertGreater(sleep.DARK_SETTLE, 0)
+
     def test_armed_rtc_alarm_ends_a_dsp_dark_wake(self):
         phone = Fake([dsp()])
         phone.rtc_alarm = lambda: 1234

@@ -503,6 +503,25 @@ for every DSP request.
     resume_early 585 ms and resume 255 ms. The WCN7850 resume completes before
     the next suspend begins, which weakens the half-booted-firmware lead above.
   - To remove: delete both files and reboot.
+- **Fourth occurrence (2026-10-09 12:16), captured with the diagnostics:** on
+  battery, the phone served a dark wake after 1 s asleep and began to sleep again
+  2.5 ms later. Every device then suspended successfully. The console log's last
+  line is `simple-pm-bus soc@0: PM: simple_pm_bus_suspend returned 0`, the final
+  device callback before the SoC enters s2idle. In a successful cycle the next
+  line is `simple_pm_bus_resume`. There was no panic record, and the PMIC logged
+  a PS_HOLD warm reset. So no Linux device driver hung. The reset came while the
+  SoC was in, or entering, its idle state, outside Linux: firmware, the
+  hypervisor or the power controller. Linux never got far enough to log a resume.
+- **Common point:** all five resets in native sleep came as the system went back
+  to sleep milliseconds (2.5–3 ms) after a sensor-DSP dark wake. Some came after
+  a dark wake that followed only 1–2 s of sleep. The root cause is still unknown.
+- **Mitigation (2026-10-09):** `houji-sleep` waits `DARK_SETTLE` (0.3 s, chosen by
+  the owner over 1 s) after each dark wake before suspending again. Userspace
+  stays frozen and the display off. On the phone, three dark wakes in a 10-minute
+  sleep each re-entered sleep 0.31–0.33 s after resuming, and the phone woke
+  normally. Whether the resets stop needs longer use. The cost is 0.3 s awake per
+  dark wake, on top of about 1.6 s per round trip. A USB-PD charger keeps the
+  phone in light sleep, where this loop does not run.
 - **Conclusion:** intermittent native sleep/wake reset remains unresolved.
   Re-suspending after a sensor-DSP dark wake is a lead, not a proven cause.
   No speculative kernel or sleep-policy fix was applied.
