@@ -179,12 +179,21 @@ arch_timer: &{/timer} {
 		reg = <0 0x9b09c000 0 0x4000>;
 		no-map;
 	};
-	ramoops@a7000000 {
-		compatible = "ramoops";
+	/*
+	 * The stock ramoops range is UEFI_FD in xbl_config's memory map: UEFI is
+	 * loaded over it on every boot, warm resets included, so nothing logged
+	 * there survives. Keep it reserved and log to the gap that map leaves
+	 * between PIL_Reserved (ends 0xa2b80000) and Display_Demura (0xa3600000).
+	 */
+	uefi-fd@a7000000 {
 		reg = <0 0xa7000000 0 0x400000>;
+	};
+	ramoops@a2b80000 {
+		compatible = "ramoops";
+		reg = <0 0xa2b80000 0 0x400000>;
 		console-size = <0x200000>;
-		pmsg-size = <0x200000>;
-		mem-type = <2>;
+		pmsg-size = <0x80000>;
+		record-size = <0x40000>;
 	};
 };
 

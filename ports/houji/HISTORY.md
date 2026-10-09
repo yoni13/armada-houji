@@ -406,6 +406,58 @@ for every DSP request.
   Raw evidence is retained root-only on the handset; diagnostic logging and
   the temporary alarm/hook were restored/removed after the tests.
 
+### Crash logs did not survive a reset (2026-10-08)
+
+- **Problem:** pstore was empty after every reset, including the wake resets
+  above, so none of them left a kernel log.
+- **Cause:** the ramoops range copied from the stock tree, 4 MiB at
+  `0xa7000000`, is `UEFI_FD` in the memory map in `xbl_config`. The `uefi`
+  partition is an ELF whose only load segment is `0xa7000000`, `0x2cd000`
+  bytes, and the high-entropy data found in the range matched that partition
+  byte for byte. UEFI is loaded there on every boot, warm resets included. A
+  pattern written to DRAM there before a warm reset was gone afterwards, while
+  the untouched blocks beyond the UEFI image were unchanged.
+- **Fix:** the device tree keeps `0xa7000000` reserved and moves ramoops to the
+  gap the memory map leaves between `PIL_Reserved` (ends `0xa2b80000`) and
+  `Display_Demura` (`0xa3600000`): 4 MiB at `0xa2b80000`, write-combined, with
+  2 MiB console, 512 KiB pmsg and 256 KiB oops/panic records. After a warm reset
+  `systemd-pstore` archived the previous boot's console log and pmsg, both with
+  their markers. A cold reset (a normal reboot, `fastboot reboot`) power-cycles
+  DRAM and keeps nothing; the PMIC PON log records it as `HARD_RESET`. The wake
+  resets were PS_HOLD warm resets, so the next one should leave its console log
+  in `/var/lib/systemd/pstore`.
+- **Panics never rebooted:** `reboot=panic_warm` was added so a panic reboot
+  keeps the log, but a test panic (`sysrq-c`) froze the phone instead. Its
+  console log, recovered after a Power + Volume Down warm reset, showed the
+  ath12k panic notifier sleeping: `ath12k_pci_panic_handler` resets the
+  WCN7850 through register helpers that first call `mhi_device_get_sync()`,
+  which waits for an MHI state change that cannot happen once `panic()` has
+  stopped the other CPUs. `panic()` therefore never reached `kmsg_dump()` or the
+  reboot. Mainline has the same code. Patch 0031 clears
+  `ATH12K_PCI_FLAG_INIT_DONE` before that reset, as power down already does, so
+  the accesses skip the wake.
+- **Verified (2026-10-09):** flashed as a kernel-only update,
+  `7.2.6-armada-houji-kcap3`, with all three changes. All 85 modules loaded
+  with no BTF errors. A test panic printed `Rebooting in 10 seconds..` 63 ms after
+  the panic notifiers started, with no sleep warning, and the phone came back by
+  itself. The PMIC logged a PS_HOLD warm reset. `systemd-pstore` archived both
+  the panic record (`dmesg-ramoops-0`) and the console log, each with the test
+  marker.
+- **Do not rebuild only the Image:** a first attempt rebuilt just the `Image`
+  under the old release name. That changed the vmlinux BTF, and this config
+  rejects modules whose BTF does not match (`CONFIG_MODULE_ALLOW_BTF_MISMATCH`
+  is unset), so no module loaded, `qcom_battmgr` included. Kernel changes need a
+  kernel-only update under a new release name.
+- **Reaching fastboot:** `systemctl reboot --reboot-argument=bootloader` alone
+  reached fastboot once in three tries; it otherwise booted Linux or took
+  several minutes. Holding Volume Down while it restarts reached fastboot in
+  8 s.
+- **Recovering a frozen phone without losing the log:** hold Power + Volume
+  Down until the screen goes black, then release both so it boots Linux. That
+  reset is warm. From fastboot, `fastboot reboot` is a cold reset and loses the
+  log. Logs are kept root-only in `/var/lib/houji-modem/crash-20261009/` on the
+  handset.
+
 ### Quiet resume
 
 - **Issue:** Every DSP wake thawed the desktop and turned the display on.

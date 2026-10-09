@@ -1,0 +1,33 @@
+Subject: [PATCH] wifi: ath12k: reset the device on panic without waking MHI
+
+The panic notifier resets the device with the same register helpers as
+normal operation. While ATH12K_PCI_FLAG_INIT_DONE is set, every access
+beyond ACCESS_ALWAYS_OFF first calls the WCN7850 wakeup op, which is
+mhi_device_get_sync(). That sleeps until the MHI state machine reports M0,
+and the state machine runs in interrupts and workers that cannot run once
+panic() has stopped the other CPUs. The panicking task sleeps in the
+notifier, so panic() never reaches kmsg_dump() or the panic reboot and the
+phone stays frozen until the buttons reset it.
+
+Clear INIT_DONE before the reset, as ath12k_pci_power_down() does before
+the same sw_reset. The accesses then skip both the wakeup and the matching
+release, and the reset becomes a best effort that cannot block.
+
+--- a/drivers/net/wireless/ath/ath12k/pci.c
++++ b/drivers/net/wireless/ath/ath12k/pci.c
+@@ -1475,7 +1475,15 @@
+ 
+ static int ath12k_pci_panic_handler(struct ath12k_base *ab)
+ {
++	struct ath12k_pci *ab_pci = ath12k_pci_priv(ab);
++
++	/* The MHI wakeup used by register access sleeps until the device
++	 * reaches M0, which cannot happen once panic() has stopped the
++	 * other CPUs. Reset without it, as power down does.
++	 */
++	clear_bit(ATH12K_PCI_FLAG_INIT_DONE, &ab_pci->flags);
++
+ 	ath12k_pci_sw_reset(ab, false);
+ 
+ 	return NOTIFY_OK;
+ }

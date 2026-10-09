@@ -79,8 +79,10 @@ def pack(work, stock_dir):
         raise ValueError('stock archive has no SM8650 reference DTB')
     mkbootimg = PORT.parents[1] / 'build_files/vendor/mkbootimg/mkbootimg.py'
     vendor = report['images']['vendor_boot.img']
+    # A cold reset power-cycles DRAM; a panic must reboot warm to keep ramoops.
     cmdline = ('rdinit=/init console=tty0 consoleblank=0 fbcon=font:TER16x32 loglevel=4 '
-               'clk_ignore_unused pd_ignore_unused regulator_ignore_unused panic=10')
+               'clk_ignore_unused pd_ignore_unused regulator_ignore_unused panic=10 '
+               'reboot=panic_warm')
 
     def run(*args):
         subprocess.run([sys.executable, str(mkbootimg), '--header_version', '4',
