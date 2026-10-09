@@ -1,0 +1,63 @@
+#!/usr/bin/python3
+"""Give archived crash records names the next crash cannot overwrite.
+
+systemd-pstore moves each record from /sys/fs/pstore into /var/lib/systemd/pstore
+under its pstore name, and a console record is always console-ramoops-0, so every
+archived crash log replaced the one before. Run after systemd-pstore, this prefixes
+new records with the time the previous boot's journal ends (when it crashed) and
+that boot's ID. The records stay files in the same directory.
+"""
+import json
+from pathlib import Path
+import re
+import subprocess
+import time
+
+ARCHIVE = Path('/var/lib/systemd/pstore')
+KEEP = 30
+STAMPED = re.compile(r'\d{4}-\d\d-\d\dT\d\d-\d\d-\d\dZ-')
+
+
+def previous_boot(run=subprocess.run):
+    """(boot ID prefix, last journal entry in µs) of the boot before this one."""
+    try:
+        boots = json.loads(run(['journalctl', '--list-boots', '-o', 'json', '--no-pager'],
+                               capture_output=True, text=True, timeout=30).stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if not isinstance(boots, list) or len(boots) < 2 or not isinstance(boots[-2], dict):
+        return None
+    boot_id = boots[-2].get('boot_id')
+    return (boot_id[:12] if isinstance(boot_id, str) and re.fullmatch(r'[0-9a-f]{32}', boot_id) else None,
+            boots[-2].get('last_entry'))
+
+
+def prefix(info, now):
+    boot, last = info or (None, None)
+    seconds = last / 1e6 if isinstance(last, int) and last > 0 else now
+    return time.strftime('%Y-%m-%dT%H-%M-%SZ', time.gmtime(seconds)) + '-' + (boot or 'unknown') + '-'
+
+
+def archive(directory=ARCHIVE, info=None, now=None, keep=KEEP):
+    loose = sorted(p for p in directory.iterdir() if p.is_file() and not STAMPED.match(p.name))
+    if loose:
+        stem = prefix(info, time.time() if now is None else now)
+        for record in loose:
+            target, number = directory / (stem + record.name), 1
+            while target.exists():
+                target, number = directory / f'{stem}{number}-{record.name}', number + 1
+            record.rename(target)
+    stamped = sorted(p for p in directory.iterdir() if p.is_file() and STAMPED.match(p.name))
+    for old in stamped[:max(0, len(stamped) - keep)]:
+        old.unlink()
+    return [record.name for record in loose]
+
+
+def main():
+    if ARCHIVE.is_dir() and any(p.is_file() and not STAMPED.match(p.name) for p in ARCHIVE.iterdir()):
+        for name in archive(info=previous_boot()):
+            print('Kept crash record', name)
+
+
+if __name__ == '__main__':
+    main()

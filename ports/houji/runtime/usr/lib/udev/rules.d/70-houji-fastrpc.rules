@@ -1,0 +1,4 @@
+# Let the logged-in user run NPU work on the compute DSP. This node only creates
+# unprivileged (non-secure) DSP process domains; fastrpc-cdsp-secure and the
+# sensor DSP's fastrpc-adsp stay root-only.
+SUBSYSTEM=="misc", KERNEL=="fastrpc-cdsp", TAG+="uaccess"

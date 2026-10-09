@@ -64,6 +64,7 @@ copy(REPO/'system_files/usr/lib/tmpfiles.d/armada-decky.conf','usr/lib/tmpfiles.
 # Houji Settings: armada-decky-sync seeds it into Decky beside Armada's own plugins.
 copy(PORT/'settings/houji-settings.py','usr/libexec/armada/houji-settings',0o755)
 link('etc/systemd/system/sockets.target.wants/houji-settings.socket','/usr/lib/systemd/system/houji-settings.socket')
+link('etc/systemd/system/multi-user.target.wants/houji-pstore-archive.service','/usr/lib/systemd/system/houji-pstore-archive.service')
 for name in ['plugin.json','package.json','main.py','dist/index.js']:
     copy(work/'decky/houji-settings'/name,'usr/share/decky-plugins/houji-settings/'+name,0o644)
 # Base kernels cannot load modules built for this kernel release.

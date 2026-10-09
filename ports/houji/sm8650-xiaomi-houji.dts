@@ -510,6 +510,9 @@ arch_timer: &{/timer} {
 
 /* Drivers load firmware from this handset's stock modem partition. */
 &remoteproc_adsp { status = "okay"; };
+/* The compute DSP with the Hexagon NPU (HTP v75): cdsp.mdt and cdsp_dtb.mdt
+ * from the same partition. Its carveouts match the stock layout. */
+&remoteproc_cdsp { status = "okay"; };
 &gpu { status = "okay"; };
 &gpu_zap_shader { firmware-name = "qcom/sm8650/xiaomi/houji/gen70900_zap.mbn"; };
 #include "touch.dtsi"

@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep each archived crash record under its own name
+After=systemd-pstore.service systemd-journal-flush.service
+ConditionDirectoryNotEmpty=/var/lib/systemd/pstore
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/armada/houji-pstore-archive
+
+[Install]
+WantedBy=multi-user.target

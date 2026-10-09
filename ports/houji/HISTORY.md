@@ -135,6 +135,39 @@ and build and install steps are in [README.md](README.md).
   with forced composition rotation for the portrait panel. See also
   [Session switching](#session-switching).
 
+### Compute DSP (NPU) enabled (2026-10-09)
+
+- **Request:** enable the NPU, which is the HTP v75 inside the compute DSP
+  (CDSP). Only the ADSP and modem ran; there was no `/dev/fastrpc-cdsp`.
+- **Inputs:** the handset's stock `modem_b` already holds `cdsp.mdt` and
+  `cdsp_dtb.mdt`, the mainline driver's SM8650 defaults, so no `firmware-name`
+  is needed, as for the ADSP. `dsp_b` holds the userspace side (`cdsp/`, with
+  `fastrpc_shell_3` and skeleton libraries). The stock reserved-memory layout
+  matches `sm8650.dtsi` for all three CDSP regions: `cdsp_mem` at 0x9ca00000
+  (20 MiB), `q6_cdsp_dtb_mem` at 0x9de00000 and `global_sync_mem` at 0x82600000.
+- **Change:** `&remoteproc_cdsp { status = "okay"; };`. The compiled DTB
+  differed from the running one only in that node's status. It was installed by
+  writing `vendor_boot_b` from Linux with a verified backup and read-back. The
+  `kcap3` kernel and modules were byte-identical. A DTB-only `make` must keep
+  `LOCALVERSION`, or it rewrites the tree's release name and the bundle packer
+  refuses the mismatched Image.
+- **Result:** the CDSP booted 176 ms after loading (`remote processor cdsp is
+  now up`), and FastRPC created `/dev/fastrpc-cdsp` and `-secure` with five
+  compute context banks. `hexagonrpcd` attached to the CDSP root domain and also
+  created a signed user domain from the stock `fastrpc_shell_3`. Both ran until
+  stopped, which needs successful remote calls (`remotectl open`, listener
+  register and init, then the waiting invoke). The same worked after stopping
+  and restarting the CDSP and after two sleeps. A udev rule gives the logged-in
+  user `fastrpc-cdsp`; `-secure` and the ADSP node stay root-only.
+- **Sleep:** the CDSP power-collapses on its own (25 entries during a 3-minute
+  sleep) and added no wakeups. `aosd`, `cxsd` and DDR low-power counts stayed 0
+  with the CDSP running and with it stopped. So the SoC never reaches its deepest
+  sleep on this port anyway, and the CDSP is not the cause. That is a separate
+  issue.
+- **Not included:** an NPU runtime or models. Qualcomm's QAIRT/QNN runtime and
+  any model weights belong to their owners and must be supplied separately.
+  Unsigned process domains were not tested.
+
 ### The clock started in 1970 and the Decky store crashed (2026-10-09)
 
 - **Report:** the Decky store kept crashing.
@@ -440,6 +473,36 @@ for every DSP request.
   point. `FAULT_REASON1` again read `0x40`, which is the latched value noted
   above and cannot date the event. Logs are kept root-only in
   `/var/lib/houji-modem/crash-20261007/` on the handset.
+- **Third occurrence (2026-10-09), the first with a crash log:** on battery, with
+  the GameSir X2s attached, the phone served two sensor-DSP dark wakes (after 65 s,
+  then 7 s), going back to sleep within about 3 ms each time. The journal ends at
+  `PM: suspend exit` after the second, before the next suspend entry was logged.
+  The PMIC recorded a PS_HOLD warm reset. pstore kept the console log but no
+  panic record, so Linux never reached `panic()`; something outside its panic
+  path reset the chip. The console log ends at the resume before. The kernel
+  suspends its consoles during sleep transitions (`printk: Suspending
+  console(s)`), and the console runs at `loglevel=6`, so a hang inside a
+  transition records nothing there. One lead: every resume powers the WCN7850
+  back on over PCIe (`mhi0: Wait for device to enter SBL or Mission mode`), and
+  the dark-wake re-suspend follows within milliseconds, likely before its
+  firmware finishes booting. Earlier boots completed over a hundred such quick
+  re-suspends, so this is a race at most, and unproven.
+- **Diagnostics enabled for the next occurrence (live on the handset only, not
+  in the image):** `/etc/tmpfiles.d/houji-sleep-diagnostics.conf` sets
+  `printk.console_suspend=N`, `pm_print_times=1` and `pm_debug_messages=1` and
+  unbinds fbcon (`vtcon1`). `/etc/sysctl.d/90-houji-sleep-diagnostics.conf`
+  raises the console level to 7. The ramoops console then records each device's
+  suspend and resume callback through every sleep transition, about 1,000 lines
+  (90 KB) per cycle; the 2 MB console holds about 20 cycles.
+  - fbcon had to go. The kernel switches to a text VT for suspend, so with console
+    suspend off fbcon drew every message while the display was suspending: a
+    visible terminal at wake, and transitions grew from about 1.6 s to 2.1–2.5 s.
+    Unbound, transitions are back to about 1.6 s.
+  - The first traced dark wake spent about 1.3 s of its 1.6 s on Wi-Fi:
+    `ath12k` suspend_late 95 ms, `qcom-pcie` resume_noirq 380 ms, `ath12k`
+    resume_early 585 ms and resume 255 ms. The WCN7850 resume completes before
+    the next suspend begins, which weakens the half-booted-firmware lead above.
+  - To remove: delete both files and reboot.
 - **Conclusion:** intermittent native sleep/wake reset remains unresolved.
   Re-suspending after a sensor-DSP dark wake is a lead, not a proven cause.
   No speculative kernel or sleep-policy fix was applied.
@@ -492,6 +555,16 @@ for every DSP request.
   reached fastboot once in three tries; it otherwise booted Linux or took
   several minutes. Holding Volume Down while it restarts reached fastboot in
   8 s.
+- **Records were overwritten (2026-10-09):** systemd-pstore archives a record
+  under its pstore name, and a console record is always `console-ramoops-0`, so
+  each archived crash log replaced the previous one. A freeze while a game was
+  starting (board skin 46 °C, ended by a Power + Volume Down reset the owner did
+  not notice) lost its log to the next crash this way.
+  `houji-pstore-archive.service` now runs after systemd-pstore and prefixes new
+  records with the time the previous boot's journal ends and that boot's ID, for
+  example `2026-10-09T09-59-03Z-0123456789ab-console-ramoops-0`. Records stay
+  files in `/var/lib/systemd/pstore`, where Armada's sleep report counts them, and
+  the newest 30 are kept.
 - **Recovering a frozen phone without losing the log:** hold Power + Volume
   Down until the screen goes black, then release both so it boots Linux. That
   reset is warm. From fastboot, `fastboot reboot` is a cold reset and loses the

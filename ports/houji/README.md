@@ -81,6 +81,7 @@ Results below are from the development handset.
 | USB host (OTG) | Wired gamepad and a Pixel webcam, including 5 Gb/s video. A GameSir X2s Type-C clip-on controller works through an InputPlumber profile that presents it to Steam as a Steam Deck controller: its Home button opens Quick Access and its record button is the Steam button. Both buttons act when released; the controller only reports them then. |
 | Mouse pointer | Steam's controller-as-mouse pointer shows in games, scaled for the high-density panel (`ARMADA_GAMESCOPE_CURSOR_SCALE_HEIGHT=600`). |
 | Houji Settings | A Decky plugin in Game Mode's Quick Access menu for settings Steam does not have: rotation lock, charge limit, data SIM, eSIM profiles (including download), mobile data, roaming and NFC. See [Houji Settings](#houji-settings). |
+| NPU (compute DSP) | The CDSP, which holds the Hexagon NPU, boots from the handset's own stock firmware. FastRPC works: process domains are created from the stock DSP shell, and the logged-in user can open `/dev/fastrpc-cdsp`. No NPU runtime or model is included; Qualcomm's QAIRT/QNN SDK must be brought separately. |
 
 ### Partly working
 
@@ -176,7 +177,7 @@ requires nonzero metadata even when unlocked. These describe the bootloader
 contract, not Armada's security patch level.
 
 First boot grows the ext4 filesystem to fill `userdata`. The system reads stock
-`modem_b`, `dsp_b` and `persist` for ADSP firmware, DSP libraries and this
+`modem_b`, `dsp_b` and `persist` for ADSP and CDSP firmware, DSP libraries and this
 handset's calibration, with `ro,noload` mounts. GPS also needs the handset's own
 modem firmware and NV data. **Do not erase these partitions or replace them with
 files from someone else's phone.**

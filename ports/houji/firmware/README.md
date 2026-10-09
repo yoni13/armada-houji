@@ -11,7 +11,7 @@ charger authentication executable, sensor defaults and speaker protection data.
 selector table required to package images for stock ABL. The DTBO file is trimmed
 to its declared length; its original padded hash is retained in stock-report.json.
 
-ADSP, Bluetooth and modem/GPS firmware comes from the installed stock firmware
+ADSP, CDSP, Bluetooth and modem/GPS firmware comes from the installed stock firmware
 partitions or Armada's linux-firmware package. Factory sensor/audio calibration
 and modem NV data are read from the user's own handset at runtime. They are
 never included here. No Wi-Fi profiles, pairing keys or location history belong
