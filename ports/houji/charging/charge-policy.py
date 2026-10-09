@@ -10,6 +10,7 @@ Rated 90 W input power is not inferred from the adapter's advertised capability.
 """
 from pathlib import Path
 import glob
+import json
 import subprocess
 import sys
 import time
@@ -24,6 +25,10 @@ AUX = '/sys/bus/auxiliary/devices/pmic_glink.power-supply.*/houji_charger_state'
 FCC_UA = 500_000
 AUTH_AGENT = Path('/usr/libexec/armada/houji-stock-auth')
 AUTH_BLOB = Path('/usr/lib/armada/houji/charging/batterysecret')
+CHARGE_LIMIT = Path('/etc/armada/houji-charge-limit')
+# The unit's RuntimeDirectory: the rest of /run is read-only for this service.
+CHARGE_LIMIT_STATE = Path('/run/houji-charging/charge-limit.json')
+RESUME_MARGIN = 5
 
 
 def configured_ceiling(path, default):
@@ -31,6 +36,53 @@ def configured_ceiling(path, default):
     if not 1_000_000 <= value <= 15_600_000:
         raise ValueError('charging ceiling outside stock range')
     return value
+
+
+def configured_charge_limit(path=CHARGE_LIMIT):
+    """Percentage to stop charging at, or None. A bad file means no limit."""
+    try:
+        value = int(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return value if 50 <= value < 100 else None
+
+
+class ChargeLimit:
+    """Hold charging at the limit; resume RESUME_MARGIN below it while attached.
+
+    Each new attachment starts afresh, so a phone plugged in just under the
+    limit charges to it instead of waiting for the margin.
+    """
+
+    def __init__(self):
+        self.holding = False
+        self.attached = False
+        # The hold wrote 0; a non-PD supply needs the firmware default back.
+        self.zeroed = False
+
+    def step(self, limit, capacity, attached):
+        if limit is None or not attached:
+            self.holding = False
+        elif capacity is None:
+            pass
+        elif not self.attached or not self.holding:
+            self.holding = capacity >= limit
+        elif capacity <= limit - RESUME_MARGIN:
+            self.holding = False
+        self.attached = attached
+        return self.holding
+
+
+def publish_charge_limit(limit, holding, path=None):
+    """Report the hold for Houji Settings. Returns False if it could not be written."""
+    path = CHARGE_LIMIT_STATE if path is None else path
+    temporary = path.with_name(path.name + '.tmp')
+    try:
+        temporary.write_text(json.dumps({'limit': limit, 'holding': holding}) + '\n')
+        temporary.replace(path)
+    except OSError:
+        return False
+    return True
 
 
 def wired_limits(directory, usb_type, authentication, normal, hypercharge):
@@ -111,15 +163,26 @@ def verification_idle_needed(state, input_limit):
 
 
 def tick(bat=BAT, usb=USB, aux_pattern=AUX, next_idle=0, now=None,
-         current_limit=FCC_UA, wireless=False, *, fast_charge=False):
+         current_limit=FCC_UA, wireless=False, *, fast_charge=False, hold=False,
+         restore=False):
     now = time.monotonic() if now is None else now
     read_int = lambda path: int(path.read_text().strip())
-    desired = desired_current(read_int(usb / 'online'),
+    online = read_int(usb / 'online') == 1
+    desired = desired_current(int(online),
                               (usb / 'usb_type').read_text(),
                               read_int(bat / 'temp'),
                               (bat / 'health').read_text().strip(), wireless,
                               fast_charge=fast_charge)
+    # Zero stops battery charging while the supply keeps powering the phone,
+    # and unlike positive votes it needs no lease renewal, so it lasts in sleep.
+    if hold and (online or wireless):
+        if read_int(bat / 'constant_charge_current') != 0:
+            (bat / 'constant_charge_current').write_text('0\n')
+        return next_idle, 'host charging held at the charge limit'
     if desired is None:
+        # Non-PD supplies get no host vote; undo only a zero the hold left.
+        if restore and online and read_int(bat / 'constant_charge_current') == 0:
+            (bat / 'constant_charge_current').write_text(f'{FCC_UA}\n')
         return 0, 'waiting for USB-PD'
     if desired:
         if type(current_limit) is not int or not 0 <= current_limit <= 15_600_000:
@@ -351,6 +414,8 @@ def main():
     previous = None
     authentication = StockAuthentication()
     control = StockChargingControl()
+    charge_limit = ChargeLimit()
+    published = None
     while True:
         loop_start = time.monotonic()
         try:
@@ -414,8 +479,23 @@ def main():
                 fast_charge = False
                 control.reset()
                 board_error = error
+            percent = configured_charge_limit()
+            try:
+                capacity = int((BAT / 'capacity').read_text())
+            except (OSError, ValueError):
+                capacity = None
+            attached = wireless or int((USB / 'online').read_text()) == 1
+            hold = charge_limit.step(percent, capacity, attached)
             next_idle, state = tick(next_idle=next_idle, current_limit=limit, wireless=wireless,
-                                   fast_charge=fast_charge)
+                                   fast_charge=fast_charge, hold=hold,
+                                   restore=charge_limit.zeroed)
+            if hold:
+                charge_limit.zeroed = True
+            elif attached:
+                charge_limit.zeroed = False
+            # Reporting is informational and must never affect charging control.
+            if (percent, hold) != published and publish_charge_limit(percent, hold):
+                published = (percent, hold)
             state += '; ' + authentication.step()
             if board_error is None:
                 state += '; ' + board_state

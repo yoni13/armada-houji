@@ -1,0 +1,13 @@
+[Unit]
+Description=Houji Settings request
+CollectMode=inactive-or-failed
+
+[Service]
+ExecStart=/usr/libexec/armada/houji-settings
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+SyslogLevel=warning
+# The plugin polls every two seconds while it is open; keep start/stop lines out of the journal.
+LogLevelMax=warning
+RuntimeMaxSec=120

@@ -73,6 +73,7 @@ def main():
     try:
         run(*pm,'unshare','python3',Path(__file__),'--output',output,*storage,'--inside','libraries','--container',container)
         run('python3',PORT/'build-userspace.py',work/'userspace')
+        run('python3',PORT/'decky/build.py','--output',work/'decky/houji-settings',*storage)
         run('python3',PORT/'gps/build.py','--work',work/'gps','--sysroot',work/'userspace/sysroot','--kernel',kernel)
         run('python3',PORT/'cellular/build.py','--work',work/'cellular','--sysroot',work/'userspace/sysroot')
         run('python3',PORT/'cellular/runtime-packages.py','--work',work/'cellular')

@@ -18,7 +18,8 @@ XML = f'''<node><interface name="{IFACE}">
 <method name="Status"><arg type="s" direction="out"/></method>
 <method name="Run"><arg type="s" direction="in"/><arg type="s" direction="in"/></method>
 </interface></node>'''
-OPS = {'enable', 'select', 'list', 'download', 'profile-enable', 'profile-disable', 'profile-delete'}
+OPS = {'enable', 'select', 'list', 'download', 'profile-enable', 'profile-disable', 'profile-delete',
+       'profile-nickname'}
 
 
 def validate(operation, value):
@@ -27,6 +28,13 @@ def validate(operation, value):
     if operation == 'select':
         if value not in ('auto', 'physical1', 'physical2', 'esim'):
             raise ValueError('Invalid SIM selection')
+    elif operation == 'profile-nickname':
+        # ICCID:nickname. An empty nickname clears it; SGP.22 allows 64 bytes.
+        iccid, separator, nickname = value.partition(':')
+        if (not separator or not re.fullmatch(r'[0-9]{18,22}', iccid)
+                or len(nickname.encode()) > 64 or not nickname.isprintable()
+                or nickname != nickname.strip()):
+            raise ValueError('Invalid profile nickname')
     elif operation.startswith('profile-'):
         if not re.fullmatch(r'[0-9]{18,22}', value):
             raise ValueError('Invalid profile identifier')
@@ -116,12 +124,15 @@ class Service:
                         if operation == 'download':
                             args = ['profile', 'download', '-a', '-']
                             stdin = value+'\n'
+                        elif operation == 'profile-nickname':
+                            args = ['profile', 'nickname', *value.split(':', 1)]
                         elif operation.startswith('profile-'):
                             args = ['profile', operation[8:], value]
                         command(str(ROOT/'lpac'), *args, env=env, input=stdin, timeout=300)
-                        if operation not in ('download', 'list'):
+                        if operation not in ('download', 'list', 'profile-nickname'):
                             command(str(ROOT/'sim.py'), 'refresh')
-                        if operation != 'list':
+                        # A nickname is local to the eUICC; it sends the carrier nothing.
+                        if operation not in ('list', 'profile-nickname'):
                             # Delivery can be retried; never undo a successful profile operation.
                             try:
                                 command(str(ROOT/'lpac'), 'notification', 'process', '-a', '-r', env=env, timeout=90)
@@ -133,7 +144,8 @@ class Service:
                         if result['code']:
                             raise RuntimeError('Could not list profiles')
                         profiles = [{key: item.get(key, '') for key in
-                                     ('iccid','profileName','serviceProviderName','profileState')}
+                                     ('iccid','profileName','profileNickname','serviceProviderName',
+                                      'profileState')}
                                     for item in result['data']]
                 if restart_mm:
                     command('systemctl', 'start', 'ModemManager')

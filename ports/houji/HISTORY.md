@@ -31,10 +31,11 @@ and build and install steps are in [README.md](README.md).
 12. [GPS](#gps)
 13. [NFC](#nfc)
 14. [Session switching](#session-switching)
-15. [Making the build reproducible](#making-the-build-reproducible)
-16. [Smaller updates and CI builds](#smaller-updates-and-ci-builds)
-17. [Installing over stock Android](#installing-over-stock-android)
-18. [Open problems](#open-problems)
+15. [Houji Settings](#houji-settings)
+16. [Making the build reproducible](#making-the-build-reproducible)
+17. [Smaller updates and CI builds](#smaller-updates-and-ci-builds)
+18. [Installing over stock Android](#installing-over-stock-android)
+19. [Open problems](#open-problems)
 
 ## Boot and storage
 
@@ -1231,6 +1232,23 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   power are no longer affected, and Steam reads the virtual pad instead of the
   raw controller.
 
+### GameSir X2s Home and record buttons swapped (2026-10-09)
+
+- **Request:** Home should open Quick Access and the record button should be the
+  Steam button, on the X2s only.
+- **Finding:** the virtual pad showed Home arriving as `BTN_MODE` held for only
+  3 ms, however long it was pressed. Home is a pulse, like the record button, so
+  a plain Home to Quick Access mapping would hold A for about 3 ms. That is the
+  failure that sometimes opened the Steam menu instead.
+- **Fix:** the gamepad interface's map (renamed `gamesir_x2s_gamepad`, as it now
+  holds more than axes) turns `BTN_MODE` into Quick Access with the same delayed
+  chord and never-completing tracking chord as the record button. The record map
+  now emits Guide, held for 100 ms. Both mappings apply only to the X2s profile.
+- **Result:** in a capture of the virtual pad, four Home presses each gave Guide
+  for about 345 ms with A held 96–104 ms starting 160 ms in, which is the full
+  Quick Access sequence. Four record presses each gave a 100 ms Guide. The owner
+  confirmed Home opens Quick Access and record opens the Steam menu.
+
 ### The controller-as-mouse pointer was invisible
 
 - **Issue:** In CS2's menus the stick moved an invisible pointer: menu items
@@ -1366,6 +1384,86 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
 - **Result:** An isolated regression test starts with conflicting settings and checks
   both directions and a second Game Mode switch. A live round trip through Armada's
   desktop switch and the normal Game Mode launcher returned to Steam.
+
+## Houji Settings
+
+### A Decky plugin for the phone's own settings (2026-10-09)
+
+- **Request:** settings Steam does not have, reachable in Game Mode: rotation
+  lock, eSIM download and SIM choice, mobile data and roaming, a charge limit and
+  NFC.
+- **Design:** a Decky plugin, Houji Settings, with a thin backend that sends each
+  request to `/run/houji-settings.sock`. `houji-settings.socket` (`Accept=yes`)
+  starts the native root helper, `houji-settings`, for each connection, with the
+  socket as its stdin and stdout. The helper reads one JSON request and uses the
+  existing cellular and NFC services, NetworkManager and ModemManager.
+  - **Why a socket:** the first version ran the helper as a subprocess of the
+    plugin. Decky runs under FEX, which resolves absolute paths in its x86 rootfs
+    first, so `#!/usr/bin/python3` started the rootfs's x86_64 Python, which has no
+    `gi.repository`. Every D-Bus call failed silently while command-line tools
+    still worked. The panel loaded, but switching to eSIM did nothing, and the
+    cellular service and NFC appeared unreachable. Shell tests ran the helper
+    natively and could not show it. Calling the plugin from Steam's own JS
+    context through the CEF debugger found it; `FEXBash` confirmed the x86
+    Python. Armada Control avoids the same trap with its native service.
+- **Decky logs every call:** its frontend writes each plugin call's arguments
+  (`Calling PY method ... with args`) and result (`Resolved PY call with value`)
+  into Steam's `webhelper_js.txt`. So:
+  - replies carry no identifiers. eSIM profiles are named by an HMAC of the ICCID
+    under a key in `/run/houji` that changes at every boot. ModemManager and
+    NetworkManager data is reduced to fixed fields (state, operator name, signal,
+    technology, roaming), so no IMEI, ICCID, phone number, operator code or APN
+    login is returned. A test feeds the helper all of these and checks the reply;
+    on the phone, the scan of the real status reply against its actual
+    identifiers found none.
+  - an activation code is never a call argument. The frontend gets a single-use
+    token valid for two minutes, then posts the code to a listener the plugin
+    backend opens on `127.0.0.1`. The backend hands it to the helper on stdin, and
+    the helper passes it to the cellular service over D-Bus, which gives it to
+    `lpac` on stdin. In Steam's own JS context (origin
+    `https://steamloopback.host`), a fake code reached the helper and a replayed
+    token was refused. Steam's JS log, the plugin log and the journal did not
+    contain it afterwards.
+- **Rotation lock:** the orientation service reads
+  `/etc/armada/houji-rotation-lock`. While it names an orientation, the service
+  applies it and releases the accelerometer. The service publishes the
+  orientation it applied so the plugin can lock to it. Its unit has
+  `ProtectSystem=strict`, so it writes into its own `RuntimeDirectory`
+  (`/run/houji-orientation`) rather than `/run/user`.
+- **Charge limit:** the charging policy holds the battery's charge current at 0
+  once the configured percentage is reached. Charging stops and the supply keeps
+  powering the phone. Unlike a positive vote, 0 needs no lease renewal. Charging
+  resumes 5 points below the limit; each new attachment starts afresh. A
+  non-PD supply gets its 500 mA default back only after a hold, so a USB-PD
+  temperature pause is never undone.
+  - **Bug found while testing:** the first version published its state under
+    `/run/houji`, which is read-only for this unit (`ProtectSystem=strict`). The
+    write failed after every charging decision. The loop's error path then
+    skipped adapter authentication and reset the current ramp each second, so
+    charging stayed at 500 mA. The state now goes to the unit's
+    `RuntimeDirectory`, and a failed report cannot affect charging.
+  - **Measured:** at 94% on a USB-PD charger, an 80% limit took the battery from
+    1.32 A to 0 mA within four seconds. The policy logged `host charging held at
+    the charge limit` with authentication still passing. Removing the limit
+    resumed the normal ramp.
+- **Cellular:** the cellular service gained `profile-nickname` (the eUICC stores
+  the name; no carrier notification), and its profile list now includes
+  nicknames. That service selects eSIM as the data SIM before any profile
+  operation, so the plugin only offers profile changes once eSIM is the chosen
+  data SIM, and the helper refuses them otherwise. Mobile data follows Plasma
+  Mobile's order: block device autoconnect, set autoconnect on the most recent
+  profile only, activate it, and allow autoconnect again.
+- **Build:** the port builds the plugin in Armada's `node:22-slim` image with
+  `npm ci` from a lockfile matching Armada Store's dependencies. The container
+  build was byte-identical to a local one. The image stages it in
+  `/usr/share/decky-plugins`, and `armada-decky-sync` seeds it at boot.
+- **Verified by the owner:** the panel loaded with all sections, the rotation
+  lock held while the phone was turned, the landscape label matched the USB side,
+  and the charge limit showed its hold.
+- **Not yet tested on hardware:** eSIM download, switching and renaming from the
+  plugin, and the mobile data and roaming switches. Slot 1 reported `sim-missing`
+  at the time, and the SIM selection was left unchanged. The charge limit has
+  not been tested over a long sleep or with wireless charging.
 
 ## Making the build reproducible
 

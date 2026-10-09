@@ -1,7 +1,8 @@
 # GameSir X2s Type-C (USB, 3537:0105). Xbox button order (X = BTN_X, Y = BTN_Y)
 # on a generic Android HID layout: right stick on Z/RZ, triggers on GAS/BRAKE.
-# Its record button is a separate Consumer Control report of Volume Down + Power
-# (Android's screenshot shortcut); it is mapped to Steam's Quick Access.
+# Home and the record button are swapped from their labels: Home opens Steam's
+# Quick Access and the record button (a separate Consumer Control report of Volume
+# Down + Power, Android's screenshot shortcut) is the Steam (Guide) button.
 version: 1
 kind: CompositeDevice
 name: GameSir X2s Type-C
@@ -14,7 +15,7 @@ source_devices:
       vendor_id: "3537"
       product_id: "0105"
       handler: event*
-    capability_map_id: gamesir_x2s_axes
+    capability_map_id: gamesir_x2s_gamepad
   - group: keyboard
     evdev:
       name: GAMESIR GameSir-X2s Type-C Consumer Control

@@ -168,6 +168,81 @@ class PolicyTest(unittest.TestCase):
         # baseline again, even though CLOCK_MONOTONIC stopped while asleep.
         self.assertEqual(control.step(values, state, 500000, 15600000, False, 200)[0], 500000)
 
+    def test_charge_limit_configuration(self):
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / 'limit'
+            self.assertIsNone(p.configured_charge_limit(path))
+            for value, expected in [('80\n', 80), ('50', 50), ('99', 99), ('100', None),
+                                    ('49', None), ('-1', None), ('eighty', None), ('', None)]:
+                path.write_text(value)
+                self.assertEqual(p.configured_charge_limit(path), expected, value)
+            state = Path(name) / 'charge-limit.json'
+            self.assertTrue(p.publish_charge_limit(80, True, state))
+            self.assertEqual(state.read_text(), '{"limit": 80, "holding": true}\n')
+            # A read-only /run (the unit's ProtectSystem) must not raise into the loop.
+            self.assertFalse(p.publish_charge_limit(80, True, Path(name) / 'missing' / 'charge-limit.json'))
+            self.assertEqual(p.CHARGE_LIMIT_STATE.parent, Path('/run/houji-charging'))
+
+    def test_charge_limit_hysteresis_and_new_attachment(self):
+        limit = p.ChargeLimit()
+        self.assertFalse(limit.step(80, 79, True))
+        self.assertTrue(limit.step(80, 80, True))
+        # Holding continues until the margin below the limit, then charging resumes.
+        self.assertTrue(limit.step(80, 76, True))
+        self.assertFalse(limit.step(80, 75, True))
+        self.assertFalse(limit.step(80, 79, True))
+        self.assertTrue(limit.step(80, 81, True))
+        # A failed capacity read keeps the decision; detach and no limit release it.
+        self.assertTrue(limit.step(80, None, True))
+        self.assertFalse(limit.step(80, 81, False))
+        # Replugged just under the limit: charge to it, do not wait for the margin.
+        self.assertFalse(limit.step(80, 78, True))
+        self.assertTrue(limit.step(80, 80, True))
+        self.assertFalse(limit.step(None, 80, True))
+        # Plugged in above the limit: hold at once.
+        fresh = p.ChargeLimit()
+        self.assertTrue(fresh.step(70, 85, True))
+        # Raising the limit while held resumes once the new margin allows it.
+        self.assertFalse(fresh.step(90, 85, True))
+
+    def test_charge_limit_hold_and_restore_in_tick(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            bat, usb, aux = [root / x for x in ('bat', 'usb', 'aux')]
+            for path in (bat, usb, aux):
+                path.mkdir()
+            for key, value in dict(temp='300', health='Good', constant_charge_current='3000000').items():
+                (bat / key).write_text(value)
+            for key, value in dict(online='1', usb_type='PD [PD_PPS]', input_current_limit='3000000').items():
+                (usb / key).write_text(value)
+            state = aux / 'houji_charger_state'
+            state.write_text('verify_process=0\npd_verified=1\nbattery_authentic=1\n')
+            current = bat / 'constant_charge_current'
+            _, message = p.tick(bat, usb, str(state), current_limit=3000000, hold=True)
+            self.assertEqual(current.read_text(), '0\n')
+            self.assertIn('charge limit', message)
+            p.tick(bat, usb, str(state), current_limit=3000000)
+            self.assertEqual(current.read_text(), '3000000\n')
+            # Non-PD supplies get no vote, but the hold still applies to them.
+            (usb / 'usb_type').write_text('[SDP] DCP')
+            p.tick(bat, usb, str(state), hold=True)
+            self.assertEqual(current.read_text(), '0\n')
+            p.tick(bat, usb, str(state))
+            self.assertEqual(current.read_text(), '0\n')
+            p.tick(bat, usb, str(state), restore=True)
+            self.assertEqual(current.read_text(), '500000\n')
+            # Without an attached supply neither the hold nor the restore writes.
+            current.write_text('0')
+            (usb / 'online').write_text('0')
+            p.tick(bat, usb, str(state), restore=True, hold=True)
+            self.assertEqual(current.read_text(), '0')
+            # A temperature pause on USB-PD is not undone by the restore path.
+            (usb / 'online').write_text('1')
+            (usb / 'usb_type').write_text('PD [PD_PPS]')
+            (bat / 'temp').write_text('460')
+            p.tick(bat, usb, str(state), current_limit=3000000, restore=True)
+            self.assertEqual(current.read_text(), '0')
+
     def test_service_stop_reduces_the_vote(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)

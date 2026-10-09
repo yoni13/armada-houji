@@ -18,6 +18,18 @@ ORIENTATIONS = {
 }
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
 HELPER = "/usr/libexec/armada/houji-gamescope-rotate"
+# Written by Houji Settings: one of ORIENTATIONS' values, or absent to follow the sensor.
+LOCK = Path("/etc/armada/houji-rotation-lock")
+# The orientation last applied, for Houji Settings to show and lock to.
+STATE = Path("/run/houji-orientation/current")
+
+
+def locked_orientation(path=None):
+    try:
+        value = (LOCK if path is None else path).read_text().strip()
+    except OSError:
+        return None
+    return value if value in ORIENTATIONS.values() else None
 
 
 def compositor():
@@ -53,14 +65,27 @@ class Orientation:
         self.retry_at = 0.0
         self.loop = GLib.MainLoop()
 
-    def release(self):
+    def unclaim(self):
         if self.claimed and self.proxy:
             try:
                 self.proxy.call_sync("ReleaseAccelerometer", None, Gio.DBusCallFlags.NONE, 2000, None)
             except GLib.Error:
                 pass
         self.claimed = False
+
+    def release(self):
+        self.unclaim()
         self.pending = self.applied = None
+
+    def apply(self, session, orientation):
+        env = dict(os.environ, WAYLAND_DISPLAY=session[1])
+        subprocess.run([HELPER, orientation], env=env, check=True, timeout=4)
+        self.applied = orientation
+        try:
+            STATE.write_text(orientation + "\n")
+        except OSError:
+            pass
+        print("Gamescope orientation: " + orientation, flush=True)
 
     def tick(self):
         current = compositor()
@@ -69,6 +94,18 @@ class Orientation:
             self.session = current
             print("Gamescope orientation: " + ("session ready" if current else "waiting for shader-rotation session"), flush=True)
         if not current or time.monotonic() < self.retry_at:
+            return True
+        lock = locked_orientation()
+        if lock:
+            # A locked screen needs no accelerometer; releasing it lets the sensor idle.
+            self.unclaim()
+            self.pending = None
+            if lock != self.applied:
+                try:
+                    self.apply(current, lock)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    print("Gamescope orientation retry: " + str(exc), flush=True)
+                    self.retry_at = time.monotonic() + 5
             return True
         try:
             if not self.proxy:
@@ -95,10 +132,7 @@ class Orientation:
             if orientation != self.pending:
                 self.pending, self.since = orientation, time.monotonic()
             elif orientation != self.applied and time.monotonic() - self.since >= 0.75:
-                env = dict(os.environ, WAYLAND_DISPLAY=current[1])
-                subprocess.run([HELPER, orientation], env=env, check=True, timeout=4)
-                self.applied = orientation
-                print("Gamescope orientation: " + orientation, flush=True)
+                self.apply(current, orientation)
         except (GLib.Error, OSError, subprocess.SubprocessError) as exc:
             print("Gamescope orientation retry: " + str(exc), flush=True)
             self.release()

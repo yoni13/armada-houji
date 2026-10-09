@@ -34,6 +34,7 @@ fixed is in [HISTORY.md](HISTORY.md).
 - [Ambient light](#ambient-light)
 - [USB and privacy](#usb-and-privacy)
 - [NFC Manager](#nfc-manager)
+- [Houji Settings](#houji-settings)
 
 ## Before you start
 
@@ -67,7 +68,7 @@ Results below are from the development handset.
 | Plasma Mobile and Steam Game Mode | Both run with GPU rendering, and switching between them works. Game compatibility depends on Armada's translation stack. |
 | Display | N3 panel, 1200 × 2670, 120 Hz target (about 119 Hz measured at vblank). RGB format fix removed the pink tint. Not colour-calibrated. The panel runs in its stock idle-refresh mode: 120 Hz while frames arrive, down to 1 Hz on a static screen. |
 | Touch | Taps and swipes work, using Xiaomi's stock touch processing core. A bus error resets the controller automatically. |
-| Rotation | Sensor-driven in Plasma and Game Mode. Touch alignment was tested in Plasma; recheck it in every Game Mode orientation. |
+| Rotation | Sensor-driven in Plasma and Game Mode. Game Mode can be locked to one orientation in [Houji Settings](#houji-settings). Touch alignment was tested in Plasma; recheck it in every Game Mode orientation. |
 | Thermal limits | CPU and GPU limits follow the stock skin-temperature estimate, using Xiaomi's tables. Game Mode keeps the GPU at full speed longer and slows the CPU first. See [Thermal limits](#thermal-limits). |
 | Ambient light | The front sensor under the display reports lux through iio-sensor-proxy (`monitor-sensor --light`). It followed room light, a flashlight and a covering hand. Steam detects it through a small kernel device and reads it about five times a second, but in the first test the screen did not brighten under a flashlight. See [Ambient light](#ambient-light). |
 | Wi-Fi | WCN7850, 2.4 and 5 GHz, two streams at 80 MHz. About 509 Mb/s down and 424 Mb/s up in a local test. Speed depends on signal and access point. |
@@ -77,8 +78,9 @@ Results below are from the development handset.
 | Battery | Voltage, current, charge level, Steam time estimates and USB-PD. The battery is named `battery`, as elsewhere in Armada, so Steam's performance overlay (MangoHud) shows its level, power while discharging and time remaining. While discharging, the percentage never reads above the gauge's remaining charge, and while charging it reads at most 3 points above it, so plugging in the charger no longer jumps the figure up. A full battery reads 100%. |
 | Performance overlay | Steam's overlay levels show only readings this phone provides; per-component CPU and GPU power have no sensor here and are left out. The battery percentage matches Steam's: the port builds the overlay (`mangoapp`) with MangoHud patches `0007` and `0008` until the pinned Armada image includes them. With `0008` the overlay only redraws when the app draws, so it doesn't keep the screen busy while Steam is idle. |
 | USB device | Charging by default. File transfer (MTP) on demand through Armada's switch. USB 3 at 5 Gb/s in both cable orientations, USB 2 fallback. No USB shell or network gadget. |
-| USB host (OTG) | Wired gamepad and a Pixel webcam, including 5 Gb/s video. A GameSir X2s Type-C clip-on controller works through an InputPlumber profile that turns its record button into Steam's Quick Access. |
+| USB host (OTG) | Wired gamepad and a Pixel webcam, including 5 Gb/s video. A GameSir X2s Type-C clip-on controller works through an InputPlumber profile: its Home button opens Steam's Quick Access and its record button is the Steam button. |
 | Mouse pointer | Steam's controller-as-mouse pointer shows in games, scaled for the high-density panel (`ARMADA_GAMESCOPE_CURSOR_SCALE_HEIGHT=600`). |
+| Houji Settings | A Decky plugin in Game Mode's Quick Access menu for settings Steam does not have: rotation lock, charge limit, data SIM, eSIM profiles (including download), mobile data, roaming and NFC. See [Houji Settings](#houji-settings). |
 
 ### Partly working
 
@@ -537,6 +539,16 @@ not verified.
   PD-PPS, active firmware fast-charge mode, healthy telemetry and a matching
   kernel guard. Other charging modes keep the conservative limit.
 
+### Charge limit
+
+[Houji Settings](#houji-settings) can stop charging at 50–95% (stored in
+`/etc/armada/houji-charge-limit`). At the limit the charging policy sets the
+battery's charge current to 0: charging stops and the charger keeps powering the
+phone. It resumes 5 points below the limit while the charger stays attached, and
+each new attachment charges to the limit straight away. The policy applies it
+to every supply; holding and resuming were tested with a USB-PD charger, not yet
+over a long sleep or with wireless charging.
+
 ### Sleep
 
 - **On battery**, Power uses native `s2idle` (the default). Light sleep remains
@@ -718,3 +730,34 @@ sudo systemctl stop neard
 
 Debug packet logging is off. Do not publish tag identifiers or card contents from
 separately enabled NFC diagnostic tools.
+
+## Houji Settings
+
+**Houji Settings** is a Decky plugin, in Game Mode's Quick Access menu under the
+plug icon. It is installed with the image and holds the phone settings Steam does
+not have:
+
+- **Display:** rotation lock. Locking keeps the current orientation, and the
+  orientation can then be chosen. While locked the accelerometer is released.
+- **Battery:** the [charge limit](#charge-limit).
+- **Mobile network:** turn cellular on, choose the data SIM (automatic, SIM 1,
+  SIM 2 or eSIM), mobile data and roaming for that SIM. A SIM needs a data
+  profile (APN) first; add it in Desktop Mode under Settings, Cellular Network.
+  Switching SIMs restarts the modem.
+- **eSIM profiles** (with eSIM chosen as the data SIM): list, switch, rename and
+  delete profiles, and download a new one by typing its activation code.
+- **NFC:** the reader on or off, as in NFC Manager. Turning it off also stops tag
+  emulation.
+
+The plugin sends each request to `/run/houji-settings.sock`, which starts
+`/usr/libexec/armada/houji-settings` as root (`houji-settings.socket`). Decky
+itself runs under FEX, where `/usr/bin/python3` is an x86 Python without the
+system's D-Bus bindings, so the helper is never started from the plugin directly.
+It uses the same cellular, NFC, NetworkManager and ModemManager services as the
+desktop apps.
+Decky writes every plugin call and its result into Steam's log files, so nothing
+the plugin returns identifies the phone or its SIMs: eSIM profiles are referred
+to by keys that change at every boot, and no IMEI, ICCID, phone number or APN
+login is passed on. An activation code never goes through a Decky call; it is
+sent to the plugin over a one-time local connection and from there only to the
+cellular service, which gives it to `lpac` on standard input.

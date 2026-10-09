@@ -1,0 +1,13 @@
+[Unit]
+Description=Houji Settings requests from its Decky plugin
+
+[Socket]
+# Decky runs under FEX, where /usr/bin/python3 is the x86 rootfs Python, so the
+# plugin connects here and systemd starts the native helper for each request.
+ListenStream=/run/houji-settings.sock
+SocketMode=0600
+Accept=yes
+MaxConnections=8
+
+[Install]
+WantedBy=sockets.target

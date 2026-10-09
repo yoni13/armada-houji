@@ -24,12 +24,18 @@ class Requests(unittest.TestCase):
             service.validate('select', mode)
         service.validate('download', 'LPA:1$test.invalid$SYNTHETIC-TOKEN')
         service.validate('profile-enable', '0'*20)
+        service.validate('profile-nickname', '0'*20+':Travel data')
+        service.validate('profile-nickname', '0'*20+':')
+        service.validate('profile-nickname', '0'*20+':'+'é'*32)
 
     def test_untrusted_dbus_inputs(self):
         for operation, value in (
                 ('shell','true'), ('select','esim;reboot'), ('select','../physical1'),
                 ('download','LPA:1$test.invalid$X\nY'), ('download','LPA:1$'+'x'*4096),
                 ('profile-delete','--help'), ('profile-enable','0'*17),
+                ('profile-nickname','0'*20), ('profile-nickname','--help:x'),
+                ('profile-nickname','0'*20+':a\nb'), ('profile-nickname','0'*20+': padded'),
+                ('profile-nickname','0'*20+':'+'é'*33), ('profile-enable','0'*20+':x'),
                 ('enable','unexpected'), ('list','unexpected')):
             with self.subTest(operation=operation), self.assertRaises(ValueError):
                 service.validate(operation,value)
