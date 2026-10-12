@@ -1,0 +1,4 @@
+machines:
+  Xiaomi 14:
+    DSP_LIBRARY_PATH: dsp
+    CDSP_ARCH: v75

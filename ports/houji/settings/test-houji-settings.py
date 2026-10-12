@@ -135,6 +135,7 @@ class Helper(unittest.TestCase):
                                                   'message': 'NFC is off', 'desired_mode': 'off',
                                                   'mode': 'off', 'powered': False, 'polling': False,
                                                   'reads': 0, 'tags': 1, 'notify_on_scan': False,
+                                                  'ipass_field_on': 0, 'ipass_ese_actions': 0,
                                                   'detections': 0, 'detection_session': None})
         # Reading NFC status must not start the service.
         self.assertIn(('org.armada.Nfc', 'GetStatus', ()), system.dbus_calls)
@@ -338,6 +339,17 @@ class Helper(unittest.TestCase):
         self.assertTrue(self.call(system, op='nfc.watch')['result']['reader'])
         self.assertFalse(self.call(system, op='nfc.notifications', enabled=False)['result']['notify_on_scan'])
         self.assertFalse(self.call(system, op='nfc.notifications', enabled='yes')['ok'])
+
+    def test_ipass_mode_roundtrip_and_fallback(self):
+        system = FakeSystem()
+        helper.NFC_SETTINGS.write_text('{"ipass_enabled":true}')
+        result = self.call(system, op='nfc.mode', mode='ipass')
+        self.assertTrue(result['ok'])
+        self.assertIn(('org.armada.Nfc', 'SetMode', ('ipass',)), system.dbus_calls)
+        self.assertEqual(result['result']['desired_mode'], 'ipass')
+        self.assertTrue(result['result']['enabled'])
+        self.assertFalse(result['result']['emulating'])
+        self.assertFalse(self.call(system, op='nfc.mode', mode='arbitrary')['ok'])
 
     def test_bad_requests_and_unexpected_errors(self):
         system = FakeSystem()

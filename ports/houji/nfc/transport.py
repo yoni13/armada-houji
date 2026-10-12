@@ -120,13 +120,32 @@ class Transport:
 
     def read(self, timeout=3):
         deadline = time.monotonic() + timeout
-        while not get_value(self.irq):
+        not_ready_since = None
+        while True:
             if time.monotonic() >= deadline:
                 raise TimeoutError('NCI receive timeout')
-            time.sleep(.005)
-        head = os.read(self.i2c, 3)
+            if not get_value(self.irq):
+                time.sleep(.005)
+                continue
+            try:
+                head = os.read(self.i2c, 3)
+                break
+            except OSError as error:
+                # Like nxp_nci_i2c_irq_thread_fn: IRQ can precede readable data,
+                # producing an address NACK (ENXIO). No header bytes transferred,
+                # so recheck IRQ and retry. A persistent fault must still escape.
+                if error.errno != errno.ENXIO:
+                    raise
+                now = time.monotonic()
+                if not_ready_since is None:
+                    not_ready_since = now
+                if now - not_ready_since >= .1:
+                    raise
+                time.sleep(.005)
         if len(head) != 3:
             raise RuntimeError('Short NCI header')
+        # Once a header has been consumed, a failed payload read is not safely
+        # retryable here: the controller's packet alignment is unknown.
         body = os.read(self.i2c, head[2]) if head[2] else b''
         if len(body) != head[2]:
             raise RuntimeError('Short NCI payload')

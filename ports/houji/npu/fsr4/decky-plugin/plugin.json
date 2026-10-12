@@ -1,0 +1,6 @@
+{
+  "name": "FSR 4 NPU",
+  "author": "Armada",
+  "flags": ["root"],
+  "api_version": 1
+}

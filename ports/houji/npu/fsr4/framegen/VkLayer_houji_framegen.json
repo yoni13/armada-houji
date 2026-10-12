@@ -1,0 +1,16 @@
+{
+  "file_format_version": "1.2.0",
+  "layer": {
+    "name": "VK_LAYER_HOUJI_framegen",
+    "type": "GLOBAL",
+    "library_path": "/var/home/armada/.local/opt/fsr4-htp/framegen/libVkLayer_houji_framegen.so",
+    "api_version": "1.4.0",
+    "implementation_version": "1",
+    "description": "Houji experimental frame generation (FSR 4 Goat test only)",
+    "functions": {
+      "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
+    },
+    "enable_environment": { "FSR4_NPU_LIVE": "1" },
+    "disable_environment": { "HOUJI_FG_DISABLE": "1" }
+  }
+}

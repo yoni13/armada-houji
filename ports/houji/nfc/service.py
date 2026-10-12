@@ -27,6 +27,7 @@ XML = '''<node><interface name="org.armada.Nfc1">
   <method name="GetSettings"><arg type="s" direction="out"/></method>
   <method name="SaveTag"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="b" direction="in"/></method>
   <method name="SetReader"><arg type="b" direction="in"/></method>
+  <method name="SetMode"><arg type="s" direction="in"/></method>
   <method name="ScanAgain"/>
   <method name="StartEmulation"><arg type="s" direction="in"/><arg type="s" direction="in"/></method>
   <method name="StopEmulation"/>
@@ -34,7 +35,13 @@ XML = '''<node><interface name="org.armada.Nfc1">
 </interface></node>'''
 SETTINGS = Path('/var/lib/armada-nfc/settings.json')
 DEFAULTS = dict(text='Armada NFC test', serial='12:34:56:78', custom_serial=False,
-                reader_enabled=False, emulation_enabled=False)
+                reader_enabled=False, emulation_enabled=False, ipass_enabled=False)
+
+
+def desired_mode(settings):
+    return ('ipass' if settings.get('ipass_enabled') else
+            'emulation' if settings['emulation_enabled'] else
+            'reader' if settings['reader_enabled'] else 'off')
 
 
 def load_settings():
@@ -43,12 +50,16 @@ def load_settings():
     if SETTINGS.stat().st_size > 4096:
         raise ValueError('Invalid saved settings')
     value = json.loads(SETTINGS.read_text())
+    if isinstance(value, dict) and set(value) == set(DEFAULTS) - {'ipass_enabled'}:
+        value['ipass_enabled'] = False
     if not isinstance(value, dict) or set(value) != set(DEFAULTS):
         raise ValueError('Invalid saved settings')
     validate(value['text'], value['serial'])
     if any(type(value[name]) is not bool for name in
-           ['custom_serial', 'reader_enabled', 'emulation_enabled']):
+           ['custom_serial', 'reader_enabled', 'emulation_enabled', 'ipass_enabled']):
         raise ValueError('Invalid saved settings')
+    if value['ipass_enabled'] and (value['reader_enabled'] or value['emulation_enabled']):
+        raise ValueError('Conflicting NFC modes')
     if value['custom_serial'] and not value['serial'].strip():
         raise ValueError('Invalid saved serial')
     return value
@@ -83,6 +94,7 @@ class Service:
         self.poll_worker = None
         self.last_poll = 0
         self.emulation = False
+        self.mode_pending = False
         self.closing = False
         self.settings_error = False
         self.seen_tags = set()
@@ -95,7 +107,8 @@ class Service:
         self.saved_settings = self.settings.copy()
         self.state = dict(mode='off', message='NFC is off', reads=0,
                           powered=False, polling=False, tags=0, busy=False,
-                          detections=0, detection_session=self.detection_session)
+                          detections=0, detection_session=self.detection_session,
+                          ipass_field_on=0, ipass_ese_actions=0)
         self.connection.register_object(PATH, Gio.DBusNodeInfo.new_for_xml(XML).interfaces[0],
                                         self.call, None, None)
         self.name_id = Gio.bus_own_name_on_connection(self.connection, NAME,
@@ -125,14 +138,50 @@ class Service:
     def restore(self):
         if self.settings_error:
             self.state.update(mode='error', message='Saved NFC settings could not be read. Set them again in the app.')
+        else:
+            self.start_desired_mode()
+        return False
+
+    def start_desired_mode(self):
+        if controller.RECOVERY.exists():
+            self.mode_pending = True
+            self.launch(controller.recover, 'Recovering interrupted IPASS mode')
+        elif self.settings.get('ipass_enabled'):
+            self.emulation = True
+            self.stop.clear()
+            self.state.update(ipass_field_on=0, ipass_ese_actions=0)
+            self.launch(lambda: controller.ipass_mode(self.stop, self.ipass_changed),
+                        'Preparing [UNTESTED] IPASS')
         elif self.settings['emulation_enabled']:
             self.begin_emulation(self.settings['text'],
                     self.settings['serial'] if self.settings['custom_serial'] else '')
         elif self.settings['reader_enabled']:
             self.launch(lambda: controller.reader(True), 'Restoring NFC reader')
         else:
-            self.poll()
-        return False
+            self.launch(lambda: controller.reader(False), 'Turning NFC off')
+
+    def request_mode(self, mode):
+        if mode not in ('off', 'reader', 'emulation', 'ipass'):
+            raise ValueError('Unknown NFC mode.')
+        if self.worker and self.worker.is_alive() and not self.emulation:
+            raise ValueError('NFC is busy. Wait for the current operation to finish.')
+        self.settings.update(reader_enabled=mode == 'reader', emulation_enabled=mode == 'emulation',
+                             ipass_enabled=mode == 'ipass')
+        self.save()
+        self.seen_tags.clear()
+        if self.emulation:
+            # Cleanup completes under hardware lock before the next mode starts.
+            self.mode_pending = True
+            self.stop.set()
+            self.changed('stopping', 'Switching NFC mode', None)
+        else:
+            self.start_desired_mode()
+
+    def ipass_changed(self, mode, message, counts):
+        with self.lock:
+            self.state.update(mode=mode, message=message, busy=True,
+                              ipass_field_on=counts.get('field_on', self.state['ipass_field_on']),
+                              ipass_ese_actions=counts.get('ese_actions', self.state['ipass_ese_actions']))
 
     def begin_emulation(self, text, serial):
         self.emulation = True
@@ -160,7 +209,9 @@ class Service:
         if method == 'GetStatus':
             self.poll()
             with self.lock:
-                value = json.dumps(dict(self.state, emulation_enabled=self.settings['emulation_enabled']))
+                value = json.dumps(dict(self.state, emulation_enabled=self.settings['emulation_enabled'],
+                                        ipass_enabled=self.settings['ipass_enabled'],
+                                        desired_mode=desired_mode(self.settings)))
             invocation.return_value(GLib.Variant('(s)', (value,)))
             return
         if self.closing or not self.authorized(sender):
@@ -170,18 +221,12 @@ class Service:
             if method == 'GetSettings':
                 invocation.return_value(GLib.Variant('(s)', (json.dumps(self.settings),)))
                 return
-            if method == 'StopEmulation':
-                self.settings['emulation_enabled'] = False
-                self.save()
-                self.stop.set()
-                if not (self.worker and self.worker.is_alive()):
-                    with self.lock:
-                        self.state.update(mode='off', busy=False)
-                    self.poll()
-            elif method == 'SetReader' and self.emulation:
-                self.settings.update(reader_enabled=params.unpack()[0], emulation_enabled=False)
-                self.save()
-                self.stop.set()
+            if method == 'SetMode':
+                self.request_mode(params.unpack()[0])
+            elif method == 'StopEmulation':
+                self.request_mode('off')
+            elif method == 'SetReader':
+                self.request_mode('reader' if params.unpack()[0] else 'off')
             elif self.worker and self.worker.is_alive():
                 raise ValueError('NFC is busy. Wait for the current operation to finish.')
             elif method == 'TransceiveEse':
@@ -191,7 +236,8 @@ class Service:
             elif method == 'StartEmulation':
                 text, serial = params.unpack()
                 validate(text, serial)
-                self.settings.update(text=text, custom_serial=bool(serial.strip()), emulation_enabled=True)
+                self.settings.update(text=text, custom_serial=bool(serial.strip()), emulation_enabled=True,
+                                     ipass_enabled=False, reader_enabled=False)
                 if serial.strip():
                     self.settings['serial'] = serial
                 self.save()
@@ -203,14 +249,8 @@ class Service:
                     raise ValueError('Enter a four-byte serial or turn Custom serial off.')
                 self.settings.update(text=text, serial=serial, custom_serial=custom)
                 self.save()
-            elif method == 'SetReader':
-                enabled = params.unpack()[0]
-                self.settings.update(reader_enabled=enabled, emulation_enabled=False)
-                self.save()
-                self.seen_tags.clear()
-                self.launch(lambda: controller.reader(enabled), 'Updating NFC reader')
             elif method == 'ScanAgain':
-                self.settings.update(reader_enabled=True, emulation_enabled=False)
+                self.settings.update(reader_enabled=True, emulation_enabled=False, ipass_enabled=False)
                 self.save()
                 self.seen_tags.clear()
                 self.launch(lambda: controller.reader(True, restart=True), 'Restarting scan')
@@ -261,7 +301,7 @@ class Service:
             # A status read may have begun just before a user queued a change.
             if self.state['busy']:
                 return
-            if self.settings['reader_enabled'] and not self.settings['emulation_enabled']:
+            if self.settings['reader_enabled'] and not self.settings['emulation_enabled'] and not self.settings.get('ipass_enabled'):
                 self.state['detections'] += len(paths - self.seen_tags)
                 self.seen_tags = paths
             else:
@@ -278,11 +318,13 @@ class Service:
         self.changed('starting', message, 0)
 
         def run():
+            success = False
             with self.hardware:
                 try:
                     operation()
                     with self.lock:
                         self.state.update(mode='off', busy=False)
+                    success = True
                 except Exception as error:
                     with self.lock:
                         phase = self.state.get('message', '')
@@ -292,15 +334,25 @@ class Service:
                         self.state.update(mode='error', busy=False,
                             message='NFC operation failed. Turn NFC off and on, or restart the phone.')
                 finally:
-                    self.emulation = False
                     self.refresh()
+            GLib.idle_add(self.completed, threading.current_thread(), success)
 
         self.worker = threading.Thread(target=run, name='nfc-control', daemon=True)
         self.worker.start()
 
+    def completed(self, worker, success):
+        if self.worker is not worker:
+            return False
+        self.worker = None
+        self.emulation = False
+        pending, self.mode_pending = self.mode_pending, False
+        if success and pending and not self.closing:
+            self.start_desired_mode()
+        return False
+
     def run_emulation(self, text, serial):
         controller.emulate(text, serial, self.stop, self.changed)
-        if not self.closing:
+        if not self.closing and not self.mode_pending:
             wanted = self.settings['reader_enabled']
             if controller.reader_status()['powered'] != wanted:
                 controller.reader(wanted)

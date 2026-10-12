@@ -1,0 +1,41 @@
+{
+  "amd": {
+    "repository": "GPUOpen-LibrariesAndSDKs/FidelityFX-SDK",
+    "revision": "01446e6a74888bf349652fcf2cbf5f642d30c2bf",
+    "license": "MIT",
+    "paths": [
+      "docs/license.md",
+      "Kits/FidelityFX/upscalers/fsr4/dx12/ffx_provider_fsr4_dx12.cpp",
+      "Kits/FidelityFX/upscalers/fsr4/internal/shaders/fsr4_model_v07_i8_quality/initializers.bin",
+      "Kits/FidelityFX/upscalers/fsr4/internal/shaders/fsr4_model_v07_i8_quality/passes_1080.hlsl",
+      "Kits/FidelityFX/upscalers/fsr4/internal/shaders/fsr4_model_v07_i8_quality/pre.hlsl",
+      "Kits/FidelityFX/upscalers/fsr4/internal/shaders/fsr4_model_v07_i8_quality/post.hlsl"
+    ]
+  },
+  "hexagon_reference": {
+    "repository": "puzzled-pancake/fsr4-hexagon",
+    "revision": "9cad39911837b1b7a86cabced08192f2b36c0554",
+    "license": "MIT",
+    "paths": [
+      "LICENSE",
+      "model/extract/build_weights.py",
+      "model/sim/fsr4_sim.py",
+      "model/onnx/build_onnx.py"
+    ]
+  },
+  "fastrpc": {
+    "repository": "qualcomm/fastrpc",
+    "revision": "a56e9d4de3614a8d8f4b0e15ff561350c4b686e3",
+    "license": "BSD-3-Clause"
+  },
+  "metal_reference": {
+    "repository": "UzenUPoZiTiV4ik/fsr4-native-macos",
+    "revision": "f3286bde9e9cb74d6d7f55ade86dacabe5de2314"
+  },
+  "qairt": {
+    "version": "2.50.0.260828",
+    "sha256": "a346ea0e2c8631b46d57261a4969994cd9cc34124a8355bbc7b08b2c8bd859a5",
+    "url": "https://softwarecenter.qualcomm.com/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/2.50.0.260828/v2.50.0.260828.zip",
+    "redistribute": false
+  }
+}

@@ -17,6 +17,8 @@ NAME = 'org.armada.Nfc'
 PATH = '/org/armada/Nfc'
 IFACE = 'org.armada.Nfc1'
 NOTICE = 'Settings are saved on this phone. Emulation continues in the background and after reboot until you stop it.'
+MODES = ('off', 'reader', 'emulation', 'ipass')
+MODE_LABELS = ('Off', 'Read nearby tags', 'Emulate text tag', '[UNTESTED] IPASS')
 
 
 class Application(Adw.Application):
@@ -53,7 +55,15 @@ class Application(Adw.Application):
         box.append(scroll)
         self.window.set_content(box)
 
-        group = Adw.PreferencesGroup(title='NFC reader')
+        group = Adw.PreferencesGroup(title='NFC mode')
+        self.mode = Adw.ComboRow(title='Mode', model=Gtk.StringList.new(MODE_LABELS))
+        self.mode.connect('notify::selected', self.mode_changed)
+        group.add(self.mode)
+        self.ipass_notice = Adw.ActionRow(title='[UNTESTED] IPASS',
+            subtitle='Routes NFC-A to the embedded secure element. Another phone detects it during sleep and after waking. Real iPASS reader use is untested.')
+        self.ipass_notice.set_subtitle_lines(0)
+        self.ipass_notice.set_visible(False)
+        group.add(self.ipass_notice)
         self.reader = Adw.SwitchRow(title='Read nearby tags', subtitle='Hold a tag against the upper back of the phone')
         self.reader.connect('notify::active', self.reader_changed)
         group.add(self.reader)
@@ -94,7 +104,7 @@ class Application(Adw.Application):
         self.message = Gtk.Label(label=NOTICE, wrap=True, xalign=0)
         self.message.add_css_class('dim-label')
         content.append(self.message)
-        for widget in (self.reader, self.scan, self.start, self.text, self.custom, self.serial):
+        for widget in (self.mode, self.reader, self.scan, self.start, self.text, self.custom, self.serial):
             widget.set_sensitive(False)
         self.window.present()
         Gio.bus_get(Gio.BusType.SYSTEM, None, self.connected)
@@ -160,6 +170,12 @@ class Application(Adw.Application):
         if not self.updating:
             self.call('SetReader', GLib.Variant('(b)', (row.get_active(),)))
 
+    def mode_changed(self, row, _param):
+        if not self.updating and self.settings_ready:
+            selected = row.get_selected()
+            if selected < len(MODES):
+                self.call('SetMode', GLib.Variant('(s)', (MODES[selected],)))
+
     def emulate(self, *_):
         text = self.text.get_text()
         serial = self.serial.get_text() if self.custom.get_active() else ''
@@ -180,7 +196,7 @@ class Application(Adw.Application):
         if not self.connection or self.request_pending:
             return
         self.request_pending = True
-        for widget in (self.reader, self.scan, self.start, self.stop):
+        for widget in (self.mode, self.reader, self.scan, self.start, self.stop):
             widget.set_sensitive(False)
 
         def done(connection, result):
@@ -214,7 +230,7 @@ class Application(Adw.Application):
             except (GLib.Error, ValueError, KeyError):
                 self.status.set_title('NFC service unavailable')
                 self.status.set_subtitle('Try reopening the app or restarting the phone.')
-                for widget in (self.reader, self.scan, self.start, self.stop):
+                for widget in (self.mode, self.reader, self.scan, self.start, self.stop):
                     widget.set_sensitive(False)
 
         self.connection.call(NAME, PATH, IFACE, 'GetStatus', None, GLib.VariantType.new('(s)'),
@@ -224,18 +240,27 @@ class Application(Adw.Application):
     def update(self, status):
         busy = status['busy']
         emulating = status['mode'] == 'emulating'
+        ipass = status.get('ipass_enabled', False)
+        desired = status.get('desired_mode', 'emulation' if status.get('emulation_enabled') else
+                             'reader' if status['powered'] else 'off')
         self.updating = True
+        self.mode.set_selected(MODES.index(desired) if desired in MODES else 0)
+        self.ipass_notice.set_visible(ipass)
         self.reader.set_active(status['powered'] and not busy)
         self.updating = False
         ready = self.settings_ready and not busy and not self.request_pending
+        self.mode.set_sensitive(self.settings_ready and not self.request_pending and
+                                (not busy or status['mode'] in ('ipass', 'emulating')))
         self.reader.set_sensitive(ready)
         self.scan.set_sensitive(ready and status['powered'])
         self.start.set_sensitive(ready)
-        self.stop.set_sensitive(status.get('emulation_enabled', emulating) and not self.request_pending)
+        self.stop.set_label('Stop IPASS' if ipass else 'Stop emulation')
+        self.stop.set_sensitive((ipass or status.get('emulation_enabled', emulating)) and not self.request_pending)
         for widget in (self.text, self.custom, self.serial):
             widget.set_sensitive(ready)
         self.status.set_title(status['message'])
-        self.status.set_subtitle(f"Text read requests: {status['reads']}" if emulating else
+        self.status.set_subtitle(f"RF fields: {status.get('ipass_field_on', 0)} · eSE actions: {status.get('ipass_ese_actions', 0)}" if ipass else
+                                 f"Text read requests: {status['reads']}" if emulating else
                                  f"Tags detected: {status['tags']}" if status['powered'] else '')
 
     def close(self, *_):

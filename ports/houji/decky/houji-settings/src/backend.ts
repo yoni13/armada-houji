@@ -22,13 +22,15 @@ export interface NfcStatus {
   emulating: boolean;
   busy: boolean;
   message: string | null;
-  desired_mode: "off" | "reader" | "emulation";
-  mode: "off" | "reader" | "starting" | "emulating" | "stopping" | "error" | "ese" | "unavailable";
+  desired_mode: "off" | "reader" | "emulation" | "ipass";
+  mode: "off" | "reader" | "starting" | "emulating" | "stopping" | "error" | "ese" | "unavailable" | "ipass";
   powered: boolean;
   polling: boolean;
   reads: number;
   tags: number;
   notify_on_scan: boolean;
+  ipass_field_on: number;
+  ipass_ese_actions: number;
 }
 
 export interface NfcTag {
@@ -86,6 +88,7 @@ export const getStatus = callable<[], Reply<Status>>("status");
 export const setRotation = callable<[mode: Orientation | "auto"], Reply<RotationStatus>>("set_rotation");
 export const setChargeLimit = callable<[limit: number | null], Reply<ChargingStatus>>("set_charge_limit");
 export const setNfc = callable<[enabled: boolean], Reply<NfcStatus>>("set_nfc");
+export const setNfcMode = callable<[mode: NfcStatus["desired_mode"]], Reply<NfcStatus>>("set_nfc_mode");
 export const nfcAction = callable<[action: "stop" | "scan" | "start_saved"], Reply<NfcStatus>>("nfc_action");
 export const setNfcNotifications = callable<[enabled: boolean], Reply<NfcStatus>>("set_nfc_notifications");
 export const enableCellular = callable<[], Reply<CellularStatus>>("enable_cellular");

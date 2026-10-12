@@ -375,6 +375,8 @@ arch_timer: &{/timer} {
 &ufs_mem_phy {
 	vdda-phy-supply = <&vreg_l1d>;
 	vdda-pll-supply = <&vreg_l3i>;
+	/* Stock votes the QREF rail here; PCIe, USB and DSI must not be its only users. */
+	vdda-qref-supply = <&vreg_l1i>;
 	status = "okay";
 };
 

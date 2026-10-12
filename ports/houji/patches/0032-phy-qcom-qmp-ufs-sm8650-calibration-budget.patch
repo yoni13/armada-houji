@@ -1,0 +1,76 @@
+Subject: [PATCH] phy: qcom-qmp-ufs: give SM8650 PHY calibration the vendor budget
+
+Houji lost its internal storage once on resume: every UFS reinitialization
+attempt failed with "phy initialization timed-out". The UFS core retries the
+whole power-up sequence, but each attempt powers the PHY off and restarts
+calibration, so no attempt waited longer than 10 ms for PCS ready.
+
+The vendor SM8650 PHY driver polls PCS ready for up to 1 s, and its device tree
+also votes the QREF supply (L1I) that feeds the PHY reference clock while the
+PHY is powered. Use the same per-attempt budget, request the QREF supply, and
+report attempts slower than the old budget with the common block status on a
+timeout, so a recurrence can be told apart from a PLL that never locks.
+
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+@@ -36,7 +36,14 @@
+ /* QPHY_PCS_READY_STATUS bit */
+ #define PCS_READY				BIT(0)
+ 
+-#define PHY_INIT_COMPLETE_TIMEOUT		10000
++/*
++ * Every failed attempt powers the PHY off and starts calibration again, so
++ * only the time of a single attempt matters. The vendor SM8650 driver allows
++ * 1 s for PCS ready. Houji once lost storage on resume after every 10 ms
++ * attempt timed out; still report attempts that exceed the old budget.
++ */
++#define PHY_INIT_COMPLETE_TIMEOUT		1000000
++#define PHY_INIT_SLOW_US			10000
+ 
+ #define NUM_OVERLAY				2
+ 
+@@ -1300,6 +1307,8 @@
+ static const struct regulator_bulk_data sm8650_ufsphy_vreg_l[] = {
+ 	{ .supply = "vdda-phy", .init_load_uA = 205000 },
+ 	{ .supply = "vdda-pll", .init_load_uA = 17500 },
++	/* QREF supplies the PHY reference clock; the vendor DT votes it here. */
++	{ .supply = "vdda-qref", .init_load_uA = 64500 },
+ };
+ 
+ static const struct regulator_bulk_data sm8750_ufsphy_vreg_l[] = {
+@@ -1954,6 +1963,8 @@
+ 	void __iomem *pcs = qmp->pcs;
+ 	void __iomem *status;
+ 	unsigned int val;
++	ktime_t start;
++	s64 elapsed;
+ 	int ret;
+ 
+ 	ret = reset_control_assert(qmp->ufs_reset);
+@@ -1972,14 +1983,25 @@
+ 
+ 	/* start SerDes */
+ 	qphy_setbits(pcs, cfg->regs[QPHY_START_CTRL], SERDES_START);
++	start = ktime_get();
+ 
+ 	status = pcs + cfg->regs[QPHY_PCS_READY_STATUS];
+ 	ret = readl_poll_timeout(status, val, (val & PCS_READY), 200,
+ 				 PHY_INIT_COMPLETE_TIMEOUT);
++	elapsed = ktime_us_delta(ktime_get(), start);
+ 	if (ret) {
+-		dev_err(qmp->dev, "phy initialization timed-out\n");
++		if (cfg == &sm8650_ufsphy_cfg)
++			dev_err(qmp->dev,
++				"phy initialization timed-out after %lld us: pcs 0x%x c_ready 0x%x cmn 0x%x\n",
++				elapsed, val,
++				readl(qmp->serdes + QSERDES_V6_COM_C_READY_STATUS),
++				readl(qmp->serdes + QSERDES_V6_COM_CMN_STATUS));
++		else
++			dev_err(qmp->dev, "phy initialization timed-out\n");
+ 		return ret;
+ 	}
++	if (elapsed > PHY_INIT_SLOW_US)
++		dev_warn(qmp->dev, "phy initialization took %lld us\n", elapsed);
+ 
+ 	return 0;
+ }

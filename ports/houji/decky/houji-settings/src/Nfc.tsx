@@ -4,7 +4,7 @@ import {
 } from "@decky/ui";
 import { useEffect, useState } from "react";
 import {
-  getNfcTag, nfcAction, setNfc, setNfcNotifications, updateNfcTag, type NfcStatus, type NfcTag, type Reply,
+  getNfcTag, nfcAction, setNfcMode, setNfcNotifications, updateNfcTag, type NfcStatus, type NfcTag, type Reply,
 } from "./backend";
 
 type Report = (reply: Promise<Reply<unknown>>) => void;
@@ -93,13 +93,13 @@ export function NfcTagModal({ closeModal, changed }: { closeModal?(): void; chan
 export function NfcPanel({ status, pending, report, refresh }: {
   status: NfcStatus; pending: boolean; report: Report; refresh(): void;
 }) {
-  const emulationWorker = status.mode === "emulating";
+  const emulationWorker = status.mode === "emulating" || status.mode === "ipass";
   // The emulation worker remains busy while listening. Off/Reader/Stop must
   // still work then; starting/stopping and eSE sessions must finish first.
   const changing = pending || (status.busy && !emulationWorker);
   const chooseMode = (mode: NfcStatus["desired_mode"]) => {
     if (mode === status.desired_mode) return;
-    report(mode === "emulation" ? nfcAction("start_saved") : setNfc(mode === "reader"));
+    report(setNfcMode(mode));
   };
   return (
     <PanelSection title="NFC">
@@ -111,6 +111,7 @@ export function NfcPanel({ status, pending, report, refresh }: {
             { data: "off", label: "Off" },
             { data: "reader", label: "Read nearby tags" },
             { data: "emulation", label: "Emulate text tag" },
+            { data: "ipass", label: "[UNTESTED] IPASS" },
           ]}
           disabled={changing}
           onChange={(option) => chooseMode(option.data)}
@@ -119,6 +120,28 @@ export function NfcPanel({ status, pending, report, refresh }: {
       <PanelSectionRow>
         <Field label="Status" description={status.message ?? "NFC service unavailable"} />
       </PanelSectionRow>
+      {status.desired_mode === "ipass" && (
+        <>
+          <PanelSectionRow>
+            <Field label="[UNTESTED] IPASS" description="Routes NFC-A to the embedded secure element. Another phone detects it during sleep and after waking. Real iPASS reader use is untested." />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <Field label="RF activity" description={`${status.ipass_field_on} fields · ${status.ipass_ese_actions} eSE actions (not transaction confirmations)`} />
+          </PanelSectionRow>
+          {status.mode === "error" && (
+            <PanelSectionRow>
+              <ButtonItem layout="below" disabled={pending || status.busy} onClick={() => report(setNfcMode("ipass"))}>
+                Retry [UNTESTED] IPASS
+              </ButtonItem>
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
+            <ButtonItem layout="below" disabled={pending} onClick={() => report(setNfcMode("off"))}>
+              Stop IPASS and restore eSE state
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
+      )}
       {status.desired_mode === "reader" && (
         <>
           <PanelSectionRow>

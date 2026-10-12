@@ -1,0 +1,13 @@
+[Unit]
+Description=Houji GameSir X2s desktop and Game Mode routing
+Wants=inputplumber.service
+After=inputplumber.service
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/libexec/armada/houji-x2s-session
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

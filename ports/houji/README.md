@@ -79,7 +79,7 @@ Results below are from the development handset.
 | Battery | Voltage, current, charge level, Steam time estimates and USB-PD. The battery is named `battery`, as elsewhere in Armada, so Steam's performance overlay (MangoHud) shows its level, power while discharging and time remaining. While discharging, the percentage never reads above the gauge's remaining charge, and while charging it reads at most 3 points above it, so plugging in the charger no longer jumps the figure up. A full battery reads 100%. |
 | Performance overlay | Steam's overlay levels show only readings this phone provides; per-component CPU and GPU power have no sensor here and are left out. The battery percentage matches Steam's: the port builds the overlay (`mangoapp`) with MangoHud patches `0007` and `0008` until the pinned Armada image includes them. With `0008` the overlay only redraws when the app draws, so it doesn't keep the screen busy while Steam is idle. |
 | USB device | Charging by default. File transfer (MTP) on demand through Armada's switch. USB 3 at 5 Gb/s in both cable orientations, USB 2 fallback. No USB shell or network gadget. |
-| USB host (OTG) | Wired gamepad and a Pixel webcam, including 5 Gb/s video. A GameSir X2s Type-C clip-on controller works through an InputPlumber profile that presents it to Steam as a Steam Deck controller: its Home button opens Quick Access and its record button is the Steam button. Both buttons act when released; the controller only reports them then. |
+| USB host (OTG) | Wired gamepad and a Pixel webcam, including 5 Gb/s video. In Game Mode, the GameSir X2s Type-C uses a Steam Deck mapping: Home opens Quick Access and record opens Steam, both on release. Desktop Mode exposes the original X2s gamepad directly, with an SDL gamepad mapping. |
 | Mouse pointer | Steam's controller-as-mouse pointer shows in games, scaled for the high-density panel (`ARMADA_GAMESCOPE_CURSOR_SCALE_HEIGHT=600`). |
 | Houji Settings | A Decky plugin in Game Mode's Quick Access menu for settings Steam does not have: rotation lock, charge limit, data SIM, eSIM profiles (including download), mobile data, roaming and NFC. See [Houji Settings](#houji-settings). |
 | NPU (compute DSP) | The CDSP, which holds the Hexagon NPU, boots from the handset's own stock firmware. FastRPC works: process domains are created from the stock DSP shell, and the logged-in user can open `/dev/fastrpc-cdsp`. No NPU runtime or model is included; Qualcomm's QAIRT/QNN SDK must be brought separately. |
@@ -121,6 +121,13 @@ Results below are from the development handset.
   re-suspend immediately after a zero-duration sensor-DSP wake. No current
   panic record was retained. RTC, DSP dark-wake and Power-key comparison tests
   subsequently passed, so those successes do not establish long-term reliability.
+- **Native sleep resume lost internal storage once.** UFS PHY initialization
+  failed on every retry during resume, and a Power + Volume Down warm reset was
+  needed (ext4 journal recovery completed). Each retry had only mainline's 10 ms
+  to lock. The kernel now allows the stock driver's 1 s and votes stock's QREF
+  supply. 10 timed sleeps (16 resumes) passed, but the failure was rare, so a
+  recurrence is still possible; it would now log the lock time. See
+  [HISTORY.md](HISTORY.md#internal-storage-lost-on-resume-ufs-phy-did-not-initialize-2026-10-10).
 - **Wake from sleep is not instant.** Display wake took roughly one to two
   seconds in testing.
 - **Wi-Fi wake-on-LAN (WoWLAN) is off by default.** A faster-wake trial caused a
@@ -146,6 +153,16 @@ Results below are from the development handset.
   correct time, then run `sudo systemctl restart armada-flatpak-setup.service`.
 - **Kernel warning.** The ath12k driver logs an hwmon resume warning. Wi-Fi
   reconnects afterward.
+- **Hogwarts Legacy (Heroic/Epic, CachyOS Proton 11 ARM64).** The native FSR
+  DX12 backend crashed after the photosensitivity warning on Adreno 750. Using
+  FSR's Unreal RHI fallback passed startup; see the [tested game-local
+  workaround](HISTORY.md#hogwarts-legacy-crashed-after-the-warning-screen-2026-10-10).
+- **GTA V Enhanced (Rockstar, Proton 11 ARM64).** Reached the opening Story
+  Mode mission using game-local x86-64 DXGI/D3D12 libraries from the installed
+  Proton build. Its Social Club overlay crashes with the ARM64 graphics path;
+  disabling that overlay instead stalls initialization. Some wave32 shaders
+  are still rejected on Adreno 750; longer play and rendering correctness remain
+  unverified. See the [working setup](HISTORY.md#gta-v-enhanced-crashed-during-frame-presentation-2026-10-11).
 
 ## Firmware and boot layout
 
@@ -559,9 +576,13 @@ over a long sleep or with wireless charging.
   Mobile's default only turns the screen off; the port sets the power-button
   action to Sleep and binds the Power key to it once per user. Both can be
   changed in Plasma's settings.
-- **During an authenticated wired charging session**, Power uses light sleep so the
-  host thermal monitor keeps running with the screen off. It returns to the
-  configured mode when charging ends or the cable is unplugged.
+- **While external power is connected**, Power uses light sleep, including at
+  full charge or a charge-limit hold, through the X2s, and on wireless power.
+  Games stay frozen while the host thermal monitor keeps running. This does not
+  depend on USB-PD authentication or the charging service staying active. After
+  three consecutive offline checks (about six seconds) it returns to the
+  configured mode—native `s2idle` by default. A brief USB-PD renegotiation or
+  unreadable power status does not trigger native sleep.
 - **Direct native suspend while charging** cuts the charging vote to 500 mA until
   the monitor resumes.
 - **Sensor-DSP wakeups.** Every few minutes to an hour the sensor DSP asks the
@@ -655,6 +676,14 @@ Limits:
 
 ## USB and privacy
 
+**GameSir X2s in Desktop Mode:** games see the physical **GameSir-X2s Type-C**
+controller without Steam running. `houji-x2s-session` changes the InputPlumber
+profile when switching between Plasma and Game Mode; Game Mode keeps the Home
+→ Quick Access / record → Steam mapping. The separate Consumer Control report
+stays intercepted in Plasma so record cannot send its firmware's Power/Volume
+Down shortcut to the desktop. This exposes a gamepad, not a stick-to-mouse
+desktop layout. InputPlumber reloads once at each session change.
+
 USB starts in charging mode. Enable file transfer with Armada's MTP switch. OTG
 role detection stays on for wired peripherals. The port adds no automatic SSH,
 ADB, serial login, network gadget or test-network connection. Remote access must
@@ -672,6 +701,9 @@ keys or saved network profiles.
 Open **NFC Manager** from KDE's application menu (under Settings). It is a
 separate app, not a System Settings page.
 
+The **Mode** selector offers Off, Read nearby tags, Emulate text tag, and
+**[UNTESTED] IPASS**. It uses the same saved mode as Houji Settings in Game Mode.
+
 **Read tags.** Turn on **Read nearby tags**, then hold a tag against the upper
 back of the phone. The app shows scan status and a count of detected tags. Use
 **Scan again** to retry. It does not display or save card contents.
@@ -683,7 +715,7 @@ read-only NDEF text record of up to 200 UTF-8 bytes.
 
 - Text, serial choice and mode are saved on the phone and restored at boot.
 - Emulation keeps running after you close the app or end the desktop session.
-- Tap **Stop emulation** to stop broadcasting and return to the saved reader setting.
+- Tap **Stop emulation** to turn NFC off, or choose Reader in the mode selector.
 - NFC starts off on a fresh install.
 
 **How it works.** The interface runs as the desktop user. A background system
@@ -696,6 +728,40 @@ shared NFC supply during emulation. It uses the GTK4, libadwaita and PyGObject
 libraries already in the pinned Armada base, so no private files or Python
 downloads are needed. It does not implement payments, physical-card copying or
 other card applications.
+
+### [UNTESTED] IPASS mode
+
+Select **[UNTESTED] IPASS** in NFC Manager or Houji Settings → NFC → Mode to
+activate the candidate applet already on this handset's eSE and route NFC-A,
+ISO-DEP and its exact AID to that secure element. The controller supplies the
+RF configuration (`NFCC_CONFIG_CONTROL=01`) and handles RF traffic through the
+eSE rather than the text-tag responder. A missing applet produces an error;
+this mode does not provision a card.
+
+**Phone-to-phone detection works during sleep and after waking.** In a supervised
+test on battery, the owner scanned the phone repeatedly while its screen stayed
+off and again after pressing Power to wake it. Timing measurements confirmed
+216.65 seconds in native `s2idle`, including sensor-DSP dark wakes, with the same
+NFC process surviving throughout. The eSE handles RF while Linux is suspended;
+this requires no light-sleep override or sleep inhibitor. This verifies detection,
+not transit transactions. Real iPASS terminal use, card personalization,
+balances/history and long-term sleep reliability remain unverified. RF field
+and eSE-action counters show activity, not successful transit transactions.
+
+The selected mode persists across service restarts and boots. Switching to Off,
+Reader or Text-tag emulation stops off-host listening, restores the applet's
+previous contactless activation state, clears the temporary routes, and restores
+the saved controller configuration before starting the next mode. The service
+saves a root-only recovery record at `/var/lib/armada-nfc/ipass-restore.json`
+before activation and removes it only after verifying restoration. If a previous
+session was interrupted, it attempts recovery before applying the saved mode.
+Settings from older builds migrate with IPASS disabled.
+
+You can also stop it from a terminal:
+
+```sh
+sudo busctl call org.armada.Nfc /org/armada/Nfc org.armada.Nfc1 SetMode s off
+```
 
 ### Command-line reading
 
@@ -771,11 +837,14 @@ keeps the saved NFC settings and does not log APDUs or response contents.
 Use stdin rather than command-line arguments for private APDUs, and do not
 publish response files containing chip or application identifiers.
 
-The firmware maintains the APDU pipe. Creating it anew fails with HCI
-`ANY_E_NOK`; opening or closing it with generic HCI commands fails with
-`ANY_E_CMD_NOT_SUPPORTED`. The implementation reads its existing state and
-maximum APDU size, handles credits and HCP fragmentation, and uses that pipe
-directly. No kernel rebuild or Android runtime is required.
+The firmware maintains the APDU pipe. While its state (`A023`) reports it
+created, creating it anew fails with HCI `ANY_E_NOK`, and opening or closing
+it with generic HCI commands fails with `ANY_E_CMD_NOT_SUPPORTED`. The
+implementation reads its existing state and maximum APDU size, handles
+credits and HCP fragmentation, and uses that pipe directly. If `A023` reports
+no pipe, it recreates and opens it as NXP's Android stack does; the firmware
+must assign `0x19` again, otherwise the session stops. No kernel rebuild or
+Android runtime is required.
 
 ## Houji Settings
 
@@ -792,7 +861,7 @@ not have:
   Switching SIMs restarts the modem.
 - **eSIM profiles** (with eSIM chosen as the data SIM): list, switch, rename and
   delete profiles, and download a new one by typing its activation code.
-- **NFC:** Off, Reader or Text-tag emulation, with live status, tag count and text
+- **NFC:** Off, Reader, Text-tag emulation or **[UNTESTED] IPASS**, with live status, tag count and text
   read-request count. **Configure emulated tag** edits the saved text (200 UTF-8
   bytes maximum) and optional four-byte NFC-A serial. Save it for later or start
   emulation from the editor. Stop emulation stays available while a reader is
@@ -801,6 +870,9 @@ not have:
   reboot until stopped. The supported emulation is a read-only NFC Forum Type 4
   text tag; setting a serial does not reproduce another card's applications or
   authentication.
+  - **[UNTESTED] IPASS** enables the experimental off-host eSE routing described
+    above. The panel shows RF activity and a Stop IPASS control. Both UIs wait
+    for eSE/controller restoration before switching to the next NFC mode.
   - In Reader mode, **Notify when a tag is found** controls Steam notifications
     for new scans. It defaults to off and persists across reboots. When enabled,
     the plugin watches even with Quick Access closed, counts each new tag object

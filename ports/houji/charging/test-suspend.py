@@ -18,34 +18,33 @@ class ChargingSleepTest(unittest.TestCase):
         child.wait.return_value = 0
         child.poll.return_value = 0
         active, run = Mock(), Mock()
-        self.assertFalse(s.sleep_while_charging(active, Mock(return_value=child), run))
+        self.assertFalse(s.sleep_while_connected(active, Mock(return_value=child), run))
         active.assert_not_called()
         run.assert_not_called()
 
-    def test_detach_or_full_charge_cleans_up_then_uses_native_sleep(self):
+    def test_confirmed_detach_cleans_up_then_uses_native_sleep(self):
         child = Mock()
-        child.wait.side_effect = [subprocess.TimeoutExpired('sleep', 2),
-                                  subprocess.TimeoutExpired('sleep', 2), 0]
+        child.wait.side_effect = [subprocess.TimeoutExpired('sleep', 2)] * 4 + [0]
         child.poll.side_effect = [None, 0]
-        active, run = Mock(side_effect=[True, False]), Mock()
-        self.assertTrue(s.sleep_while_charging(active, Mock(return_value=child), run))
+        active, run = Mock(side_effect=[True, False, False, False]), Mock()
+        self.assertTrue(s.sleep_while_connected(active, Mock(return_value=child), run))
         run.assert_called_once_with([s.LIGHT_SLEEP, 'wake'], check=True, timeout=3)
         child.terminate.assert_not_called()
 
     def test_failed_cleanup_never_enters_native_sleep(self):
         child = Mock()
-        child.wait.side_effect = [subprocess.TimeoutExpired('sleep', 2), 1]
+        child.wait.side_effect = [subprocess.TimeoutExpired('sleep', 2)] * 3 + [1]
         child.poll.side_effect = [None, 1]
         with self.assertRaises(RuntimeError):
-            s.sleep_while_charging(Mock(return_value=False), Mock(return_value=child), Mock())
+            s.sleep_while_connected(Mock(return_value=False), Mock(return_value=child), Mock())
 
     def test_detach_during_entry_reissues_wake_after_handler_is_ready(self):
         child = Mock()
-        child.wait.side_effect = [subprocess.TimeoutExpired('sleep', 2),
+        child.wait.side_effect = [subprocess.TimeoutExpired('sleep', 2)] * 3 + [
                                   subprocess.TimeoutExpired('sleep', 1), 0]
         child.poll.side_effect = [None, 0]
         run = Mock()
-        self.assertTrue(s.sleep_while_charging(Mock(return_value=False), Mock(return_value=child), run))
+        self.assertTrue(s.sleep_while_connected(Mock(return_value=False), Mock(return_value=child), run))
         self.assertEqual(run.call_count, 2)
 
     def test_exception_terminates_light_sleep_for_its_cleanup(self):
@@ -53,11 +52,11 @@ class ChargingSleepTest(unittest.TestCase):
         child.wait.side_effect = [subprocess.TimeoutExpired('sleep', 2), 0]
         child.poll.return_value = None
         with self.assertRaises(RuntimeError):
-            s.sleep_while_charging(Mock(side_effect=RuntimeError('test')), Mock(return_value=child), Mock())
+            s.sleep_while_connected(Mock(side_effect=RuntimeError('test')), Mock(return_value=child), Mock())
         child.terminate.assert_called_once()
 
     def run_main(self, env):
-        with mock.patch.object(s, 'charging_active', return_value=False), \
+        with mock.patch.object(s, 'charger_connected', return_value=False), \
              mock.patch.object(s.os, 'access', return_value=True), \
              mock.patch.object(s.os, 'execv') as execv, \
              mock.patch.dict(os.environ, env, clear=True):
@@ -74,12 +73,49 @@ class ChargingSleepTest(unittest.TestCase):
         self.assertEqual(env['ARMADA_SYSTEMD_SLEEP'], '/custom')
 
     def test_a_missing_dark_resume_step_leaves_the_dispatch_default(self):
-        with mock.patch.object(s, 'charging_active', return_value=False), \
+        with mock.patch.object(s, 'charger_connected', return_value=False), \
              mock.patch.object(s.os, 'access', side_effect=lambda path, mode: path != s.NATIVE_SLEEP), \
              mock.patch.object(s.os, 'execv'), \
              mock.patch.dict(os.environ, {}, clear=True):
             s.main()
             self.assertNotIn('ARMADA_SYSTEMD_SLEEP', os.environ)
+
+    def test_query_failure_and_daemon_restart_do_not_allow_native_sleep(self):
+        for status, output in [(0, 'light\n'), (1, 'offline\n'), (1, ''), (2, ''), (-15, '')]:
+            with mock.patch.object(s.subprocess, 'run', return_value=Mock(returncode=status, stdout=output)) as run:
+                self.assertEqual(s.charger_connected(), not (status == 1 and output == 'offline\n'))
+                run.assert_called_once_with([s.POLICY, '--needs-light-sleep'], capture_output=True, text=True, timeout=3)
+        for error in [OSError(), subprocess.TimeoutExpired('policy', 3)]:
+            with mock.patch.object(s.subprocess, 'run', side_effect=error):
+                self.assertTrue(s.charger_connected())
+
+    def test_brief_offline_reports_do_not_leave_light_sleep(self):
+        child = Mock()
+        child.wait.side_effect = [subprocess.TimeoutExpired('sleep', 2)] * 5 + [0]
+        child.poll.return_value = 0
+        connected = Mock(side_effect=[False, False, True, False, False])
+        run = Mock()
+        self.assertFalse(s.sleep_while_connected(connected, Mock(return_value=child), run))
+        run.assert_not_called()
+        child.terminate.assert_not_called()
+
+    def test_reconnection_during_cleanup_reenters_light_sleep(self):
+        with mock.patch.object(s, 'charger_connected', side_effect=[True, True]), \
+                mock.patch.object(s, 'sleep_while_connected', side_effect=[True, False]) as sleep, \
+                mock.patch.object(s.os, 'execv') as execv:
+            s.main()
+            self.assertEqual(sleep.call_count, 2)
+            execv.assert_not_called()
+
+    def test_confirmed_detach_dispatches_native_sleep(self):
+        with mock.patch.object(s, 'charger_connected', side_effect=[True, False]), \
+                mock.patch.object(s, 'sleep_while_connected', return_value=True), \
+                mock.patch.object(s.os, 'access', return_value=True), \
+                mock.patch.object(s.os, 'execv') as execv, \
+                mock.patch.dict(os.environ, {}, clear=True):
+            s.main()
+            self.assertEqual(os.environ['ARMADA_SYSTEMD_SLEEP'], s.NATIVE_SLEEP)
+            execv.assert_called_once_with(s.DISPATCH, [s.DISPATCH])
 
 
 if __name__ == '__main__':

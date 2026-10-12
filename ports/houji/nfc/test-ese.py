@@ -81,7 +81,52 @@ class Firmware(Transport):
             raise AssertionError('Unexpected NCI command')
 
 
+class MissingPipeFirmware(Firmware):
+    """A023 = 0 until ADM_CREATE_PIPE, as seen after a reboot on 2026-10-12."""
+    def __init__(self, assigned=0x19):
+        super().__init__()
+        self.assigned, self.created, self.opened = assigned, False, False
+
+    def write(self, packet):
+        head, opcode = packet[:2]
+        if head == 0x20 and opcode == 3:
+            Transport.write(self, packet)
+            state = 1 if self.created and self.opened else 0
+            self.packets.append(nci(0x40, 3, bytes.fromhex('0002a02301') + bytes((state,)) + bytes.fromhex('a0220102')))
+            return
+        if head == 1:
+            pipe, command = packet[3] & 127, packet[4]
+            if pipe == 1 and command == 0x10:
+                Transport.write(self, packet)
+                if packet[5:] != b'\x30\xc0\x30':
+                    raise AssertionError('Unexpected pipe creation request')
+                self.created = True
+                self.packets.extend((hci(1, 0x80, bytes((1, 0x30, 0xc0, 0x30, self.assigned))), credit()))
+                return
+            if pipe == self.assigned and command == 3 and self.created and not self.opened:
+                Transport.write(self, packet)
+                self.opened = True
+                self.packets.extend((hci(pipe, 0x80), credit()))
+                return
+        super().write(packet)
+
+
 class Protocol(unittest.TestCase):
+    def test_missing_pipe_is_recreated_and_opened(self):
+        transport = MissingPipeFirmware()
+        session = ese.Session(transport)
+        session.open()
+        self.assertTrue(transport.created and transport.opened)
+        self.assertEqual(session.maximum, 32768)
+        self.assertEqual(session.exchange(bytes.fromhex('00a4040008a000000151000000'))[-2:], b'\x90\0')
+        session.close()
+
+    def test_unexpected_pipe_number_is_refused(self):
+        transport = MissingPipeFirmware(assigned=0x1a)
+        with self.assertRaisesRegex(ese.ProtocolError, 'pipe 1a, not 19'):
+            ese.Session(transport).open()
+        self.assertFalse(transport.opened)
+
     def test_existing_pipe_and_repeated_apdus(self):
         transport = Firmware()
         session = ese.Session(transport)

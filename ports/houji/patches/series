@@ -28,3 +28,4 @@
 0029-nfc-houji-retain-shared-euicc-power.patch
 0030-net-ipa-sm8650-endpoint-map.patch
 0031-wifi-ath12k-panic-handler-without-mhi-wake.patch
+0032-phy-qcom-qmp-ufs-sm8650-calibration-budget.patch

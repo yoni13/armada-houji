@@ -509,10 +509,10 @@ for every DSP request.
   line is `simple-pm-bus soc@0: PM: simple_pm_bus_suspend returned 0`, the final
   device callback before the SoC enters s2idle. In a successful cycle the next
   line is `simple_pm_bus_resume`. There was no panic record, and the PMIC logged
-  a PS_HOLD warm reset. So no Linux device driver hung. The reset came while the
-  SoC was in, or entering, its idle state, outside Linux: firmware, the
-  hypervisor or the power controller. Linux never got far enough to log a resume.
-- **Common point:** all five resets in native sleep came as the system went back
+  a PS_HOLD warm reset. The last recorded device callback completed successfully;
+  no resume was recorded. This does not establish whether the failure was in
+  later Linux suspend/idle code, firmware, the hypervisor or the power controller.
+- **Common point at that time:** all five resets in native sleep came as the system went back
   to sleep milliseconds (2.5–3 ms) after a sensor-DSP dark wake. Some came after
   a dark wake that followed only 1–2 s of sleep. The root cause is still unknown.
 - **Mitigation (2026-10-09):** `houji-sleep` waits `DARK_SETTLE` (0.3 s, chosen by
@@ -523,10 +523,133 @@ for every DSP request.
   dark wake, on top of about 1.6 s per round trip. A USB-PD charger keeps the
   phone in light sleep, where this loop does not run.
 - **Conclusion:** intermittent native sleep/wake reset remains unresolved.
-  Re-suspending after a sensor-DSP dark wake is a lead, not a proven cause.
-  No speculative kernel or sleep-policy fix was applied.
+   Re-suspending after a sensor-DSP dark wake is a lead, not a proven cause.
+   No speculative kernel or sleep-policy fix was applied.
+
+### Reset on the first native-sleep entry (2026-10-10)
+
+- **Report:** the owner pressed Power to sleep and the phone rebooted. This
+  followed removal of the experimental offscreen-download feature. The installed
+  Power handler, native display hook and sleep helper matched the committed
+  pre-feature versions byte for byte; the previous boot had no offscreen-service
+  journal entries, and its units and configuration were absent after reboot.
+- **Retained evidence:** a 344,119-byte ramoops console and the previous journal
+  were preserved in a root-only incident directory on the handset. Power was
+  pressed at boot time 1260.034 s; `PM: suspend entry (s2idle)` was recorded at
+  1263.086 s. The console ends at 1263.396 s after
+  `simple_pm_bus_suspend returned 0`. There is one suspend entry and no resume
+  or sensor-DSP dark-wake event in that boot. No panic/oops record, kernel panic,
+  watchdog lockup, remoteproc crash or orderly restart was retained.
+- **Meaning:** the failure can occur on initial sleep entry, not only during
+  rapid re-suspend after a dark wake. The 0.3-second dark-wake settle is therefore
+  not a complete fix. A successful last callback and absent panic trace do not
+  identify the reset initiator or rule out Linux. Native sleep remains enabled;
+  no further crash/suspend trial or speculative runtime change was made during
+  this inspection.
+
+### Three resets while charging through the X2s (2026-10-10)
+
+- **Owner's context:** all three resets in the 04:00–12:00 UTC+8 interval
+  happened with the charger connected through the GameSir X2s. The owner was
+  asleep and could not establish the battery level at the failures. Clock-sync
+  records put the subsequent boot starts at approximately 05:55:10, 11:34:11 and
+  11:55:41. The preceding journals end at 05:21:00, 11:12:54 and 11:55:14; those
+  gaps do not establish the exact reset times.
+- **Shared retained sequence:** all three ramoops consoles show native s2idle
+  entry, `native suspend: reduced host FCC to 500 mA`, successful USB-device,
+  xHCI and DWC3 suspend callbacks, then end after the final recorded
+  `simple_pm_bus_suspend` callback. USB-PD policy was active in each preceding
+  boot. No USB disconnect/enumeration failure was retained immediately before
+  the final suspend. Successful callbacks do not rule out a later USB/PD or
+  power-role interaction.
+- **Policy lead:** the first boot entered charging light sleep at 03:59:03 and
+  later reached native suspend. The charging guard is based on active charging,
+  not cable attachment alone: `Full`, or `Not charging` at 100%, permits native
+  sleep while still plugged in. Missing telemetry, an unavailable charging
+  service or a timed-out policy query also removes the guard. Thus overnight
+  completion could expose the native-sleep failure, but status/capacity and the
+  exact guard rejection reason were not captured at these transitions.
+- **Assessment:** charging through the X2s is a common condition and warrants
+  comparison with direct charging and battery-only operation. Neither the X2s,
+  the 500 mA reduction nor full-charge transition is a proven cause. Keeping
+  light sleep for the whole external-power attachment would avoid this native
+  transition, but was not applied during the read-only investigation. Native
+  sleep on battery and the charging policy remain as configured.
   Raw evidence is retained root-only on the handset; diagnostic logging and
   the temporary alarm/hook were restored/removed after the tests.
+
+### Internal storage lost on resume: UFS PHY did not initialize (2026-10-10)
+
+- **Report:** after a long Hogwarts Legacy session on battery, the owner slept
+  the phone; on wake the screen stayed black. The X2s stayed powered, but Wi-Fi
+  never returned. A Power + Volume Down warm reset preserved the console log.
+- **Retained sequence:** native s2idle entered and exited normally. During
+  resume, `ufshcd_system_resume` fully reinitialized the UFS link, as expected
+  with `spm_lvl=5`, because SM8550/SM8650 have no UFS PHY retention. Every attempt
+  failed: `qcom-qmp-ufs-phy: phy initialization timed-out`, `Failed to calibrate
+  PHY: -110`, then `Host init failed -5` and `ufshcd_wl_resume failed`. All 15
+  attempts failed within about one second, followed by SCSI/EROFS read errors on
+  the root image. The display and network could not recover because userspace
+  could no longer read storage. No panic, GPU hang or lockup was retained.
+- **History:** none of the five earlier retained crash consoles or recent kernel
+  journals contained this PHY failure. Those consoles hold eight complete native
+  resumes, all with a working PHY, and three native sleeps earlier in the same
+  boot also resumed normally. The kernel already includes upstream's SM8650
+  resume handling (power off an already-powered PHY before reinitialization).
+- **Comparison with stock:** each UFS retry powers the PHY off and restarts
+  calibration, so one attempt never had more than mainline's 10 ms to reach
+  `PCS_READY`. The 15 retries did not add up to one longer wait. Xiaomi's vendor
+  PHY driver (`phy-qcom-ufs-qmp-v4-pineapple`) allows 1 s per attempt. Stock's
+  `dtbo` also votes three rails for the PHY: `vdda-phy` (L1D), `vdda-pll` (L3I)
+  and `vdda-qref` (L1I, 64.5 mA). L1I feeds QREF, which supplies the PHY
+  reference clock. Mainline has no QREF vote, so here L1I stayed on only while
+  PCIe, USB or DSI held it. At this resume PCIe had already linked up, so L1I was
+  on. The missing QREF vote is therefore a latent gap rather than a proven cause.
+- **Change:** patch 0032 gives each SM8650 calibration attempt the vendor's 1 s,
+  requests `vdda-qref`, and the board DT points it at L1I. A slower lock than the
+  old 10 ms budget is logged with its duration. A timeout now logs the PCS and
+  common-block ready/status registers, so a recurrence can be told apart from a
+  PLL that never locks.
+- **Result:** installed as kernel-only update `7.2.6-armada-houji-kufs1`, by
+  writing `boot_b` and `vendor_boot_b` from Linux with read-back verification.
+  Rollback images, hash-identical to the previous slot contents, are kept on the
+  host. After boot, `regulator_summary` lists `1d80000.phy-vdda-qref` as an L1I
+  consumer. The usual 85 modules loaded, and Wi-Fi, audio and the CDSP worked.
+  On battery, 10 RTC-timed native sleeps through the normal `systemctl suspend`
+  path produced 16 kernel suspend/resume cycles (including dark wakes) with no
+  failures. No PHY init exceeded 10 ms, and there were no timeouts or I/O
+  errors. The original failure was rare (none in eight retained resumes), so
+  this test shows the change is safe. It does not prove the cause is gone. A
+  recurrence would now log its lock time or status registers.
+- **Recovery:** after the warm reset, ext4 replayed its journal on the userdata
+  filesystem, deleted two orphan inodes and reported a clean state. Raw evidence
+  is retained root-only on the handset.
+
+### Keep light sleep for the entire charger attachment (2026-10-10)
+
+- **Request:** keep light sleep while plugged in, even at full charge, and
+  retain native sleep on battery after the three charger/X2s-associated resets.
+- **Change:** `--needs-light-sleep` now checks the wired and wireless supply
+  `online` properties. Battery status/capacity, PD type, authentication and
+  charging-daemon state no longer release the light-sleep guard. Missing or
+  invalid telemetry from a required/present supply, query errors and timeouts
+  keep light sleep; a missing optional wireless supply does not prevent normal
+  battery sleep. The query emits an explicit `offline` result so an interpreter
+  failure cannot be mistaken for an unplugged charger.
+- **Detach handling:** three consecutive offline checks, about six seconds,
+  are required before ending charging light sleep. An online or unknown result
+  resets that count. The wrapper rechecks after thaw/input cleanup in case the
+  charger reconnected. A normal Power wake still ends the sleep lifecycle.
+- **Verification:** 25 charging-policy tests, 12 charging-sleep tests, 40 native
+  sleep tests and the light-sleep shell checks passed. They cover full/held
+  batteries, non-PD supplies, absent authentication, wireless power, telemetry
+  and query failures, short offline reports, reconnect during cleanup, Power
+  wake, and return to native sleep after confirmed detach. The two helpers were
+  installed with backups while awake. Live read-only checks selected configured
+  `s2idle` unplugged, then light sleep with USB online and the Type-C sink role
+  while charging through the X2s at 92%. No live full-charge, sleep or overnight
+  stability test was performed for this change; the reset root cause remains
+  unresolved.
 
 ### Crash logs did not survive a reset (2026-10-08)
 
@@ -1222,6 +1345,27 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
 - **Result:** Tested on the phone with the rebuilt `mangoapp`; the overlay
   shows the same percentage as Steam.
 
+### Performance overlay stopped updating during a long Game Mode session (2026-10-11)
+
+- **Report:** no MangoHud appeared over GTA V Enhanced despite Steam's overlay
+  level being 4. Game Mode uses the separate `mangoapp` process, so the absence
+  of a MangoHud Vulkan layer inside the game was expected.
+- **Evidence:** the overlay process was alive but its statistics-reader thread
+  waited on a futex. Gamescope's message queue held 188 messages (16,356 bytes),
+  and its last read was more than an hour old. The exact blocking operation
+  was not captured before recovery.
+- **Recovery:** terminating only `mangoapp` let the existing session loop
+  restart it. The queue drained and continued receiving/consuming messages;
+  a full-composition screenshot confirmed the level-4 HUD over GTA. Steam and
+  Gamescope were not restarted. This is a recovery, not a permanent fix for the
+  underlying stall.
+- **Screenshot detail:** `gamescopectl screenshot` defaults to the base plane
+  and omits overlays. The X11 root property
+  `GAMESCOPECTRL_DEBUG_REQUEST_SCREENSHOT=3` requests full composition at
+  `/tmp/gamescope.png`, which includes the HUD. The installed `gamescopectl`
+  forwards only one argument, so adding a third CLI argument does not select
+  that screenshot type.
+
 ## Audio, Bluetooth and haptics
 
 ### Speakers and microphone
@@ -1351,6 +1495,62 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   device. Its default here, the first of `ARMADA_IP_TARGETS`, is `deck-uhid`.
   Choosing an Xbox type in Armada Control would put the X2s back on the Xbox 360
   target, where a 5 ms Quick Access can open the Steam menu instead.
+
+### Physical X2s gamepad in Desktop Mode (2026-10-10)
+
+- **Report:** the controller did not work in Plasma; the owner requested its
+  original X2s gamepad identity. InputPlumber hid the physical gamepad and exposed
+  `deck-uhid`, which was bound to `hid-generic` with a hidraw interface but no
+  standard virtual gamepad event device. Steam was not running in that session.
+- **Change:** a Houji session watcher publishes an X2s-specific InputPlumber
+  override. Plasma ignores the physical gamepad source, exposing its normal
+  evdev/joystick interface. It keeps the Consumer Control source intercepted
+  with a keyboard-only target so the record button's Power/VolumeDown report
+  cannot sleep the desktop. Game Mode restores the existing complete X2s
+  profile, including Deck emulation and the Home/record swap. Plasma takes
+  precedence over a nested per-game Gamescope, and logout gaps retain the last
+  profile. The override also applies to future hotplug.
+- **Rediscovery:** this InputPlumber version's CreateCompositeDevice API is a
+  stub and its evdev discovery watches devnode creation, not synthetic udev add
+  events. The helper therefore restarts InputPlumber once at a session change.
+  It does not reset the USB connection or require Steam to run in Plasma.
+- **Verified:** five routing tests passed. Live profile switching restored two
+  source interfaces and a Deck + keyboard target for Game Mode, then the raw
+  gamepad and keyboard-only Consumer Control composite for Plasma. SDL detected
+  exactly one `GameSir-X2s Type-C` with a gamecontroller mapping; the physical
+  gamepad had `ID_INPUT_JOYSTICK=1` and no InputPlumber hide flags. An exclusive
+  grab probe confirmed the Consumer Control interface remained intercepted.
+  The phone was left in Plasma with the service enabled. In-game button/axis
+  behavior in Heroic still needs the owner's game test.
+- **Actual session-switch follow-up:** returning to Game Mode left the desktop
+  override active. The watcher matched `/proc/comm` against `gamescope`, but the
+  running compositor renames its main thread to `gamescope-wl`. Detection now
+  uses `/proc/exe` and the Game Mode `--steam` argument; KWin still takes
+  precedence over nested Gamescope. Seven tests cover the renamed thread,
+  non-session Gamescope and exited processes. After installation the real Game
+  Mode session selected both X2s sources and `deck-uhid`; the owner confirmed
+  Home opened Quick Access and record opened Steam again.
+
+### X2s stopped working in a running Proton game after a USB reset (2026-10-10)
+
+- **Report:** Hogwarts Legacy launched through Heroic's Steam shortcut in Game
+  Mode ignored the X2s, although Steam navigation still worked.
+- **Cause:** about 25 seconds after launch the whole xHCI host controller was
+  removed and re-added. Every such reset in that boot coincided with the charger
+  dropping to "waiting for USB-PD"; this one followed a thermal charging pause.
+  InputPlumber stopped the X2s composite device, Steam destroyed and recreated its
+  virtual Xbox 360 pad, and Proton's winebus never opened the replacement. It had
+  no `/dev/input` or hidraw descriptors open, while SDL in the game's environment
+  could see the new pad. Proton ignores the Steam Deck-style device by design
+  (Steam supplies the virtual pad), so the game was left with no controller.
+- **Fix:** the X2s InputPlumber profile sets `persist: true`. A brief source
+  disconnect now keeps the virtual Steam Deck target, so Steam keeps its virtual
+  pad and the running game's handle. The session helper inherits the option in
+  both Plasma and Game Mode. Eight routing tests passed; after relaunching, the
+  owner confirmed the controller worked in Hogwarts Legacy over a longer session.
+- **Trade-off:** after physically detaching the X2s, a disconnected virtual Steam
+  Deck controller remains until InputPlumber restarts. The PD-triggered USB reset
+  itself is not fixed.
 
 ### The controller-as-mouse pointer was invisible
 
@@ -1515,6 +1715,159 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   Application-specific keys, access permissions and applet provisioning remain
   outside this change. Incoming long-response fragmentation has a protocol test;
   the tested live responses fit in one packet.
+
+### Off-host eSE RF routing experiment (2026-10-09)
+
+- **Candidate application:** the owner's report names public AID
+  `A0000006914D344D56434D0100`. SELECT succeeded and the returned FCI confirmed
+  the exact AID. SEMS and CRS also selected. The report's balance and both
+  history commands returned `6D00` (instruction not supported), so the presence
+  of a personalized iPASS card remains unproven. The report's SELECT length
+  was wrong: this AID needs `Lc=0D`, not `0C`.
+- **CRS activation:** the read-only CRS GET STATUS command, with P1/P2 `40/00`
+  and filters `4F,9F70`, returned `3F00`. On the owner's approval, a temporary
+  SET STATUS activation returned `9000` and read-back `3F01`; deactivation
+  returned `9000` and `3F00`, also verified in a fresh wired session.
+- **RF experiment (phone only):** a temporary `houji-ese-listen-test.service`
+  stops NFC Manager and takes the controller with the same shared-supply hold.
+  It saves the original CRS activation state root-only, activates the candidate,
+  installs exact-AID, ISO-DEP protocol and NFC-A technology routes to `0xc0`
+  with power mask `39` (switched-on states), and reads the routing table back.
+  It requests NFC-A passive listening only. An empty SET_LISTEN_MODE_ROUTING
+  command returned NCI status `03`; cleanup instead clears temporary routes
+  with reset/init, as the normal driver does.
+- **First attempt:** the controller counted RF field changes but neither
+  eSE-action nor interface-activation notifications, and the second phone saw
+  no tag. Reading NCI configuration showed `NFCC_CONFIG_CONTROL` (`85`) was
+  `00`. Stock Android sets `01`, allowing the controller to manage RF
+  configuration supplied by NFCEEs. The experiment now sets `85=01`, enables
+  field/action notifications (`80=01`, `81=01`), and sends HCI
+  `EVT_END_OF_APDU_TRANSACTION` (`61`) on pipe `19` after releasing forced
+  wired link power. Both changes were made together, so their individual
+  contributions have not been isolated.
+- **Result:** the owner could detect a tag with another phone. The controller
+  recorded eSE-action notifications naming host `0xc0`, confirming RF activity
+  reached that endpoint. Host/interface activation notifications also occurred;
+  neither counter establishes a successful transit transaction or the contents
+  of a virtual card. No transaction payloads or tag identifiers were logged.
+- **State after the test:** off-host listening remains active for the owner's
+  real-reader test; normal text-tag emulation is paused and saved settings are
+  unchanged. The temporary service is not enabled at boot and no production
+  routing code is staged into images. Keep the phone awake for testing. Stop
+  with `systemctl stop houji-ese-listen-test`: cleanup restores the original CRS
+  state and controller flags, clears routes, rebinds the driver and restarts
+  NFC Manager. That cleanup was tested successfully before the final RF-config
+  changes; recovery metadata stays under `/var/lib/houji-ese-listen` until CRS
+  restoration is verified. Sleep, crash recovery and a real iPASS reader remain
+  untested for this temporary routing mode.
+
+### [UNTESTED] IPASS in both NFC interfaces (2026-10-09)
+
+- **Request:** promote the temporary routing experiment into a selectable mode,
+  labelled exactly `[UNTESTED] IPASS`, in Houji Settings and NFC Manager.
+- **Backend:** `ipass.py` uses the working CRS activation, route read-back,
+  `NFCC_CONFIG_CONTROL=01` and wired-to-RF handoff sequence. The existing NFC
+  service owns it under the same hardware mutex and process lock as text
+  emulation and wired APDUs. Status returns only the mode and RF/eSE counters;
+  no transaction data or card identifiers. `SetMode` switches all four modes,
+  waiting for the current listener's cleanup before starting its successor.
+- **Persistence and cleanup:** saved settings gain `ipass_enabled`, defaulting
+  false when migrating the older schema. Before activating, the service saves
+  the prior CRS activation and NFC configuration in an fsynced, owner-only
+  recovery record. Cleanup restores and verifies CRS, resets temporary routing,
+  restores Type-A and notification/configuration parameters, and rebinds the
+  reader. A failed cleanup keeps the recovery record and blocks the queued
+  mode; service startup/ExecStopPost attempts recovery. The new mode remains
+  explicitly unverified on a real iPASS reader or through native sleep.
+- **Verified on the handset:** IPASS → Off returned CRS `3F00`, cleared the
+  recovery record, rebound the reader and unloaded the temporary supply module.
+  Reader → text tag → IPASS worked with tag settings unchanged and the eSIM
+  still registered. A normal NFC service restart restored IPASS. From Steam's
+  JS context the Decky call selected IPASS and reported ready; the owner
+  confirmed it in Houji Settings. Constructing the actual GTK app and updating
+  it from live status showed the `[UNTESTED] IPASS` option selected, its mode
+  selector enabled and the untested notice visible.
+- **Integration:** stage the new module with NFC Manager. The temporary
+  `houji-ese-listen-test.service` was stopped, its restoration verified, and
+  its unit removed before the integrated mode took over. Existing private tag
+  text and serials were retained.
+
+### IPASS stopped listening after an I2C readiness NACK (2026-10-10)
+
+- **Report:** after the integrated mode had been running, another phone could
+  no longer detect it. NFC Manager still requested IPASS, but its hardware state
+  was `error`. The log showed `ENXIO` from the three-byte NCI header read; the
+  listener exited and cleanup restored the eSE/controller. No recovery record
+  or temporary supply module remained. The failure occurred just before a
+  light-to-native sleep transition, but that timing does not establish its cause.
+- **Cause and fix:** Linux's `nxp_nci_i2c_irq_thread_fn` explicitly treats
+  `ENXIO` as a possible readiness race: the controller may assert IRQ before
+  it has readable data. Our userspace transport instead treated the first such
+  header NACK as fatal. It now rechecks IRQ and retries header `ENXIO` at 5 ms
+  intervals, bounded by both 100 ms and the caller's receive deadline. Other
+  errors, short headers and payload-read failures remain fatal; once a header
+  has been consumed, retrying the payload could lose packet alignment.
+- **Diagnostics:** IPASS cleanup retains the last RF/eSE counters instead of
+  replacing them with zeros, so an error still shows the activity before it.
+- **Verification:** tests replay transient and persistent NACKs, IRQ dropping
+  before retry, receive deadlines, a following valid packet, and payload errors.
+  After installing and restarting NFC, the owner confirmed repeated phone-to-
+  phone detection. The mode remained active after 24 fields and 61 eSE actions,
+  with no new NFC errors and the eSIM still registered. Long-term reliability,
+  sleep behavior and actual iPASS transactions remain unverified.
+
+### IPASS detection during native sleep and after resume (2026-10-10)
+
+- **Request:** verify that the off-host card still responds during sleep and
+  after waking. The phone was unplugged, with native `s2idle` selected and the
+  integrated IPASS listener active after the header-read NACK fix.
+- **Hardware test:** the owner reported repeated detection from another phone
+  while Houji's screen stayed off, and again after waking with Power. A private
+  before/after snapshot showed 321.51 s elapsed and 216.65 s actually suspended
+  (CLOCK_BOOTTIME minus CLOCK_MONOTONIC). The journal confirmed `s2idle` entries,
+  sensor-DSP dark wakes and Power-key resumes. The boot and NFC PID were unchanged;
+  the listener remained in IPASS mode. RF-field counts rose from 24 to 55, and
+  eSE-action counts from 61 to 111, with no new NFC errors.
+- **No sleep workaround:** the existing shared-power hold, off-host routing and
+  mask `39` were sufficient for this test. No RTC alarm, extra sleep hook,
+  inhibitor or forced light sleep was installed. Both UIs now describe the
+  verified asleep/awake detection instead of asking the owner to keep the screen
+  on. `[UNTESTED]` remains because no real iPASS terminal transaction or
+  personalized-card state has been established. Long-duration reliability still
+  needs normal-use testing.
+
+### NFC stuck after the eSE APDU pipe disappeared (2026-10-12)
+
+- **Report:** NFC broken again. Every NFC service start logged `NFC operation
+  failed during "Recovering interrupted IPASS mode"` and refused mode
+  changes, so Reader and Text tag were unusable too. The saved setting was
+  already IPASS off.
+- **State:** `/var/lib/armada-nfc/ipass-restore.json` dated from the
+  2026-10-10 00:35 IPASS activation. The record stays while IPASS is active,
+  so a later reboot left recovery pending. The journal reached back only to
+  2026-10-12, which leaves the exact interruption unrecorded.
+- **Cause:** a traced recovery failed in `Session.open`: CORE_GET_CONFIG
+  returned `A023 = 00` (`A022` still `02`), where every earlier session read
+  `01`. Resetting the controller configuration to the saved values did not
+  change it. In NXP's Android stack, `A023 = 1` means "APDU pipe created";
+  anything else releases the pipe, and `nfa_hci_api_config_nfcee` recreates
+  it with ADM_CREATE_PIPE (gate `0x30` → host `0xc0` gate `0x30`) and
+  ANY_OPEN_PIPE. Our code assumed the firmware always keeps the pipe. The
+  earlier refusals happened while the pipe already existed. Cleanup also
+  discarded every exception, which hid the cause.
+- **Recovery on the handset:** with the owner's approval, one manual run
+  created the pipe (the firmware assigned `0x19`), opened it (`A023 = 01`,
+  maximum APDU `0x8000`) and then completed the pending restore. The record
+  was removed. The service starts without errors, `houji-ese --probe` again
+  returns 108 bytes with `9000` and `6A82`, and the eSIM stayed registered.
+  Backups: `/root/ipass-restore.json.bak-20261012` and
+  `/root/nfc-manager-backup-20261012/`.
+- **Fix:** `Session.open` recreates and opens the pipe only when `A023`
+  reports none, and stops if the firmware assigns any pipe other than `0x19`.
+  The IPASS failure message now includes the original and first cleanup
+  exception (fixed strings, no APDU/RF/record contents). Tests replay a missing
+  pipe and a wrong pipe number. `[UNTESTED] IPASS` itself is unchanged; why
+  the firmware lost the pipe is still unknown.
 
 ## Session switching
 
@@ -1959,6 +2312,110 @@ Against the build that was flashed and booted:
   recompile in-process. One such run froze the phone and another was killed by
   the OOM killer. A temporary swap file on `/run/houji/data` let full recompiles
   finish.
+
+### Hogwarts Legacy crashed after the warning screen (2026-10-10)
+
+- **Initial setup:** Heroic's apparent installation stall was slow prerequisite
+  traffic: Visual C++ 2022 downloaded from Microsoft at roughly 50 KiB/s, then
+  the enabled BattlEye runtime downloaded from GitHub at roughly 33 KiB/s. Both
+  finished. The VC installer matched Winetricks' expected SHA-256 and its x86/x64
+  installer logs ended with exit code 0. No prefix recreation was needed.
+- **Startup failure:** the Epic build reached its photosensitivity warning,
+  then reported `GPUCrash` after 51–52 seconds. Its error was
+  `CommandList->Close() ... E_INVALIDARG`. Turnip had initialized a swapchain;
+  neither a kernel GPU fault nor an OOM kill was recorded, and the crash context
+  reported `bIsOOM=0`.
+- **Cause traced:** VKD3D-Proton 3.1 rejected compute shader `55462a5ff5f1fbb5`
+  for unsupported native 16-bit operations. A null resource/pipeline then made
+  the command list invalid. On the installed Mesa 26.2.3, Adreno 750 exposes
+  FP16 arithmetic and storage but not FP16 denormal preservation; VKD3D therefore
+  does not expose the full D3D12 native-16-bit capability. Heroic's default
+  `VKD3D_DEBUG=fixme` hid the decisive warning. A game-local `warn` setting needed
+  Heroic to restart because it had cached the old configuration in memory.
+- **Working workaround:** in this game's prefix, append the following to
+  `drive_c/users/steamuser/AppData/Local/HogwartsLegacy/Saved/Config/WindowsNoEditor/Engine.ini`:
+
+  ```ini
+  [SystemSettings]
+  r.FidelityFX.FSR2.UseNativeDX12=0
+  r.FidelityFX.FSR3.UseNativeDX12=0
+  ```
+
+  These game-supported switches select the Unreal RHI fallback instead of FSR's
+  native DX12 backend. FSR 2 Quality remains selected. An earlier attempt to set
+  `UpscaleMode=None` was reset by the game and did not avoid the shader rejection.
+- **Result:** after applying the fallback, the same shader rejection and invalid
+  command-list failure disappeared, the game stayed active past the previous
+  crash point, and the owner confirmed it reached setup/menu. Sustained gameplay
+  and performance remain unverified. The fix is in the handset's game prefix;
+  it does not replace Proton, Mesa or VKD3D. Original settings and diagnostic
+  logs were backed up privately, and the temporary logging option was removed
+  from Heroic's saved configuration after confirmation.
+
+### GTA V Enhanced crashed during frame presentation (2026-10-11)
+
+- **Launcher setup:** the official Rockstar installer was added to Steam as a
+  non-Steam shortcut, then the same shortcut was pointed at the installed
+  `Launcher.exe` to retain its prefix. CachyOS Proton's July build drew a frozen
+  sign-in form; the installed October Proton Experimental ARM64 build made the
+  form responsive. Login error `#1.000.7` cleared after selecting `Asia/Taipei`
+  for the phone and `TZ=Asia/Taipei` for the shortcut. A Windows API probe in
+  that prefix confirmed `Taipei Standard Time`, UTC+8. Rockstar downloaded
+  through Akamai at approximately 11 MiB/s in the measured sample.
+- **Failure:** Enhanced build `1.0.1158.16` exited about 27 seconds after launch
+  with `0xc0000005`. Five retained minidumps showed an execute access violation
+  at address zero. The return address was `GTA5_Enhanced.exe+0x1e7b330`, after
+  the indirect call through vtable slot `0x40` in the DXGI `Present()` path.
+  `SocialClubD3D12Renderer.dll` was loaded shortly before the crash. There was
+  no retained kernel GPU fault or storage failure in the inspected interval.
+- **Rejected workaround:** disabling `SocialClubD3D12Renderer` via a game-only
+  Wine DLL override let the game display its loading artwork
+  without the null-pointer exception, but the owner then confirmed it stayed at
+  “Initializing.” Social Club reported its renderer could not load. This was
+  not a working-game result, and the override was removed. Stable Proton
+  `11.0-2e-arm64`, with the overlay restored, instead crashed with illegal
+  instruction `0xc000001d` at `d3d12core.dll+0x525c0`.
+- **Working setup:** keep stable `Proton 11.0-2 (ARM64)` selected and copy its
+  bundled x86-64 graphics DLLs alongside `GTA5_Enhanced.exe`:
+
+  | Source relative to `Proton 11.0 (ARM64)/` | Game-local file |
+  | --- | --- |
+  | `files/lib/wine/dxvk/x86_64-windows/dxgi.dll` | `dxgi.dll` |
+  | `files/lib/wine/vkd3d-proton/x86_64-windows/d3d12.dll` | `d3d12.dll` |
+  | `files/lib/wine/vkd3d-proton/x86_64-windows/d3d12core.dll` | `d3d12core.dll` |
+
+  Scope their native overrides to this executable in the Rockstar prefix:
+
+  ```reg
+  [HKEY_CURRENT_USER\Software\Wine\AppDefaults\GTA5_Enhanced.exe\DllOverrides]
+  "dxgi"="native"
+  "d3d12"="native"
+  "d3d12core"="native"
+  ```
+
+  Leave `SocialClubD3D12Renderer` enabled (no disabling override). The game-local
+  DLLs were absent before this test and are byte-identical to the installed
+  Proton's x86-64 copies. No system or Proton installation files were replaced.
+  Delete these three local files and override values to undo the fallback.
+- **Result:** the log confirmed all three graphics DLLs loaded from the game
+  directory and the Social Club D3D12 renderer loaded successfully. Social
+  Club completed its browser/sign-in initialization, the owner reported
+  “Entering Story Mode,” and a screenshot confirmed actual gameplay in the
+  opening bank-heist mission. This supports an overlay-hook incompatibility
+  with the native ARM64/ARM64EC graphics path; using the x86-64 implementations
+  lets the hook operate correctly. The fallback's performance cost is unmeasured.
+- **Separate graphics limitation:** VKD3D rejected 11 shader creations with
+  `Required WaveSize range [32, 32], but supported range is [64, 128]`. These
+  same errors occurred on the run that reached gameplay, so they did not block
+  this startup. No wave-size spoofing was applied. Rendering correctness and
+  longer Story Mode sessions remain unverified.
+- **Cleanup:** temporary `PROTON_LOG`, Wine trace and `VKD3D_DEBUG` launch
+  options were removed for subsequent launches. The running game was left
+  alone, so its current process retains logging until exit. The launcher wrapper and
+  Taipei time-zone option remain. A trial launcher `-nobattleye` argument did
+  not change the logged game entry point (`GTA5_Enhanced_BE.exe`) and was also
+  removed; it was not the successful fix. Diagnostic evidence and the prior
+  settings are private on the handset. GTA Online was not tested.
 
 ## Open problems
 

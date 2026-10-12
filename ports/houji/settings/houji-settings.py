@@ -148,15 +148,23 @@ def nfc_status(system):
         status = json.loads(system.dbus(NFC, 'GetStatus', start=False)[0])
     except Exception:
         pass
-    modes = ('off', 'reader', 'starting', 'emulating', 'stopping', 'error', 'ese')
+    modes = ('off', 'reader', 'starting', 'emulating', 'stopping', 'error', 'ese', 'ipass')
+    desired = status.get('desired_mode')
+    if desired not in ('off', 'reader', 'emulation', 'ipass'):
+        try:
+            ipass = json.loads(NFC_SETTINGS.read_text()).get('ipass_enabled') is True
+        except (OSError, ValueError, AttributeError):
+            ipass = False
+        desired = 'ipass' if ipass else 'emulation' if emulating else 'reader' if reader else 'off'
     def count(name):
         value = status.get(name)
         return value if type(value) is int and value >= 0 else 0
-    return {'enabled': reader or emulating, 'emulating': emulating,
-            'desired_mode': 'emulation' if emulating else 'reader' if reader else 'off',
+    return {'enabled': desired != 'off', 'emulating': emulating,
+            'desired_mode': desired,
             'mode': status.get('mode') if status.get('mode') in modes else 'unavailable',
             'powered': status.get('powered') is True, 'polling': status.get('polling') is True,
             'reads': count('reads'), 'tags': count('tags'),
+            'ipass_field_on': count('ipass_field_on'), 'ipass_ese_actions': count('ipass_ese_actions'),
             'notify_on_scan': nfc_notifications_enabled(),
             'detections': count('detections'),
             'detection_session': text(status.get('detection_session'), 32),
@@ -198,6 +206,17 @@ def set_nfc(system, request):
         system.dbus(NFC, 'SetReader', '(b)', (enabled,), reply='()')
     except Exception:
         raise Failure('NFC is busy. Try again in a moment.') from None
+    return nfc_status(system)
+
+
+def set_nfc_mode(system, request):
+    mode = request.get('mode')
+    if mode not in ('off', 'reader', 'emulation', 'ipass'):
+        raise Failure('Unknown NFC mode.')
+    try:
+        system.dbus(NFC, 'SetMode', '(s)', (mode,), reply='()')
+    except Exception:
+        raise Failure('NFC is busy or unavailable. Wait for the current mode to stop.') from None
     return nfc_status(system)
 
 
@@ -549,6 +568,7 @@ OPERATIONS = {
     'rotation.set': lambda system, request: set_rotation(request),
     'charge_limit.set': lambda system, request: set_charge_limit(request),
     'nfc.set': set_nfc,
+    'nfc.mode': set_nfc_mode,
     'nfc.action': nfc_action,
     'nfc.notifications': set_nfc_notifications,
     'nfc.watch': nfc_watch,

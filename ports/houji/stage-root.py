@@ -81,7 +81,7 @@ for name in ['etc/dbus-1/system.d/org.neard.conf',
              'usr/share/man/man8/neard.8.gz']:
     copy(users/'neard'/name,name)
 copy(users/'neard/usr/libexec/nfc/neard','usr/libexec/nfc/neard',0o755)
-for name in ['gui.py','service.py','controller.py','transport.py','protocol.py','ese.py','ese-cli.py']:
+for name in ['gui.py','service.py','controller.py','transport.py','protocol.py','ese.py','ese-cli.py','ipass.py']:
     copy(PORT/'nfc'/name,'usr/libexec/armada/nfc-manager/'+name)
 copy(users/'bin/Xiaomi-14-tplg.bin','usr/lib/firmware/qcom/houji/Xiaomi-14-tplg.bin')
 for name,path in {'ssccli':'libssc-build/src/ssccli', 'hexagonrpcd':'hexagon-build/hexagonrpcd/hexagonrpcd',
@@ -153,6 +153,8 @@ for path in wifi.glob('board-2.bin*'):path.unlink()
 for name in ['houji-stock-touch','houji-sensors','houji-als','houji-gamescope-orientation','houji-grow-data',
              'houji-charging','houji-thermal','armada-power-profiles','houji-steam-power','armada-nfc']:
     link('etc/systemd/system/multi-user.target.wants/'+name+'.service','../'+name+'.service')
+link('etc/systemd/system/multi-user.target.wants/houji-x2s-session.service',
+     '/usr/lib/systemd/system/houji-x2s-session.service')
 link('etc/systemd/system/graphical.target.wants/houji-boot-success.service','../houji-boot-success.service')
 link('etc/systemd/system/sleep.target.wants/houji-gamescope-sleep.service',
      '/usr/lib/systemd/system/houji-gamescope-sleep.service')

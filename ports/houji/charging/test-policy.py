@@ -12,7 +12,7 @@ p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
 
 class PolicyTest(unittest.TestCase):
-    def test_light_sleep_ends_when_unplugged_full_or_telemetry_missing(self):
+    def test_light_sleep_follows_supply_not_full_charge_or_authentication(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             bat, usb, aux = [root / x for x in ('bat', 'usb', 'aux')]
@@ -24,7 +24,7 @@ class PolicyTest(unittest.TestCase):
                 (bat / key).write_text(value)
             (usb / 'online').write_text('1')
             (usb / 'usb_type').write_text('[PD_PPS]')
-            check = lambda: p.charging_needs_light_sleep(bat, usb, str(aux / 'houji_charger_state'))
+            check = lambda: p.charging_needs_light_sleep(usb, root / 'wireless')
             self.assertTrue(check())
             (usb / 'online').write_text('0')
             self.assertFalse(check())
@@ -32,17 +32,44 @@ class PolicyTest(unittest.TestCase):
             (bat / 'capacity').write_text('100')
             self.assertTrue(check())
             (bat / 'status').write_text('Full')
-            self.assertFalse(check())
+            self.assertTrue(check())
             (bat / 'status').write_text('Not charging')
-            self.assertFalse(check())
+            self.assertTrue(check())
             (bat / 'capacity').write_text('40')
             self.assertTrue(check())
             (bat / 'status').write_text('Charging')
             (usb / 'usb_type').write_text('[SDP] PD PD_PPS')
-            self.assertFalse(check())
+            self.assertTrue(check())
             (usb / 'usb_type').write_text('[PD_PPS]')
             (aux / 'houji_charger/authentic').unlink()
+            (bat / 'health').unlink()
+            (bat / 'status').unlink()
+            self.assertTrue(check())
+            (usb / 'online').write_text('0')
             self.assertFalse(check())
+
+    def test_wireless_power_also_keeps_light_sleep(self):
+        with tempfile.TemporaryDirectory() as name:
+            usb, wireless = (Path(name) / part for part in ('usb', 'wireless'))
+            usb.mkdir(); wireless.mkdir()
+            (usb / 'online').write_text('0')
+            (wireless / 'online').write_text('1')
+            self.assertTrue(p.charging_needs_light_sleep(usb, wireless))
+            (wireless / 'online').write_text('0')
+            self.assertFalse(p.charging_needs_light_sleep(usb, wireless))
+
+    def test_supply_telemetry_failure_is_not_a_detach(self):
+        with tempfile.TemporaryDirectory() as name:
+            usb, wireless = (Path(name) / part for part in ('usb', 'wireless'))
+            usb.mkdir()
+            self.assertTrue(p.charging_needs_light_sleep(usb, wireless))
+            for value in ('', 'invalid', '-1', '2'):
+                (usb / 'online').write_text(value)
+                self.assertTrue(p.charging_needs_light_sleep(usb, wireless))
+            (usb / 'online').write_text('0')
+            self.assertFalse(p.charging_needs_light_sleep(usb, wireless))
+            wireless.mkdir()  # Present supply whose online property is missing.
+            self.assertTrue(p.charging_needs_light_sleep(usb, wireless))
 
     def test_hypercharge_needs_real_firmware_mode_and_suspend_guard(self):
         with tempfile.TemporaryDirectory() as name:

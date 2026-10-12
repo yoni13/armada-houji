@@ -1,0 +1,20 @@
+[Unit]
+Description=FSR 4 Hexagon NPU Upscaler Service
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=FSR4_SHARED_FILE=/dev/shm/houji-fsr4-850190.bin
+Environment=LD_LIBRARY_PATH=/var/home/armada/.local/opt/fsr4-htp/lib
+Environment=DSP_LIBRARY_PATH=/var/home/armada/.local/opt/fsr4-htp/dsp;/run/houji/dsp/cdsp
+Environment=ADSP_LIBRARY_PATH=/var/home/armada/.local/opt/fsr4-htp/dsp;/run/houji/dsp/cdsp
+Environment=FSR4_HTP_PERFORMANCE=1
+Environment=FSR4_HTP_CORNER=nominal
+Environment=FSR4_QNN_OPT=3
+Environment=FSR4_GPU_PRIORITY=high
+Environment=FSR4_GPU_TIMESTAMPS=1
+ExecStart=/var/home/armada/.local/opt/fsr4-htp/bin/frame-server-opt2 /var/home/armada/.local/opt/fsr4-htp/stages-goat 1280 720
+Restart=no
+
+[Install]
+WantedBy=default.target

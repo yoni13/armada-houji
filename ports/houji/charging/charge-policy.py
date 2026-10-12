@@ -120,26 +120,30 @@ def finish_charging(bat=BAT):
         (bat / 'constant_charge_current').write_text('0\n')
 
 
-def charging_needs_light_sleep(bat=BAT, usb=USB, aux_pattern=AUX):
-    """Keep thermal monitoring alive for an attached, authenticated PD session."""
-    try:
-        paths = glob.glob(aux_pattern)
-        if len(paths) != 1:
-            return False
-        directory = Path(paths[0]).parent / 'houji_charger'
-        kind = (usb / 'usb_type').read_text()
-        status = (bat / 'status').read_text().strip()
-        capacity = int((bat / 'capacity').read_text())
-        return (int((usb / 'online').read_text()) == 1
-                and ('[PD]' in kind or '[PD_PPS]' in kind)
-                # The gauge can display 100% while the pack still takes current.
-                # Keep host thermal monitoring alive until charging ends.
-                and (status == 'Charging' or
-                     (status == 'Not charging' and capacity < 100))
-                and (bat / 'health').read_text().strip() == 'Good'
-                and int((directory / 'authentic').read_text()) == 1)
-    except (OSError, ValueError):
-        return False
+def charging_needs_light_sleep(usb=USB, wls=WLS):
+    """Stay in light sleep for external power, including full/held batteries.
+
+    Charging status, USB-PD authentication and daemon health do not establish
+    detachment. Only known-offline supplies permit native sleep. The wireless
+    supply is optional, but a present supply with unreadable data is unknown.
+    """
+    unknown = False
+    for supply in (usb, wls):
+        try:
+            online = (supply / 'online').read_text().strip()
+        except FileNotFoundError:
+            if supply == usb or supply.exists():
+                unknown = True
+            continue
+        except OSError:
+            unknown = True
+            continue
+        # POWER_SUPPLY_PROP_ONLINE may also use 2 for a programmable supply.
+        if online in ('1', '2'):
+            return True
+        if online != '0':
+            unknown = True
+    return unknown
 
 
 def desired_current(online, usb_type, temperature, health, wireless=False, *,
@@ -399,7 +403,10 @@ class StockAuthentication:
 
 def main():
     if sys.argv[1:] == ['--needs-light-sleep']:
-        sys.exit(0 if charging_needs_light_sleep() else 1)
+        needed = charging_needs_light_sleep()
+        # Distinguish a verified detach from Python/import failures (also exit 1).
+        print('light' if needed else 'offline')
+        sys.exit(0 if needed else 1)
     if sys.argv[1:] == ['--finish-auth']:
         finish_authentication()
         finish_charging()

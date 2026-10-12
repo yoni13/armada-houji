@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Keep the charger thermal loop running during an attached charging session."""
+"""Keep light sleep for the entire external-power attachment, even when full."""
 import os
 import signal
 import subprocess
@@ -11,21 +11,25 @@ DISPATCH = '/usr/libexec/armada/suspend-dispatch'
 # suspend-dispatch runs this in place of systemd-sleep for native sleep. It
 # keeps sensor DSP wakeups from lighting the screen; see houji-sleep.
 NATIVE_SLEEP = '/usr/libexec/armada/houji-sleep'
+DETACH_SAMPLES = 3  # Ignore a brief offline report during USB-PD renegotiation.
 
 
-def charging_active():
+def charger_connected():
     try:
-        return (subprocess.run(['systemctl', 'is-active', '--quiet', 'houji-charging'],
-                               timeout=3).returncode == 0
-                and subprocess.run([POLICY, '--needs-light-sleep'], timeout=3).returncode == 0)
+        # Exit 1 means all supplies are known offline. A failed query is not a
+        # detach, and restarting the charging daemon must not change sleep mode.
+        result = subprocess.run([POLICY, '--needs-light-sleep'],
+                                capture_output=True, text=True, timeout=3)
+        return not (result.returncode == 1 and result.stdout.strip() == 'offline')
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        return True
 
 
-def sleep_while_charging(active=charging_active, popen=subprocess.Popen,
-                         run=subprocess.run):
-    """Return True to continue into native sleep after detach/full/daemon loss."""
+def sleep_while_connected(connected=charger_connected, popen=subprocess.Popen,
+                          run=subprocess.run):
+    """Return True after confirmed detach; False after the user wakes."""
     child = popen([LIGHT_SLEEP, 'sleep'])
+    detached = 0
     try:
         while True:
             try:
@@ -34,7 +38,11 @@ def sleep_while_charging(active=charging_active, popen=subprocess.Popen,
                     raise RuntimeError(f'light sleep failed: {status}')
                 return False  # User pressed Power: finish the sleep lifecycle.
             except subprocess.TimeoutExpired:
-                if active():
+                if connected():
+                    detached = 0
+                    continue
+                detached += 1
+                if detached < DETACH_SAMPLES:
                     continue
                 if child.poll() is not None:
                     if child.returncode:
@@ -67,11 +75,13 @@ def main():
         raise SystemExit(128 + signum)
     signal.signal(signal.SIGTERM, terminated)
     signal.signal(signal.SIGINT, terminated)
-    if charging_active():
-        print('Houji: light sleep keeps charging thermal monitoring active', flush=True)
-        if not sleep_while_charging():
+    # Recheck after cleanup too: a charger can reconnect while the light-sleep
+    # child is releasing input and thawing apps. Do not enter native sleep then.
+    while charger_connected():
+        print('Houji: external power connected; using light sleep, including at full charge', flush=True)
+        if not sleep_while_connected():
             return
-        print('Houji: charging ended; returning to configured sleep mode', flush=True)
+        print('Houji: external power detached; rechecking before configured sleep mode', flush=True)
     if os.access(NATIVE_SLEEP, os.X_OK):
         os.environ.setdefault('ARMADA_SYSTEMD_SLEEP', NATIVE_SLEEP)
     os.execv(DISPATCH, [DISPATCH, *sys.argv[1:]])

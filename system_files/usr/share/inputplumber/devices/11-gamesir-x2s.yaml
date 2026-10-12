@@ -27,6 +27,10 @@ source_devices:
     capability_map_id: gamesir_x2s_record
 options:
   auto_manage: true
+  # A USB-PD renegotiation on Houji can reset the whole USB host controller. Keep
+  # the virtual controller across that brief disconnect: otherwise Steam replaces
+  # its virtual gamepad and a running Proton game does not attach to the new one.
+  persist: true
 target_devices:
   - deck-uhid
   - keyboard

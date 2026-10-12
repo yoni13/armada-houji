@@ -2,9 +2,11 @@
 """SN220 wired eSE APDUs over HCI on NCI's static logical connection 1.
 
 Xiaomi's firmware maintains APDU pipe 0x19 to host 0xc0, gate 0x30. Its state
-is read via CORE_GET_CONFIG A023, as in NXP's Android HCI implementation. Do
-not recreate/open/close that firmware-owned pipe, clear the HCI network, reset
-VEN, or mistake the APDU-capable NDEF NFCEE 0x10 for the secure element.
+is read via CORE_GET_CONFIG A023, as in NXP's Android HCI implementation. While
+A023 reports it created, do not recreate/open/close it (the firmware refuses).
+If A023 reports no pipe, recreate it as NXP's nfa_hci_api_config_nfcee does:
+ADM_CREATE_PIPE then ANY_OPEN_PIPE. Never clear the HCI network, reset VEN, or
+mistake the APDU-capable NDEF NFCEE 0x10 for the secure element.
 
 No packets, APDUs, response contents or chip identifiers are logged here.
 """
@@ -13,7 +15,10 @@ import time
 
 HOST = 0xc0
 PIPE = 0x19
+APDU_GATE = 0x30
 ADMIN = 1
+ADM_CREATE_PIPE = 0x10
+ANY_OPEN_PIPE = 0x03
 MAX_APDU = 32768
 MAX_BATCH = 16
 
@@ -202,9 +207,11 @@ class Session:
             raise ProtocolError('The embedded secure element did not enable.')
         if HOST not in link.hci(ADMIN, 2, b'\x04'):
             raise ProtocolError('The eSE did not join the HCI network.')
-        state = link.nci(0, 3, bytes.fromhex('02a023a022'))
-        if (len(state) != 10 or state[:5] != bytes.fromhex('0002a02301')
-                or state[6:9] != bytes.fromhex('a02201') or state[5] not in (1, 2)):
+        state = self.pipe_state()
+        if state == 0:
+            self.create_pipe()
+            state = self.pipe_state()
+        if state not in (1, 2):
             raise ProtocolError('The firmware has no open wired-eSE APDU pipe.')
         maximum = link.hci(PIPE, 2, b'\x01')
         if len(maximum) != 2 or int.from_bytes(maximum, 'big') < 4:
@@ -214,6 +221,23 @@ class Session:
         # APDUs still have a 30-second deadline within this budget.
         self.deadline = link.clock() + 45
         return self
+
+    def pipe_state(self):
+        """A023 (APDU pipe created) value, or None for a malformed reply."""
+        state = self.link.nci(0, 3, bytes.fromhex('02a023a022'))
+        if (len(state) != 10 or state[:5] != bytes.fromhex('0002a02301')
+                or state[6:9] != bytes.fromhex('a02201')):
+            return None
+        return state[5]
+
+    def create_pipe(self):
+        # Seen on Houji after a reboot left A023 at 0; the firmware assigned 0x19 again.
+        created = self.link.hci(ADMIN, ADM_CREATE_PIPE, bytes((APDU_GATE, HOST, APDU_GATE)))
+        if len(created) != 5 or created[1:4] != bytes((APDU_GATE, HOST, APDU_GATE)):
+            raise ProtocolError('Invalid eSE APDU pipe creation response.')
+        if created[4] != PIPE:
+            raise ProtocolError(f'The firmware created eSE APDU pipe {created[4]:02x}, not {PIPE:02x}.')
+        self.link.hci(PIPE, ANY_OPEN_PIPE)
 
     def exchange(self, apdu):
         if len(apdu) > self.maximum:

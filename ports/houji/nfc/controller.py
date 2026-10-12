@@ -11,6 +11,7 @@ import time
 from protocol import TextTag, validate
 from transport import Transport
 from ese import Session, validate_apdus
+from ipass import Offhost, RECOVERY
 
 DRIVER = Path('/sys/bus/i2c/drivers/nxp-nci_i2c')
 IFACE = 'org.neard.Adapter'
@@ -111,6 +112,8 @@ def recover():
     """Emergency service cleanup; never restores an emulation payload."""
     if b'xiaomi,houji\0' not in Path('/sys/firmware/devicetree/base/compatible').read_bytes():
         return
+    if RECOVERY.exists():
+        ipass_mode(None, None, recover_only=True)
     name = device_name()
     if not (Path('/sys/bus/i2c/devices') / name / 'driver').exists():
         (DRIVER / 'bind').write_text(name)
@@ -118,6 +121,79 @@ def recover():
         reader(True)
         reader(False)
     command('modprobe', '-r', 'houji_nfc_power', check=False)
+
+
+def ipass_mode(stop, changed, recover_only=False):
+    """Run off-host listening under the same process-wide lock as NFC emulation."""
+    if b'xiaomi,houji\0' not in Path('/sys/firmware/devicetree/base/compatible').read_bytes():
+        raise RuntimeError('IPASS mode supports Xiaomi 14 (Houji).')
+    lock = os.open('/run/armada-nfc/controller.lock', os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _ipass_mode(stop, changed, recover_only)
+    finally:
+        os.close(lock)
+
+
+def _ipass_mode(stop, changed, recover_only):
+    name = device_name()
+    previous = reader_status()['powered']
+    transport = session = offhost = None
+    held = unbound = False
+    errors = []
+    primary = None
+    try:
+        if recover_only and not (Path('/sys/bus/i2c/devices') / name / 'driver').exists():
+            (DRIVER / 'bind').write_text(name)
+        reader(False)
+        command('systemctl', 'stop', 'neard')
+        command('modprobe', 'houji_nfc_power')
+        held = True
+        # After an interrupted service, the driver may already be detached.
+        if (Path('/sys/bus/i2c/devices') / name / 'driver').exists():
+            (DRIVER / 'unbind').write_text(name)
+        unbound = True
+        transport = Transport(name.split('-')[0])
+        session = Session(transport)
+        session.open()
+        offhost = Offhost(session.link)
+        # Resolve an interrupted activation before starting a fresh session.
+        if RECOVERY.exists():
+            offhost.restore()
+            # Recovery reset/reinitializes NCI; acquire fresh HCI credits/state.
+            session = Session(transport)
+            session.open()
+            offhost = Offhost(session.link)
+        if not recover_only:
+            offhost.start()
+            offhost.listen(stop, changed)
+    except Exception as error:
+        primary = f'{type(error).__name__}: {error}'
+        raise
+    finally:
+        def attempt(operation):
+            try:
+                operation()
+            except Exception as error:
+                # Our exception messages carry no APDU, RF or record contents.
+                errors.append(f'{type(error).__name__}: {error}')
+        if changed:
+            changed('stopping', 'Restoring eSE activation and NFC settings', {})
+        if offhost:
+            attempt(offhost.restore)
+        if session:
+            attempt(session.close)
+        if transport:
+            attempt(transport.close)
+        if unbound:
+            attempt(lambda: (DRIVER / 'bind').write_text(name))
+        attempt(lambda: reader(previous))
+        if held:
+            attempt(lambda: command('modprobe', '-r', 'houji_nfc_power'))
+        if errors or RECOVERY.exists():
+            cause = ''.join((f' Failed with {primary}' if primary else '',
+                             f' First cleanup error: {errors[0]}' if errors else ''))
+            raise RuntimeError('IPASS cleanup needs recovery. Restart the NFC service before changing modes.' + cause)
 
 
 def ese_exchange(apdus):

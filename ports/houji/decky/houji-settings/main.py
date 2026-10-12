@@ -89,6 +89,9 @@ class Plugin:
     async def set_nfc(self, enabled):
         return await self._helper("nfc.set", enabled=enabled)
 
+    async def set_nfc_mode(self, mode):
+        return await self._helper("nfc.mode", mode=mode)
+
     async def nfc_action(self, action):
         return await self._helper("nfc.action", action=action)
 
