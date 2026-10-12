@@ -25,6 +25,9 @@ def reservations(path):
             cells = [int(v, 16) for v in fdtget(path, '-t', 'x', f'/reserved-memory/{node}', 'reg')]
         except subprocess.CalledProcessError:
             continue  # A size/alloc-ranges-only node has no fixed address.
+        if 'reusable' in subprocess.run(['fdtget', '-p', str(path), f'/reserved-memory/{node}'],
+                                        capture_output=True, text=True).stdout.split():
+            continue  # Reusable regions are host memory (CMA), lent only on demand.
         if len(cells) % width:
             raise ValueError(f'invalid reg property in {node}')
         for offset in range(0, len(cells), width):

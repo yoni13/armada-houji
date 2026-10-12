@@ -1,0 +1,13 @@
+[Unit]
+Description=Houji zram writeback backing file on the data partition
+Documentation=file:///usr/libexec/armada/houji-zram-writeback
+DefaultDependencies=no
+RequiresMountsFor=/run/houji/data
+Before=systemd-zram-setup@zram0.service
+ConditionPathIsDirectory=/sys/block/zram0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/armada/houji-zram-writeback attach
+ExecStop=/usr/libexec/armada/houji-zram-writeback detach

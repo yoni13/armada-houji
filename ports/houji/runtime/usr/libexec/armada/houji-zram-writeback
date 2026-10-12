@@ -1,0 +1,128 @@
+#!/usr/bin/python3
+"""Houji zram writeback: move idle compressed pages from RAM to the data partition.
+
+attach     create the backing file if needed and attach it as a direct-I/O loop
+           device named houji-zram-writeback (before zram0 is initialized)
+detach     detach that loop device (only once zram0 no longer uses it)
+writeback  mark pages untouched for IDLE_SECONDS as idle and write them back,
+           within a daily budget that bounds flash wear
+status     print backing device, budget and writeback counters
+"""
+import datetime
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+DATA = Path('/run/houji/data')
+BACKING = DATA / 'houji-zram-writeback.img'
+REF = 'houji-zram-writeback'
+LINK = Path('/dev/disk/by-loop-ref') / REF
+ZRAM = Path('/sys/block/zram0')
+STATE = Path('/var/lib/houji-zram-writeback.json')
+SIZE = 12 << 30                 # zram0 disksize is about 10.6 GiB
+IDLE_SECONDS = 300
+DAILY_BUDGET_PAGES = (8 << 30) // 4096
+
+
+def run(*args):
+    return subprocess.run(args, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def attached():
+    try:
+        rows = json.loads(run('losetup', '--json', '--list', '--output', 'NAME,BACK-FILE,REF'))
+    except subprocess.CalledProcessError:
+        return None
+    for row in rows.get('loopdevices', []):
+        if row.get('ref') == REF or row.get('back-file') == str(BACKING):
+            return row['name']
+    return None
+
+
+def attach():
+    if not BACKING.exists():
+        fd = os.open(BACKING, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.posix_fallocate(fd, 0, SIZE)
+        except OSError:
+            os.close(fd)
+            BACKING.unlink()
+            raise
+        os.close(fd)
+    os.chmod(BACKING, 0o600)
+    device = attached() or run('losetup', '--direct-io=on', '--loop-ref', REF, '--show', '--find', str(BACKING))
+    subprocess.run(['udevadm', 'settle', '--timeout=10'], check=False)
+    for _ in range(50):
+        if LINK.exists():
+            break
+        time.sleep(0.1)
+    if not LINK.exists():
+        sys.exit(f'{LINK} did not appear for {device}')
+    # backing_dev must be set before zram-generator sets disksize. Kernels whose
+    # zram lacks writeback have no backing_dev; zram then works without it.
+    if (ZRAM / 'backing_dev').exists() and (ZRAM / 'disksize').read_text().strip() == '0':
+        write('backing_dev', os.path.realpath(LINK))
+    print(f'attached {BACKING} as {device}; zram0 backing_dev:',
+          (ZRAM / 'backing_dev').read_text().strip() if (ZRAM / 'backing_dev').exists() else 'unsupported')
+
+
+def detach():
+    device = attached()
+    if not device:
+        return
+    backing = (ZRAM / 'backing_dev').read_text().strip() if (ZRAM / 'backing_dev').exists() else 'none'
+    if backing not in ('none', ''):
+        print('zram0 still uses the backing device; leaving it attached')
+        return
+    run('losetup', '--detach', device)
+
+
+def write(name, value):
+    (ZRAM / name).write_text(str(value))
+
+
+def budget():
+    today = datetime.date.today().isoformat()
+    try:
+        state = json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        state = {}
+    if state.get('day') != today:
+        write('writeback_limit_enable', 1)
+        write('writeback_limit', DAILY_BUDGET_PAGES)
+        STATE.write_text(json.dumps({'day': today}))
+
+
+def writeback():
+    if not (ZRAM / 'backing_dev').exists() or (ZRAM / 'backing_dev').read_text().strip() in ('none', ''):
+        return  # This zram build has no writeback support or no backing device.
+    budget()
+    try:
+        write('idle', IDLE_SECONDS)   # needs CONFIG_ZRAM_TRACK_ENTRY_ACTIME
+    except OSError:
+        write('idle', 'all')
+    try:
+        write('writeback', 'idle')
+    except OSError as error:
+        # EIO when the daily budget is used up; anything else is reported.
+        if error.errno != 5:
+            raise
+
+
+def status():
+    print('backing_dev:', (ZRAM / 'backing_dev').read_text().strip())
+    print('writeback_limit (pages left today):', (ZRAM / 'writeback_limit').read_text().strip())
+    bd = (ZRAM / 'bd_stat').read_text().split()
+    print(f'on backing device: {int(bd[0]) * 4 >> 10} MiB; read back {int(bd[1]) * 4 >> 10} MiB; written {int(bd[2]) * 4 >> 10} MiB')
+    mm = (ZRAM / 'mm_stat').read_text().split()
+    print(f'zram in RAM: {int(mm[2]) >> 20} MiB holding {int(mm[0]) >> 20} MiB')
+
+
+if __name__ == '__main__':
+    actions = {'attach': attach, 'detach': detach, 'writeback': writeback, 'status': status}
+    if len(sys.argv) != 2 or sys.argv[1] not in actions:
+        sys.exit(__doc__)
+    actions[sys.argv[1]]()

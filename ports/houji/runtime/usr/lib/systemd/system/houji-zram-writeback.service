@@ -1,0 +1,10 @@
+[Unit]
+Description=Write idle zram pages to the data partition
+After=systemd-zram-setup@zram0.service houji-zram-backing.service
+ConditionPathExists=/sys/block/zram0/backing_dev
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/armada/houji-zram-writeback writeback
+Nice=10
+IOSchedulingClass=idle

@@ -594,6 +594,24 @@ over a long sleep or with wireless charging.
   watchdog that used to take down audio, battery readings and sensors after
   resume. See [HISTORY.md](HISTORY.md#sleep-and-resume) for the cause.
 
+## Memory
+
+Linux receives about 11.26 GB of the 12 GiB part; firmware keeps the rest for
+the modem, DSPs, hypervisor and TrustZone. The unused trusted-UI and OEM VM
+carve-outs (140 MiB) are ordinary RAM here. Swap is zram (zstd) in RAM, a
+4 GB overflow swap file, and zram writeback: pages untouched for 5 minutes
+move to `/run/houji/data/houji-zram-writeback.img` every 2 minutes, at most
+8 GiB per day. Check it with:
+
+```sh
+sudo /usr/libexec/armada/houji-zram-writeback status
+```
+
+The Game Mode session runs with kernel same-page merging (KSM), so identical
+pages, such as those of a launcher's many browser processes, are stored once.
+Because the GPU uses system RAM, a game's texture setting directly reduces
+free memory.
+
 ## Thermal limits
 
 `houji-thermal` limits the CPU and GPU from the phone's estimated skin

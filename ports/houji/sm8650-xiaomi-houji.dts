@@ -195,19 +195,26 @@ arch_timer: &{/timer} {
 		pmsg-size = <0x80000>;
 		record-size = <0x40000>;
 	};
+	/* The stock overlay reserves the boot splash buffer (Display_Reserved). */
+	splash-region@fc400000 {
+		reg = <0 0xfc400000 0 0x2b00000>;
+		no-map;
+	};
 };
 
 &adspslpi_mem {
 	reg = <0 0x9df00000 0 0x4680000>;
 };
 
-/* The stock overlay reserves the splash buffer at fc400000..fef00000.
- * Coalesce it with the inherited OEM VM reservation (f7c00000..fc800000)
- * so there are no overlapping reserved-memory entries during bring-up.
+/*
+ * The trusted-UI and OEM Gunyah VMs never run here. Stock hands
+ * trust_ui_vm_mem to the host as a reusable CMA pool and gives oem_vm_mem no
+ * fixed region, and every page of f3800000..fc400000 was written and read
+ * back from Linux on the handset. ABL removes no-map regions from /memory,
+ * so these 140 MiB become ordinary RAM (as on sm8650-ayaneo-ps2).
  */
-&oem_vm_mem {
-	reg = <0 0xf7c00000 0 0x7300000>;
-};
+/delete-node/ &trust_ui_vm_mem;
+/delete-node/ &oem_vm_mem;
 
 &apps_rsc {
 	regulators-0 {

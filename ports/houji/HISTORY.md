@@ -1222,6 +1222,79 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   under load. It needs a check the next time the percentage has run well ahead of
   the gauge. Until then the fix rests on the host test of the shipped function.
 
+## Memory
+
+### GTA V Enhanced thrashed: idle memory filled zram (2026-10-12)
+
+- **Report:** GTA V Enhanced stalled while loading; later, with texture quality
+  already at its lowest, Social Club still took a lot of RAM.
+- **Measurement:** of the 12 GiB part, the firmware's memory map passes Linux
+  about 11.0 GB. The rest holds remote-processor firmware (modem, ADSP, CDSP),
+  two Gunyah VM carve-outs (`trust-ui-vm`, `oem-vm`) and TrustZone, hypervisor
+  and debug ranges. The VM carve-outs were later returned to Linux (below). During the
+  stall, zram (zstd, priority 100) held 10.1 GB and used about 3.5 GB of RAM,
+  and the 4 GB swap file (priority 10) was empty. In play: GTA itself ~7 GB
+  (2.3 GB process, 3.8 GB GPU memory in shared RAM, 1.1 GB swapped). Social Club
+  ~4.5 GB, 3.9 GB of it already swapped into zram. The launcher's minimal mode
+  (`-minmodeApp=gta5_gen9`) and `-scOfflineOnly` (game `commandline.txt`) left
+  Social Club's Chromium unchanged at ~2.2 GB. Ending its processes only
+  made the game respawn them, fully resident.
+- **Change:** zram writes idle pages back to the data partition. The running
+  `kufs1` kernel got a rebuilt `zram.ko` with `CONFIG_ZRAM_WRITEBACK` and
+  `CONFIG_ZRAM_TRACK_ENTRY_ACTIME` (same source and config apart from two
+  unrelated modules, vermagic set to `kufs1`; original kept at
+  `/root/zram.ko.kufs1-orig`). `bringup.config` enables both for future
+  kernels. `houji-zram-backing.service` attaches a 12 GiB direct-I/O loop file
+  (`/run/houji/data/houji-zram-writeback.img`, ref `houji-zram-writeback`)
+  before zram setup, the same service sets it as zram0's `backing_dev` when supported,
+  and `houji-zram-writeback.timer` writes pages untouched for 5 minutes every
+  2 minutes, within an 8 GiB/day budget. zswap was not used: enabling it needs a
+  kernel flash, and writeback gives the same effect for idle pages.
+  `MemoryKSM=yes` on `gamescope-session-plus@steam.service` makes the Game Mode
+  session mergeable (inherited by Steam, Proton and games); `houji-ksm.conf`
+  starts ksmd with zero-page merging at a 100 ms scan interval.
+- **Verification:** a 600 MiB patterned buffer, capped to 150 MiB of RAM, went
+  to zram; one writeback moved 454 MiB to the loop device (zram RAM 0 MiB),
+  and the buffer read back with an identical SHA-256. After a reboot the
+  backing device attached before zram setup (301 ms), zram reported it, the timer
+  was active and Steam showed `ksm_merge_any: yes`. KSM saved 118 MB with only
+  Steam's UI open; at the default 20 ms interval ksmd used ~9% of one core, at
+  100 ms ~1%. Gains under GTA V have not been measured yet.
+
+### Both slots stopped booting after `qbootctl -s b` (2026-10-13)
+
+- **What happened:** while testing a device tree that frees the trusted-UI and
+  OEM VM carve-outs, `qbootctl -s b` was run to reset slot B's boot counters,
+  with B already active. The next boot showed the Mi logo and returned to
+  fastboot after about 5 s. Restoring the original `vendor_boot_b`, toggling
+  `set_active a`/`set_active b` in fastboot, flashing a checksum-verified Armada
+  boot chain to slot A and booting A, and `fastboot boot` of a known-good kernel
+  (`Failed to load/authenticate boot image: Device Error`) all failed the same way.
+  The device tree was therefore not the cause.
+- **Cause (inferred):** `boot_ctl_set_active_slot_for_partitions()` in qbootctl
+  takes the type GUIDs from the currently active slot and always writes the
+  "active" GUID to `_a` and the "inactive" one to `_b`. With B already active,
+  that swaps the type GUIDs of every A/B pair while the attributes still mark B
+  active. ABL's own `set_active` swaps the GUIDs again, so the mismatch follows
+  whichever slot is made active.
+- **Recovery:** Xiaomi's partition tables (OS3.0.303.0) match the handset partition
+  for partition. The LUN 4 table holds 28 of the A/B pairs, including boot,
+  vendor_boot, ABL and UEFI. After CRC checks, `fastboot flash partition:4
+  gpt_both4.bin` followed immediately by `fastboot set_active b` restored a
+  consistent table, and the phone booted `kufs1` from slot B. Userdata (LUN 0) was
+  not touched. Slot A now holds the 2026-09-26 Armada boot chain instead of stock
+  Android's boot images.
+- **Rule:** never run `qbootctl -s` for the slot that is already active.
+  `houji-boot-success.service` only uses `-m`, which changes attributes, not
+  GUIDs.
+- **VM memory, retried (2026-10-13):** the same `vendor_boot_b` was written from
+  Linux with read-back verification and no slot commands. It booted:
+  `MemTotal` rose from 11,113,252 to 11,256,332 kB, `/proc/iomem` shows System
+  RAM over `e7830000-fc3fffff`, and the splash buffer stays reserved. The kernel's
+  error lines matched the previous boot (16 against 17, same messages), with no
+  hypervisor or VM complaints. Filling 6.8 GB of free RAM with a per-page pattern,
+  without swap, verified all 1,737,728 pages with no new kernel warnings.
+
 ## Thermal limits
 
 ### Nothing limited the CPU or GPU by heat

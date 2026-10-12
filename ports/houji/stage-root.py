@@ -155,6 +155,9 @@ for name in ['houji-stock-touch','houji-sensors','houji-als','houji-gamescope-or
     link('etc/systemd/system/multi-user.target.wants/'+name+'.service','../'+name+'.service')
 link('etc/systemd/system/multi-user.target.wants/houji-x2s-session.service',
      '/usr/lib/systemd/system/houji-x2s-session.service')
+# Idle zram pages go to the data partition; the backing device is pulled in by zram setup.
+link('etc/systemd/system/timers.target.wants/houji-zram-writeback.timer',
+     '/usr/lib/systemd/system/houji-zram-writeback.timer')
 link('etc/systemd/system/graphical.target.wants/houji-boot-success.service','../houji-boot-success.service')
 link('etc/systemd/system/sleep.target.wants/houji-gamescope-sleep.service',
      '/usr/lib/systemd/system/houji-gamescope-sleep.service')
