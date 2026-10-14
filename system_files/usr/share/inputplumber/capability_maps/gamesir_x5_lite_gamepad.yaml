@@ -1,0 +1,63 @@
+version: 2
+kind: CapabilityMap
+name: GameSir X5 Lite gamepad
+id: gamesir_x5_lite_gamepad
+# Same Android HID layout as the X2s: Z/RZ are a centred stick; GAS/BRAKE are
+# triggers. The M button is handled inside the controller and sends no report.
+mapping:
+  - name: Right stick
+    source_events:
+      - evdev:
+          event_type: ABS
+          event_code: ABS_Z
+          value_type: joystick_x
+      - evdev:
+          event_type: ABS
+          event_code: ABS_RZ
+          value_type: joystick_y
+    target_event:
+      gamepad:
+        axis:
+          name: RightStick
+  - name: Right trigger
+    source_events:
+      - evdev:
+          event_type: ABS
+          event_code: ABS_GAS
+          value_type: trigger
+    target_event:
+      gamepad:
+        trigger:
+          name: RightTrigger
+  - name: Left trigger
+    source_events:
+      - evdev:
+          event_type: ABS
+          event_code: ABS_BRAKE
+          value_type: trigger
+    target_event:
+      gamepad:
+        trigger:
+          name: LeftTrigger
+  # The GameSir logo reports BTN_MODE while held.
+  - name: Logo as Quick Access
+    source_events:
+      - evdev:
+          event_type: KEY
+          event_code: BTN_MODE
+          value_type: button
+    target_event:
+      gamepad:
+        button: QuickAccess
+  # Owner's choice: View (two squares, BTN_SELECT) is the Steam button, so games
+  # no longer receive View from this controller.
+  - name: View as Steam
+    source_events:
+      - evdev:
+          event_type: KEY
+          event_code: BTN_SELECT
+          value_type: button
+    target_event:
+      gamepad:
+        button: Guide
+filtered_events: []

@@ -1,0 +1,30 @@
+# GameSir X5 Lite (USB, 3537:1116). Same Android HID layout as the X2s. The GameSir
+# logo opens Steam's Quick Access and View (two squares) is the Steam button; the
+# M button never reaches the host. The Consumer Control device (Volume/Power
+# keys) is left to the system. A newer X5 Lite firmware delayed Quick Access by
+# 2-5 s inside Steam with this same mapping; the owner's downgraded firmware
+# opens it at once.
+version: 1
+kind: CompositeDevice
+name: GameSir X5 Lite
+matches: []
+single_source: false
+source_devices:
+  - group: gamepad
+    evdev:
+      name: GameSir-X5 Lite
+      vendor_id: "3537"
+      product_id: "1116"
+      handler: event*
+    capability_map_id: gamesir_x5_lite_gamepad
+  # The phone's motion sensors, for Steam's gyro aiming. houji-gyro creates this
+  # device only while gyro aiming is on and this controller is connected.
+  - group: imu
+    iio:
+      name: bmi-houji-imu
+options:
+  auto_manage: true
+  # Keep the virtual controller across a USB-PD host reset, as for the X2s.
+  persist: true
+target_devices:
+  - deck-uhid

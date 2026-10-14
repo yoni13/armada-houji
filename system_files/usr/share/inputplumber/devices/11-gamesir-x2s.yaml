@@ -25,6 +25,11 @@ source_devices:
       product_id: "0105"
       handler: event*
     capability_map_id: gamesir_x2s_record
+  # The phone's motion sensors, for Steam's gyro aiming. houji-gyro creates this
+  # device only while gyro aiming is on and this controller is connected.
+  - group: imu
+    iio:
+      name: bmi-houji-imu
 options:
   auto_manage: true
   # A USB-PD renegotiation on Houji can reset the whole USB host controller. Keep

@@ -60,6 +60,7 @@ def main():
         if not built.endswith(a.localversion):raise ValueError('The kernel in %s is release %s, not one ending %s; rebuild without --skip-kernel'%(work,built,a.localversion))
     run('python3',PORT/'touch/native/build-module.py',kernel,work/'touch-module')
     run('python3',PORT/'nfc/build-module.py',kernel,work/'nfc-module')
+    run('python3',PORT/'sensors/imu/build-module.py',kernel,work/'imu-module')
     if a.kernel_update:
         run('python3',PORT/'gps/build-module.py',kernel,work/'gps/module')
         run('python3',PORT/'install/package-kernel-update.py','--work',work,'--kernel',output/'build/kernel',

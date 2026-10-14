@@ -1,0 +1,12 @@
+[Unit]
+Description=Houji gyro aiming (phone motion for InputPlumber)
+After=houji-sensors.service inputplumber.service
+Wants=houji-sensors.service
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/libexec/armada/houji-gyro
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

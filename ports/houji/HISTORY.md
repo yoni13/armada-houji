@@ -1037,6 +1037,48 @@ for every DSP request.
   brighten the screen. Steam's mapping from lux to backlight, and how it
   writes the backlight on this panel, are not yet traced.
 
+### Gyro aiming through the controller's virtual Steam Deck (2026-10-15)
+
+- **Issue:** Steam gyro aiming needs motion on the same controller as the
+  sticks. The phone's gyroscope is only reachable through the sensor DSP, and
+  Steam sees the GameSir controllers as InputPlumber's virtual Steam Deck.
+- **Cause:**
+  - libssc already has a gyroscope class, but opens every sensor at the first
+    rate the DSP advertises: about 25 Hz.
+  - InputPlumber 0.79 skips virtual evdev and hidraw devices (hidraw only
+    passes when it matches a connected Bluetooth device) and has no evdev
+    motion source. Its D-Bus `SendEvent` panics a worker thread
+    (`blocking_send` inside the runtime). It does poll IIO IMUs, choosing its
+    BMI driver by device name (`bmi*-imu`), and needs a `/dev/iio:deviceN`.
+  - An IMU source listed in a controller config creates that controller's
+    composite device, and a virtual Steam Deck, even with no controller.
+- **Fix:**
+  - `houji-imu`, an out-of-tree module, registers an IIO device named
+    `bmi-houji-imu` with accelerometer and gyroscope channels. A write-only
+    `sample` attribute takes all six axes at once; an empty event group gives
+    it a `/dev` node.
+  - `houji-gyro` streams the SSC gyroscope at 200 Hz and the accelerometer at
+    50 Hz (re-enabled with an `SscEnableConfigRequest` through the port's
+    `ssc_sensor_send`), rotates them from Android's device frame into the
+    current screen orientation, and writes values that reach the Deck target
+    in the Deck's own units (16384 per g, 16.384 per °/s; from SDL's Steam Deck
+    driver). It loads the module only while gyro aiming is on, a controller
+    whose config lists the IMU is connected with a gamepad target, and the
+    phone is not in light sleep; otherwise it closes the sensors and unloads
+    the module. The sleep hook stops it before native sleep.
+  - The X2s and X5 Lite configs list the IMU. Houji Settings → Controls has the
+    toggle (off by default).
+- **Result:**
+  - The module created `/dev/iio:device2`; with no controller connected the
+    toggle waited and no virtual controller appeared.
+  - With the X5 Lite connected, its composite device took both sources. The
+    virtual Deck's reports carried gravity along the screen's up axis in the
+    `left` orientation, and the owner aimed in a game with Steam's Gyro
+    Behavior.
+  - Cost while streaming: about 3.6 % of one core for `houji-gyro`, and
+    InputPlumber rises from 0.8 % to 6.6 % (it polls the device every 2.5 ms).
+    Off: nothing runs.
+
 ## Battery and charging
 
 ### Battery readings
@@ -1260,6 +1302,21 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   was active and Steam showed `ksm_merge_any: yes`. KSM saved 118 MB with only
   Steam's UI open; at the default 20 ms interval ksmd used ~9% of one core, at
   100 ms ~1%. Gains under GTA V have not been measured yet.
+
+### Writeback tuning and the budget after a reboot (2026-10-13/14)
+
+- **First game session:** with the 5-minute rule, the 8 GiB budget was used up in
+  8 hours; 0.8 GiB stayed on disk and 1.1 GiB was read back, and zram regrew to
+  2.4 GB of RAM with GTA V running. The rule became 30 minutes and the budget
+  16 GiB. A manual 10-minute pass during the next session took zram from about
+  2 GB of RAM to 100 MiB (available 0.5 → 2.4 GB) with almost nothing read back.
+  The 8 FPS seen then came from thermal throttling (skin 48–50 °C, cpu3/4/7
+  paused, cores at 1.0–1.2 GHz), not memory.
+- **Bug:** the helper recorded "budget set for today" in a file that survives
+  reboots, but zram resets `writeback_limit` to 0 at every boot, so after the
+  first reboot of a day nothing was written back. It now carries pages written
+  by earlier boots of the day and re-applies the remaining limit on every run.
+  A host test covers same-boot growth, a reboot, a new day and exhaustion.
 
 ### Both slots stopped booting after `qbootctl -s b` (2026-10-13)
 
@@ -1941,6 +1998,15 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   exception (fixed strings, no APDU/RF/record contents). Tests replay a missing
   pipe and a wrong pipe number. `[UNTESTED] IPASS` itself is unchanged; why
   the firmware lost the pipe is still unknown.
+
+### IPASS confirmed working by the owner (2026-10-14)
+
+- The owner reported the IPASS function as confirmed working. This is the
+  first owner confirmation beyond phone-to-phone RF detection. At the owner's
+  request the `[UNTESTED]` label was dropped from NFC Manager, Houji Settings,
+  the service notices and the README, which now state that the card must be
+  provisioned in Android first: the mode activates the existing applet and
+  cannot add one.
 
 ## Session switching
 

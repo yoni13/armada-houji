@@ -99,6 +99,8 @@ copy(PORT/'sensors/gamescope/houji-gamescope-orientation.service','etc/systemd/s
 copy(users/'sensors/iio-build/data/iio-sensor-proxy.service','etc/systemd/system/iio-sensor-proxy.service')
 copy(users/'sensors/als-build/houji-als','usr/libexec/armada/houji-als',0o755)
 copy(PORT/'sensors/als/houji-als.service','etc/systemd/system/houji-als.service')
+copy(PORT/'sensors/gyro/houji-gyro.py','usr/libexec/armada/houji-gyro',0o755)
+copy(PORT/'sensors/gyro/houji-gyro.service','etc/systemd/system/houji-gyro.service')
 write('etc/udev/rules.d/90-houji-sensors.rules','SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", ENV{IIO_SENSOR_PROXY_TYPE}="ssc-accel ssc-light", ENV{ACCEL_MOUNT_MATRIX}="-1,0,0;0,-1,0;0,0,1", TAG+="systemd", ENV{SYSTEMD_WANTS}+="iio-sensor-proxy.service"\n'
       # houji-als feeds the "als" IIO device and watches its reads; the proxy
       # reads the same light through SSC, so keep it off this device.
@@ -150,7 +152,7 @@ for name in ['sshd.service','sshd.socket']:
 # Device firmware overrides must not be shadowed by another board's board-2.bin.
 wifi=root/'usr/lib/firmware/ath12k/WCN7850/hw2.0'
 for path in wifi.glob('board-2.bin*'):path.unlink()
-for name in ['houji-stock-touch','houji-sensors','houji-als','houji-gamescope-orientation','houji-grow-data',
+for name in ['houji-stock-touch','houji-sensors','houji-als','houji-gyro','houji-gamescope-orientation','houji-grow-data',
              'houji-charging','houji-thermal','armada-power-profiles','houji-steam-power','armada-nfc']:
     link('etc/systemd/system/multi-user.target.wants/'+name+'.service','../'+name+'.service')
 link('etc/systemd/system/multi-user.target.wants/houji-x2s-session.service',

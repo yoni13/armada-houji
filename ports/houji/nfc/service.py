@@ -151,7 +151,7 @@ class Service:
             self.stop.clear()
             self.state.update(ipass_field_on=0, ipass_ese_actions=0)
             self.launch(lambda: controller.ipass_mode(self.stop, self.ipass_changed),
-                        'Preparing [UNTESTED] IPASS')
+                        'Preparing IPASS')
         elif self.settings['emulation_enabled']:
             self.begin_emulation(self.settings['text'],
                     self.settings['serial'] if self.settings['custom_serial'] else '')

@@ -23,8 +23,8 @@ LINK = Path('/dev/disk/by-loop-ref') / REF
 ZRAM = Path('/sys/block/zram0')
 STATE = Path('/var/lib/houji-zram-writeback.json')
 SIZE = 12 << 30                 # zram0 disksize is about 10.6 GiB
-IDLE_SECONDS = 300
-DAILY_BUDGET_PAGES = (8 << 30) // 4096
+IDLE_SECONDS = 1800             # long enough that game-session pages rarely churn back
+DAILY_BUDGET_PAGES = (16 << 30) // 4096
 
 
 def run(*args):
@@ -85,15 +85,23 @@ def write(name, value):
 
 
 def budget():
+    """Apply what is left of today's budget. zram resets its limit and counters
+    at every boot, so pages written by earlier boots today are carried in STATE."""
     today = datetime.date.today().isoformat()
+    boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    written = int((ZRAM / 'bd_stat').read_text().split()[2])
     try:
         state = json.loads(STATE.read_text())
     except (OSError, ValueError):
         state = {}
     if state.get('day') != today:
-        write('writeback_limit_enable', 1)
-        write('writeback_limit', DAILY_BUDGET_PAGES)
-        STATE.write_text(json.dumps({'day': today}))
+        state = {'day': today, 'earlier_boots': 0}
+    elif state.get('boot') != boot:
+        state['earlier_boots'] = state.get('earlier_boots', 0) + state.get('written', 0)
+    state.update(boot=boot, written=written)
+    write('writeback_limit_enable', 1)
+    write('writeback_limit', max(0, DAILY_BUDGET_PAGES - state['earlier_boots'] - written))
+    STATE.write_text(json.dumps(state))
 
 
 def writeback():

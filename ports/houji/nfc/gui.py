@@ -18,7 +18,7 @@ PATH = '/org/armada/Nfc'
 IFACE = 'org.armada.Nfc1'
 NOTICE = 'Settings are saved on this phone. Emulation continues in the background and after reboot until you stop it.'
 MODES = ('off', 'reader', 'emulation', 'ipass')
-MODE_LABELS = ('Off', 'Read nearby tags', 'Emulate text tag', '[UNTESTED] IPASS')
+MODE_LABELS = ('Off', 'Read nearby tags', 'Emulate text tag', 'IPASS')
 
 
 class Application(Adw.Application):
@@ -59,8 +59,8 @@ class Application(Adw.Application):
         self.mode = Adw.ComboRow(title='Mode', model=Gtk.StringList.new(MODE_LABELS))
         self.mode.connect('notify::selected', self.mode_changed)
         group.add(self.mode)
-        self.ipass_notice = Adw.ActionRow(title='[UNTESTED] IPASS',
-            subtitle='Routes NFC-A to the embedded secure element. Another phone detects it during sleep and after waking. Real iPASS reader use is untested.')
+        self.ipass_notice = Adw.ActionRow(title='IPASS',
+            subtitle='Uses the iPASS card on the embedded secure element. The card must first be provisioned in Android; this mode cannot add one.')
         self.ipass_notice.set_subtitle_lines(0)
         self.ipass_notice.set_visible(False)
         group.add(self.ipass_notice)

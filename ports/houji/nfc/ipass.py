@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""[UNTESTED] IPASS: the phone-tested SN220 off-host routing experiment.
+"""IPASS: route NFC-A to the iPASS applet on the SN220 embedded secure element.
 
-The public candidate AID selects and activates, and another phone detects RF
-activity. Personalization and use on an iPASS terminal have NOT been verified.
+The applet must already be provisioned in Android; this module only activates
+it and sets the controller's off-host routing. Confirmed working by the owner.
 No APDU/RF payloads, chip identifiers or transaction data are logged.
 """
 import json
@@ -16,7 +16,7 @@ CRS = bytes.fromhex('A00000015143525300')
 RECOVERY = Path('/var/lib/armada-nfc/ipass-restore.json')
 # Also retain the host Type-A configuration across the routing-clear reset.
 CONFIG_IDS = (0x30, 0x31, 0x32, 0x33, 0x80, 0x81, 0x85)
-NOTICE = '[UNTESTED] IPASS ready. Phone detection works asleep and awake; transit-reader use is unverified.'
+NOTICE = 'IPASS ready. Works while the phone is asleep or awake.'
 
 
 def tlvs(data):

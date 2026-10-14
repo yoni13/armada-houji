@@ -86,6 +86,9 @@ class Plugin:
     async def set_charge_limit(self, limit):
         return await self._helper("charge_limit.set", limit=limit)
 
+    async def set_gyro(self, enabled):
+        return await self._helper("gyro.set", enabled=enabled)
+
     async def set_nfc(self, enabled):
         return await self._helper("nfc.set", enabled=enabled)
 

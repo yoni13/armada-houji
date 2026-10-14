@@ -18,9 +18,11 @@ import {
   selectSim,
   setChargeLimit,
   setData,
+  setGyro,
   setRoaming,
   setRotation,
   type CellularStatus,
+  type GyroStatus,
   type Orientation,
   type Reply,
   type SimMode,
@@ -66,6 +68,18 @@ function chargingSummary(status: Status["charging"]): string {
     return `Holding at ${status.capacity ?? "?"}%; charging resumes at ${status.limit - RESUME_MARGIN}%`;
   }
   return `Charging stops at ${status.limit}%`;
+}
+
+function gyroSummary(gyro: GyroStatus): string {
+  if (!gyro.enabled) return "Steam sees no motion from the phone";
+  switch (gyro.state) {
+    case "active":
+      return "On. Set Gyro Behavior in the game's controller layout";
+    case "error":
+      return "On, but the motion sensors did not start";
+    default:
+      return "On; works with a GameSir controller in Game Mode";
+  }
 }
 
 export function Content() {
@@ -129,7 +143,7 @@ export function Content() {
     );
   }
 
-  const { rotation, charging, cellular, nfc } = status;
+  const { rotation, charging, gyro, cellular, nfc } = status;
   const cellularBusy = pending || cellular.busy;
   const data = cellular.data;
   const limit = limitDraft ?? charging.limit ?? DEFAULT_LIMIT;
@@ -184,6 +198,18 @@ export function Content() {
             />
           </PanelSectionRow>
         )}
+      </PanelSection>
+
+      <PanelSection title="Controls">
+        <PanelSectionRow>
+          <ToggleField
+            label="Gyro aiming"
+            description={gyroSummary(gyro)}
+            checked={gyro.enabled}
+            disabled={pending}
+            onChange={(on) => report(setGyro(on))}
+          />
+        </PanelSectionRow>
       </PanelSection>
 
       <PanelSection title="Battery">

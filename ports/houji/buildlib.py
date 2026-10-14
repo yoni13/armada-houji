@@ -23,6 +23,7 @@ def kernel_source(work):
 # Out-of-tree modules built against the same kernel tree: (work subdirectory, file).
 EXTRA_MODULES = (('touch-module', 'houji-tcm-probe.ko'),
                  ('nfc-module', 'houji-nfc-power.ko'),
+                 ('imu-module', 'houji-imu.ko'),
                  ('gps/module', 'houji-modem-overlay.ko'))
 
 

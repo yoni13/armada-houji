@@ -17,6 +17,11 @@ export interface ChargingStatus {
   status: string | null;
 }
 
+export interface GyroStatus {
+  enabled: boolean;
+  state: "off" | "waiting" | "active" | "error" | null;
+}
+
 export interface NfcStatus {
   enabled: boolean;
   emulating: boolean;
@@ -80,6 +85,7 @@ export interface CellularStatus {
 export interface Status {
   rotation: RotationStatus;
   charging: ChargingStatus;
+  gyro: GyroStatus;
   cellular: CellularStatus;
   nfc: NfcStatus;
 }
@@ -87,6 +93,7 @@ export interface Status {
 export const getStatus = callable<[], Reply<Status>>("status");
 export const setRotation = callable<[mode: Orientation | "auto"], Reply<RotationStatus>>("set_rotation");
 export const setChargeLimit = callable<[limit: number | null], Reply<ChargingStatus>>("set_charge_limit");
+export const setGyro = callable<[enabled: boolean], Reply<GyroStatus>>("set_gyro");
 export const setNfc = callable<[enabled: boolean], Reply<NfcStatus>>("set_nfc");
 export const setNfcMode = callable<[mode: NfcStatus["desired_mode"]], Reply<NfcStatus>>("set_nfc_mode");
 export const nfcAction = callable<[action: "stop" | "scan" | "start_saved"], Reply<NfcStatus>>("nfc_action");

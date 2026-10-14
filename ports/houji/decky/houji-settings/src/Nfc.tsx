@@ -111,7 +111,7 @@ export function NfcPanel({ status, pending, report, refresh }: {
             { data: "off", label: "Off" },
             { data: "reader", label: "Read nearby tags" },
             { data: "emulation", label: "Emulate text tag" },
-            { data: "ipass", label: "[UNTESTED] IPASS" },
+            { data: "ipass", label: "IPASS" },
           ]}
           disabled={changing}
           onChange={(option) => chooseMode(option.data)}
@@ -123,7 +123,7 @@ export function NfcPanel({ status, pending, report, refresh }: {
       {status.desired_mode === "ipass" && (
         <>
           <PanelSectionRow>
-            <Field label="[UNTESTED] IPASS" description="Routes NFC-A to the embedded secure element. Another phone detects it during sleep and after waking. Real iPASS reader use is untested." />
+            <Field label="IPASS" description="Uses the iPASS card on the embedded secure element. The card must first be provisioned in Android; this mode cannot add one." />
           </PanelSectionRow>
           <PanelSectionRow>
             <Field label="RF activity" description={`${status.ipass_field_on} fields · ${status.ipass_ese_actions} eSE actions (not transaction confirmations)`} />
@@ -131,7 +131,7 @@ export function NfcPanel({ status, pending, report, refresh }: {
           {status.mode === "error" && (
             <PanelSectionRow>
               <ButtonItem layout="below" disabled={pending || status.busy} onClick={() => report(setNfcMode("ipass"))}>
-                Retry [UNTESTED] IPASS
+                Retry IPASS
               </ButtonItem>
             </PanelSectionRow>
           )}

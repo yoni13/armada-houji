@@ -27,6 +27,9 @@ HANDLE_KEY = Path('/run/houji/settings-handle-key')
 SIM_SELECTION = Path('/etc/armada/cellular-sim')
 NFC_SETTINGS = Path('/var/lib/armada-nfc/settings.json')
 NFC_NOTIFICATIONS = Path('/etc/armada/houji-nfc-notifications')
+GYRO_SETTING = Path('/etc/armada/houji-gyro-aim')
+GYRO_STATE = Path('/run/houji-gyro/state')
+GYRO_STATES = ('off', 'waiting', 'active', 'error')
 BATTERY = Path('/sys/class/power_supply/battery')
 ORIENTATIONS = ('normal', 'left', 'right', 'upsidedown')
 SIM_MODES = ('auto', 'physical1', 'physical2', 'esim')
@@ -126,6 +129,27 @@ def set_charge_limit(request):
     else:
         raise Failure('The charge limit must be between 50% and 100%.')
     return charging_status()
+
+
+# Controls
+
+def gyro_status():
+    try:
+        state = json.loads(GYRO_STATE.read_text()).get('state')
+    except (OSError, ValueError, AttributeError):
+        state = None
+    return {'enabled': GYRO_SETTING.exists(), 'state': state if state in GYRO_STATES else None}
+
+
+def set_gyro(request):
+    enabled = request.get('enabled')
+    if enabled is True:
+        write_atomic(GYRO_SETTING, '1\n')
+    elif enabled is False:
+        GYRO_SETTING.unlink(missing_ok=True)
+    else:
+        raise Failure('Unknown gyro setting.')
+    return gyro_status()
 
 
 # NFC
@@ -559,7 +583,7 @@ def download_profile(system, request):
 
 
 def status(system, request):
-    return {'rotation': rotation_status(), 'charging': charging_status(),
+    return {'rotation': rotation_status(), 'charging': charging_status(), 'gyro': gyro_status(),
             'cellular': cellular_status(system), 'nfc': nfc_status(system)}
 
 
@@ -567,6 +591,7 @@ OPERATIONS = {
     'status': status,
     'rotation.set': lambda system, request: set_rotation(request),
     'charge_limit.set': lambda system, request: set_charge_limit(request),
+    'gyro.set': lambda system, request: set_gyro(request),
     'nfc.set': set_nfc,
     'nfc.mode': set_nfc_mode,
     'nfc.action': nfc_action,

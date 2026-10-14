@@ -94,7 +94,7 @@ Results below are from the development handset.
 | Cellular | Physical SIM slot 1 and eSIM data work through NetworkManager. LTE/5G registration, HTTPS, KDE SIM/APN controls and RTC-driven native suspend/resume were tested. Slot 2 physical SIM and long-term standby remain untested. Dialer and Spacebar are installed; calls currently fail and need IMS/voice-audio integration. SMS transport is unvalidated. See [cellular support](cellular/README.md). |
 | NFC reader | Experimental. Card discovery and ISO-DEP activation work. Reading NDEF from physical tags, other tag families and writing are unverified. Off by default. |
 | NFC tag emulation | NFC Manager can present a read-only text tag with an automatic or custom 4-byte serial. Verified with another phone. No payment or card copying. |
-| Gyro aiming | Not implemented. Sensors drive screen rotation only. |
+| Gyro aiming | With a GameSir X2s or X5 Lite in Game Mode: turn on Houji Settings → Controls → Gyro aiming, then pick a Gyro Behavior in the game's Steam controller layout. Tested aiming in a game. See [Gyro aiming](#gyro-aiming). |
 
 ### Not working or untested
 
@@ -599,9 +599,9 @@ over a long sleep or with wireless charging.
 Linux receives about 11.26 GB of the 12 GiB part; firmware keeps the rest for
 the modem, DSPs, hypervisor and TrustZone. The unused trusted-UI and OEM VM
 carve-outs (140 MiB) are ordinary RAM here. Swap is zram (zstd) in RAM, a
-4 GB overflow swap file, and zram writeback: pages untouched for 5 minutes
+4 GB overflow swap file, and zram writeback: pages untouched for 30 minutes
 move to `/run/houji/data/houji-zram-writeback.img` every 2 minutes, at most
-8 GiB per day. Check it with:
+16 GiB per day across reboots. Check it with:
 
 ```sh
 sudo /usr/libexec/armada/houji-zram-writeback status
@@ -692,6 +692,27 @@ Limits:
 - The rear light sensor (TCS3408) reports lux natively through the DSP, but it
   is not exposed to iio-sensor-proxy.
 
+## Gyro aiming
+
+Houji Settings → Controls → **Gyro aiming** (off by default) gives Steam the
+phone's motion on the GameSir controller's virtual Steam Deck controller.
+Steam's default layouts leave the gyro off: choose a Gyro Behavior (such as
+Gyro to Mouse) in the game's controller layout.
+
+- `houji-gyro` streams the gyroscope (200 Hz) and accelerometer (50 Hz) through
+  libssc and writes each sample to `bmi-houji-imu`, an IIO device from the
+  `houji-imu` module. InputPlumber polls it as an IMU source of the X2s and
+  X5 Lite configs.
+- Axes follow the screen orientation (the rotation lock included), so motion
+  matches what is on screen with the USB port on either side. Units are the
+  Steam Deck's own.
+- It runs only while the toggle is on, a configured controller is connected in
+  Game Mode, and the phone is awake; otherwise the sensors are closed and the
+  module unloaded. While streaming it costs about 1 % of total CPU
+  (`houji-gyro` 3.6 % of one core, InputPlumber about 6 % more).
+- Other controllers get no motion: their InputPlumber configs do not list the
+  device.
+
 ## USB and privacy
 
 **GameSir X2s in Desktop Mode:** games see the physical **GameSir-X2s Type-C**
@@ -720,7 +741,7 @@ Open **NFC Manager** from KDE's application menu (under Settings). It is a
 separate app, not a System Settings page.
 
 The **Mode** selector offers Off, Read nearby tags, Emulate text tag, and
-**[UNTESTED] IPASS**. It uses the same saved mode as Houji Settings in Game Mode.
+**IPASS**. It uses the same saved mode as Houji Settings in Game Mode.
 
 **Read tags.** Turn on **Read nearby tags**, then hold a tag against the upper
 back of the phone. The app shows scan status and a count of detected tags. Use
@@ -747,10 +768,15 @@ libraries already in the pinned Armada base, so no private files or Python
 downloads are needed. It does not implement payments, physical-card copying or
 other card applications.
 
-### [UNTESTED] IPASS mode
+### IPASS mode
 
-Select **[UNTESTED] IPASS** in NFC Manager or Houji Settings → NFC → Mode to
-activate the candidate applet already on this handset's eSE and route NFC-A,
+**The iPASS card must be provisioned in Android first.** This mode uses the
+applet already on the phone's embedded secure element (eSE); it cannot add,
+personalize or top up a card. Set the card up in stock Android before
+installing Armada, or it will not be there.
+
+Select **IPASS** in NFC Manager or Houji Settings → NFC → Mode to
+activate the applet already on this handset's eSE and route NFC-A,
 ISO-DEP and its exact AID to that secure element. The controller supplies the
 RF configuration (`NFCC_CONFIG_CONTROL=01`) and handles RF traffic through the
 eSE rather than the text-tag responder. A missing applet produces an error;
@@ -761,10 +787,9 @@ test on battery, the owner scanned the phone repeatedly while its screen stayed
 off and again after pressing Power to wake it. Timing measurements confirmed
 216.65 seconds in native `s2idle`, including sensor-DSP dark wakes, with the same
 NFC process surviving throughout. The eSE handles RF while Linux is suspended;
-this requires no light-sleep override or sleep inhibitor. This verifies detection,
-not transit transactions. Real iPASS terminal use, card personalization,
-balances/history and long-term sleep reliability remain unverified. RF field
-and eSE-action counters show activity, not successful transit transactions.
+this requires no light-sleep override or sleep inhibitor. The owner has since
+confirmed IPASS working (2026-10-14). Balances and history are not shown here, and
+RF field and eSE-action counters show activity, not completed transactions.
 
 The selected mode persists across service restarts and boots. Switching to Off,
 Reader or Text-tag emulation stops off-host listening, restores the applet's
@@ -879,7 +904,7 @@ not have:
   Switching SIMs restarts the modem.
 - **eSIM profiles** (with eSIM chosen as the data SIM): list, switch, rename and
   delete profiles, and download a new one by typing its activation code.
-- **NFC:** Off, Reader, Text-tag emulation or **[UNTESTED] IPASS**, with live status, tag count and text
+- **NFC:** Off, Reader, Text-tag emulation or **IPASS**, with live status, tag count and text
   read-request count. **Configure emulated tag** edits the saved text (200 UTF-8
   bytes maximum) and optional four-byte NFC-A serial. Save it for later or start
   emulation from the editor. Stop emulation stays available while a reader is
@@ -888,8 +913,8 @@ not have:
   reboot until stopped. The supported emulation is a read-only NFC Forum Type 4
   text tag; setting a serial does not reproduce another card's applications or
   authentication.
-  - **[UNTESTED] IPASS** enables the experimental off-host eSE routing described
-    above. The panel shows RF activity and a Stop IPASS control. Both UIs wait
+  - **IPASS** enables the off-host eSE routing described above (the card must
+    be provisioned in Android first). The panel shows RF activity and a Stop IPASS control. Both UIs wait
     for eSE/controller restoration before switching to the next NFC mode.
   - In Reader mode, **Notify when a tag is found** controls Steam notifications
     for new scans. It defaults to off and persists across reboots. When enabled,
