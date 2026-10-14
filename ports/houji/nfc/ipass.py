@@ -110,6 +110,55 @@ def read_routes(link):
     raise ProtocolError('Too many routing fragments.')
 
 
+# Card data, read the way Google Wallet does (MdacRequest and its parser in
+# Wallet 26.37). The data applet pairs with AID: "M4MSM" in place of "M4MVCM",
+# same instance number. Each reply is [tag, length, data, SW1 SW2]; values are
+# little-endian. The balance reply ends with the last top-up record, and each
+# trip reply holds three 16-byte records.
+MDAC = AID[:8] + b'SM' + AID[-2:]
+CARD_QUERY = [bytes.fromhex('00a404000c') + MDAC + b'\0'] + [bytes.fromhex(command + '00') for command in (
+    '80B0000017E70FD0020003D10100D40101D503020007B004D5020007',
+    '80B0000017E70FD0020005D10100D40101D503040007B004D5020007',
+    '80B0000017E70FD0020006D10100D40101D503050007B004D5020007')]
+# Record status byte, inferred from a card's history where each balance-after
+# follows from the previous one; Wallet itself does not label these.
+TRIP_KINDS = {0x00: 'entry', 0x11: 'exit', 0x20: 'payment', 0x30: 'top-up'}
+
+
+def card_frame(reply):
+    if reply[-2:] != b'\x90\0':
+        raise ProtocolError('The iPASS card refused the read (status ' + reply[-2:].hex().upper() + ').')
+    data = reply[:-2]
+    if len(data) != 50 or data[1] != 48:
+        raise ProtocolError('Unexpected iPASS card reply.')
+    return data[2:]
+
+
+def trip(data):
+    seconds = int.from_bytes(data[1:5], 'little')
+    if not seconds:
+        return None
+    return (seconds, TRIP_KINDS.get(data[5], 'other'),
+            int.from_bytes(data[6:8], 'little', signed=True),
+            int.from_bytes(data[8:10], 'little', signed=True))
+
+
+def card(replies):
+    """Balance and trips, newest first, from the replies to CARD_QUERY."""
+    if len(replies) != len(CARD_QUERY):
+        raise ProtocolError('Incomplete iPASS card reply.')
+    if replies[0][-2:] != b'\x90\0':
+        raise ProtocolError('No iPASS card data on the secure element.')
+    balance = card_frame(replies[1])
+    records = [trip(balance[32:48])]
+    for reply in replies[2:]:
+        data = card_frame(reply)
+        records += [trip(data[start:start + 16]) for start in (0, 16, 32)]
+    trips = sorted({record for record in records if record}, reverse=True)
+    return {'balance': int.from_bytes(balance[:4], 'little', signed=True),
+            'trips': [dict(zip(('time', 'kind', 'amount', 'balance'), record)) for record in trips]}
+
+
 def routes():
     # Switched-on screen states only, excluding battery-off and switched-off.
     return [bytes((2, 2 + len(AID), HOST, 0x39)) + AID,

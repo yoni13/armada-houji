@@ -118,7 +118,20 @@ async function privateNfc<T>(request: Record<string, unknown>): Promise<Reply<T>
   return await response.json() as Reply<T>;
 }
 
+export interface IpassTrip {
+  time: string;
+  kind: "entry" | "exit" | "payment" | "top-up" | "other";
+  amount: number;
+  balance: number;
+}
+
+export interface IpassCard {
+  balance: number;
+  trips: IpassTrip[];
+}
+
 export const getNfcTag = () => privateNfc<NfcTag>({ action: "get" });
+export const readIpassCard = () => privateNfc<IpassCard>({ action: "ipass_card" });
 export const updateNfcTag = (action: "save" | "start", tag: NfcTag) =>
   privateNfc<NfcStatus>({ action, ...tag });
 

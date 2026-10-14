@@ -139,6 +139,45 @@ class Protocol(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ProtocolError): ipass.tlvs(value)
 
 
+def card_reply(payload):
+    return bytes((0x61, len(payload))) + payload + b'\x90\0'
+
+
+def trip_record(seconds, status, amount, after):
+    return (b'\x01' + seconds.to_bytes(4, 'little') + bytes((status,))
+            + amount.to_bytes(2, 'little', signed=True) + after.to_bytes(2, 'little', signed=True)
+            + b'\0\0' + b'\xff' * 4)
+
+
+class Card(unittest.TestCase):
+    def test_query_selects_the_data_applet_of_the_ipass_instance(self):
+        self.assertEqual(ipass.MDAC.hex().upper(), 'A0000006914D344D534D0100')
+        self.assertEqual(ipass.CARD_QUERY[0].hex().upper(), '00A404000CA0000006914D344D534D010000')
+        self.assertTrue(all(command.endswith(b'\0') for command in ipass.CARD_QUERY))
+
+    def test_balance_and_trips(self):
+        empty = b'\0' * 16
+        balance = card_reply((-5).to_bytes(4, 'little', signed=True) + b'\0' * 28
+                             + trip_record(1_700_000_300, 0x30, 200, 170))
+        first = card_reply(trip_record(1_700_000_100, 0x00, 0, 7)
+                           + trip_record(1_700_000_200, 0x11, 37, -30) + empty)
+        second = card_reply(trip_record(1_700_000_400, 0x20, 25, 145)
+                            + trip_record(1_700_000_300, 0x30, 200, 170) + trip_record(1_700_000_500, 0x77, 1, 144))
+        result = ipass.card([b'\x6f\x00\x90\0', balance, first, second])
+        self.assertEqual(result['balance'], -5)
+        self.assertEqual([t['time'] for t in result['trips']],
+                         [1_700_000_500, 1_700_000_400, 1_700_000_300, 1_700_000_200, 1_700_000_100])
+        self.assertEqual(result['trips'][0]['kind'], 'other')
+        self.assertEqual(result['trips'][3], {'time': 1_700_000_200, 'kind': 'exit', 'amount': 37, 'balance': -30})
+
+    def test_refusals_and_bad_frames(self):
+        good = card_reply(b'\0' * 48)
+        with self.assertRaises(ProtocolError): ipass.card([b'\x6a\x82', good, good, good])
+        with self.assertRaises(ProtocolError): ipass.card([b'\x90\0', b'\x6d\x00', good, good])
+        with self.assertRaises(ProtocolError): ipass.card([b'\x90\0', good[:-3] + b'\x90\0', good, good])
+        with self.assertRaises(ProtocolError): ipass.card([b'\x90\0', good, good])
+
+
 class Modes(unittest.TestCase):
     def setUp(self):
         self.service = service.Service.__new__(service.Service)
@@ -149,6 +188,7 @@ class Modes(unittest.TestCase):
         self.service.worker.is_alive.return_value = True
         self.service.emulation = True
         self.service.mode_pending = False
+        self.service.card_request = None
         self.service.closing = False
         self.service.seen_tags = set()
         self.service.stop = threading.Event()
@@ -185,6 +225,36 @@ class Modes(unittest.TestCase):
         s.emulation = False
         with self.assertRaises(ValueError): s.request_mode('ipass')
         s.save.assert_not_called()
+
+    def test_card_read_pauses_ipass_then_restarts_it(self):
+        s = self.service
+        s.settings['ipass_enabled'] = True
+        s.start_card_read = Mock()
+        invocation = object()
+        s.read_ipass_card(invocation)
+        self.assertTrue(s.stop.is_set())
+        self.assertTrue(s.mode_pending)
+        s.start_card_read.assert_not_called()
+        # Another request while pausing is refused.
+        with self.assertRaises(ValueError): s.read_ipass_card(object())
+        s.completed(s.worker, True)
+        s.start_card_read.assert_called_once()
+        s.start_desired_mode.assert_not_called()
+        reader = s.worker = Mock()
+        reply = Mock()
+        with patch.object(service.GLib, 'Variant', Mock(), create=True):
+            s.card_read(reader, reply, '{"balance": 1, "trips": []}', None)
+        reply.return_value.assert_called_once()
+        s.start_desired_mode.assert_called_once()
+        self.assertIsNone(s.card_request)
+
+    def test_card_read_refused_during_other_work(self):
+        s = self.service
+        s.emulation = False
+        with self.assertRaises(ValueError): s.read_ipass_card(object())
+        s.emulation = True
+        s.settings['emulation_enabled'] = True   # text tag, not IPASS
+        with self.assertRaises(ValueError): s.read_ipass_card(object())
 
     def test_old_settings_migrate_without_enabling_ipass(self):
         with tempfile.TemporaryDirectory() as directory:

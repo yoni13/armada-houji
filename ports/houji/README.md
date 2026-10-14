@@ -788,8 +788,19 @@ off and again after pressing Power to wake it. Timing measurements confirmed
 216.65 seconds in native `s2idle`, including sensor-DSP dark wakes, with the same
 NFC process surviving throughout. The eSE handles RF while Linux is suspended;
 this requires no light-sleep override or sleep inhibitor. The owner has since
-confirmed IPASS working (2026-10-14). Balances and history are not shown here, and
-RF field and eSE-action counters show activity, not completed transactions.
+confirmed IPASS working (2026-10-14). RF field and eSE-action counters show
+activity, not completed transactions.
+
+**Balance and recent trips:** Houji Settings → NFC → **Balance and recent trips**
+(in IPASS mode) reads the card the way Google Wallet does. The NFC service pauses
+IPASS, sends Wallet's queries to the card's data applet (`…534D0100`, "M4MSM",
+the partner of the activated `…56434D0100` instance) in one eSE session, and
+starts IPASS again; the pause took about 3 seconds. It shows the balance and up
+to 8 recent records, each with its time, amount and balance afterwards. Entry,
+exit, payment and top-up are inferred from the records' status byte: Wallet does
+not label them, but on the owner's card each balance-after followed from the
+previous record. The data travels only over the plugin's private loopback
+channel, never through a logged Decky call, and the service logs none of it.
 
 The selected mode persists across service restarts and boots. Switching to Off,
 Reader or Text-tag emulation stops off-host listening, restores the applet's

@@ -81,8 +81,13 @@ class FakeSystem:
             out = 'enabled\n'
         return subprocess.CompletedProcess(args, code, out, '')
 
-    def dbus(self, service, method, signature=None, args=(), reply='(s)', start=True):
+    def dbus(self, service, method, signature=None, args=(), reply='(s)', start=True, timeout=15000):
         self.dbus_calls.append((service[0], method, args))
+        if method == 'ReadIpassCard':
+            return (json.dumps({'balance': 412, 'trips': [
+                {'time': 1_700_000_000, 'kind': 'payment', 'amount': 28, 'balance': 412},
+                {'time': 'bad', 'kind': 'payment', 'amount': 1, 'balance': 1},
+                {'time': 1_600_000_000, 'kind': 'surprise', 'amount': 1, 'balance': 1}]}),)
         if method == 'Status':
             return (json.dumps(self.state),)
         if method == 'GetStatus':
@@ -298,6 +303,21 @@ class Helper(unittest.TestCase):
         for action, method in [('stop', 'StopEmulation'), ('scan', 'ScanAgain')]:
             self.assertTrue(self.call(system, op='nfc.action', action=action)['ok'])
             self.assertIn(('org.armada.Nfc', method, ()), system.dbus_calls)
+
+    def test_ipass_card_keeps_only_valid_trips(self):
+        result = helper.nfc_ipass_card(FakeSystem(), {})
+        self.assertEqual(result['balance'], 412)
+        self.assertEqual(len(result['trips']), 1)
+        self.assertEqual(result['trips'][0]['kind'], 'payment')
+        self.assertRegex(result['trips'][0]['time'], r'^\d{4}-\d\d-\d\d \d\d:\d\d$')
+
+        class Refused(FakeSystem):
+            def dbus(self, *args, **kwargs):
+                error = Exception()
+                error.message = 'GDBus.Error:org.armada.Nfc.CardFailed: No iPASS card data on the secure element.'
+                raise error
+        with self.assertRaisesRegex(helper.Failure, '^No iPASS card data on the secure element.$'):
+            helper.nfc_ipass_card(Refused(), {})
 
     def test_nfc_validation_rejects_before_touching_hardware(self):
         system = FakeSystem()

@@ -2008,6 +2008,32 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   provisioned in Android first: the mode activates the existing applet and
   cannot add one.
 
+### iPASS balance and trips read from the card (2026-10-15)
+
+- **Issue:** IPASS paid, but the balance could only be seen in Wallet, which
+  the reflash removed.
+- **Cause (Google Wallet 26.37, `MifareCommandRunnerImpl` and its parser):**
+  - Wallet selects a 12-byte per-card AID that its server supplies
+    (`00A404000C` + AID), then sends three `80 B0` reads: balance and two trip
+    lists. Sent to the activated VCM applet itself, `80 B0` returns `6D00`.
+  - The contactless registry (read-only `GET STATUS`) lists the data applet
+    next to each VCM instance: `A0000006914D344D534D0100` ("M4MSM") for the
+    activated `…56434D0100`.
+  - Each reply is `[tag 61, length 48, data, 9000]`. The balance is a
+    little-endian int32 at the start; the balance reply ends with the last
+    top-up record, and each trip reply holds three 16-byte records (status
+    byte, Unix time, amount and balance afterwards, little-endian).
+- **Fix:** The NFC service's `ReadIpassCard` pauses IPASS through the normal
+  restore path, runs the four commands in one eSE session, and starts IPASS
+  again. Houji Settings shows the result through its private loopback channel.
+  `GetStatus` now also reports busy while a worker thread is still finishing:
+  after an eSE session it had reported idle during the final status refresh,
+  so an immediate mode change was refused.
+- **Result:** On the owner's card the balance and seven records matched each
+  other (every balance-after followed from the one before), including two
+  payments made with this port's IPASS mode. The read with the pause took about
+  3 seconds, and IPASS was ready again afterwards.
+
 ## Session switching
 
 - **Issue:** Choosing Game Mode in Plasma returned to Plasma.

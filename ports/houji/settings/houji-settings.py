@@ -6,8 +6,9 @@ one JSON request on stdin and writes one JSON reply to stdout. Decky
 records every plugin call's arguments and result in Steam's on-disk JS log, so
 replies carry no subscriber identifiers: eSIM profiles are named by per-boot
 HMAC handles, and ModemManager and NetworkManager data is reduced to fixed
-fields. eSIM activation codes and NFC tag settings use the plugin's private
-loopback channel; the helper passes them through the root socket and D-Bus.
+fields. eSIM activation codes, NFC tag settings and the iPASS balance and
+trips use the plugin's private loopback channel; the helper passes them through
+the root socket and D-Bus.
 """
 import hashlib
 import hmac
@@ -18,6 +19,7 @@ import re
 import secrets
 import subprocess
 import sys
+import time
 
 ROTATION_LOCK = Path('/etc/armada/houji-rotation-lock')
 ORIENTATION_STATE = Path('/run/houji-orientation/current')
@@ -30,6 +32,7 @@ NFC_NOTIFICATIONS = Path('/etc/armada/houji-nfc-notifications')
 GYRO_SETTING = Path('/etc/armada/houji-gyro-aim')
 GYRO_STATE = Path('/run/houji-gyro/state')
 GYRO_STATES = ('off', 'waiting', 'active', 'error')
+IPASS_TRIP_KINDS = ('entry', 'exit', 'payment', 'top-up', 'other')
 BATTERY = Path('/sys/class/power_supply/battery')
 ORIENTATIONS = ('normal', 'left', 'right', 'upsidedown')
 SIM_MODES = ('auto', 'physical1', 'physical2', 'esim')
@@ -49,14 +52,14 @@ class System:
     def run(self, *args, timeout=20):
         return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
 
-    def dbus(self, service, method, signature=None, args=(), reply='(s)', start=True):
+    def dbus(self, service, method, signature=None, args=(), reply='(s)', start=True, timeout=15000):
         from gi.repository import Gio, GLib
         name, path, interface = service
         flags = Gio.DBusCallFlags.NONE if start else Gio.DBusCallFlags.NO_AUTO_START
         bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
         params = GLib.Variant(signature, args) if signature else None
         return bus.call_sync(name, path, interface, method, params, GLib.VariantType.new(reply),
-                             flags, 15000, None).unpack()
+                             flags, timeout, None).unpack()
 
 
 def write_atomic(path, text):
@@ -284,6 +287,26 @@ def nfc_tag_update(system, request):
     except Exception:
         raise Failure('NFC is busy or unavailable. Stop emulation before editing or restarting it.') from None
     return nfc_status(system)
+
+
+def nfc_ipass_card(system, request):
+    """Private-channel reply only: balance and trips never pass through a Decky call."""
+    try:
+        # IPASS pauses for the read: stopping, the eSE session and restarting.
+        card = json.loads(system.dbus(NFC, 'ReadIpassCard', timeout=90000)[0])
+    except Exception as error:
+        message = getattr(error, 'message', '')
+        detail = message.rsplit(': ', 1)[-1] if 'CardFailed' in message or 'InvalidRequest' in message else ''
+        raise Failure(detail[:120] or 'Could not read the iPASS card.') from None
+    trips = []
+    for item in card.get('trips', [])[:8]:
+        if (type(item.get('time')) is int and type(item.get('amount')) is int
+                and type(item.get('balance')) is int and item.get('kind') in IPASS_TRIP_KINDS):
+            trips.append({'time': time.strftime('%Y-%m-%d %H:%M', time.localtime(item['time'])),
+                          'kind': item['kind'], 'amount': item['amount'], 'balance': item['balance']})
+    if type(card.get('balance')) is not int:
+        raise Failure('Could not read the iPASS card.')
+    return {'balance': card['balance'], 'trips': trips}
 
 
 def nfc_action(system, request):
@@ -599,6 +622,7 @@ OPERATIONS = {
     'nfc.watch': nfc_watch,
     'nfc.tag.get': nfc_tag_settings,
     'nfc.tag.update': nfc_tag_update,
+    'nfc.ipass.card': nfc_ipass_card,
     'cellular.enable': enable_cellular,
     'sim.select': select_sim,
     'esim.refresh': refresh_profiles,

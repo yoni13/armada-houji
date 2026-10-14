@@ -11,7 +11,7 @@ import time
 from protocol import TextTag, validate
 from transport import Transport
 from ese import Session, validate_apdus
-from ipass import Offhost, RECOVERY
+from ipass import CARD_QUERY, Offhost, RECOVERY, card
 
 DRIVER = Path('/sys/bus/i2c/drivers/nxp-nci_i2c')
 IFACE = 'org.neard.Adapter'
@@ -207,6 +207,11 @@ def ese_exchange(apdus):
         return _ese_exchange(apdus)
     finally:
         os.close(lock)
+
+
+def ipass_card():
+    """Read the iPASS balance and recent trips in one wired-eSE session."""
+    return card(ese_exchange(CARD_QUERY))
 
 
 def _ese_exchange(apdus):

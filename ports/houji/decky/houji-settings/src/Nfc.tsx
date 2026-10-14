@@ -2,12 +2,114 @@ import {
   ButtonItem, DialogButton, DropdownItem, Field, Focusable, ModalRoot,
   PanelSection, PanelSectionRow, TextField, ToggleField, showModal,
 } from "@decky/ui";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  getNfcTag, nfcAction, setNfcMode, setNfcNotifications, updateNfcTag, type NfcStatus, type NfcTag, type Reply,
+  getNfcTag, nfcAction, readIpassCard, setNfcMode, setNfcNotifications, updateNfcTag,
+  type IpassCard, type IpassTrip, type NfcStatus, type NfcTag, type Reply,
 } from "./backend";
 
 type Report = (reply: Promise<Reply<unknown>>) => void;
+
+const TRIP_LABELS: Record<IpassTrip["kind"], string> = {
+  entry: "Entry",
+  exit: "Exit",
+  payment: "Payment",
+  "top-up": "Top-up",
+  other: "Transaction",
+};
+
+function tripAmount(trip: IpassTrip): string {
+  if (trip.kind === "entry" && trip.amount === 0) return "";
+  return `${trip.kind === "top-up" ? "+" : "−"}NT$${trip.amount} · `;
+}
+
+// Touch scrolls the list; with a controller, focus moves row by row and Steam
+// scrolls the focused row into view. Steam hides scrollbars, so the list draws
+// its own position indicator.
+function TripList({ trips }: { trips: IpassTrip[] }) {
+  const list = useRef<HTMLDivElement>(null);
+  const [thumb, setThumb] = useState<{ top: number; size: number } | null>(null);
+  const measure = () => {
+    const element = list.current;
+    if (!element || element.scrollHeight <= element.clientHeight + 1) {
+      setThumb(null);
+      return;
+    }
+    setThumb({ top: (element.scrollTop / element.scrollHeight) * 100,
+               size: (element.clientHeight / element.scrollHeight) * 100 });
+  };
+  useEffect(measure, [trips]);
+
+  return (
+    <div style={{ position: "relative" }}>
+      <div ref={list} onScroll={measure} style={{ maxHeight: "45vh", overflowY: "auto", paddingRight: "14px" }}>
+        <Focusable>
+          {trips.map((trip) => (
+            <Field
+              key={`${trip.time}-${trip.kind}-${trip.balance}`}
+              focusable
+              label={`${TRIP_LABELS[trip.kind]} · ${trip.time}`}
+              description={`${tripAmount(trip)}balance NT$${trip.balance}`}
+            />
+          ))}
+        </Focusable>
+      </div>
+      {thumb && (
+        <div style={{ position: "absolute", top: 0, bottom: 0, right: "2px", width: "4px",
+                      borderRadius: "2px", background: "rgba(255, 255, 255, 0.12)" }}>
+          <div style={{ position: "absolute", left: 0, right: 0, top: `${thumb.top}%`, height: `${thumb.size}%`,
+                        borderRadius: "2px", background: "rgba(255, 255, 255, 0.6)" }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function IpassCardModal({ closeModal }: { closeModal?(): void }) {
+  const [card, setCard] = useState<IpassCard | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(true);
+  const read = () => {
+    setBusy(true);
+    setError(null);
+    readIpassCard()
+      .then((reply) => {
+        if (reply.ok) setCard(reply.result);
+        else setError(reply.error);
+      })
+      .catch(() => setError("Could not read the iPASS card."))
+      .finally(() => setBusy(false));
+  };
+  useEffect(read, []);
+
+  return (
+    <ModalRoot closeModal={busy ? undefined : closeModal} onCancel={() => { if (!busy) closeModal?.(); }}>
+      <h2 style={{ marginTop: 0 }}>iPASS card</h2>
+      {busy && <p>Reading the card… IPASS pauses for a few seconds.</p>}
+      {error && <p role="alert">{error}</p>}
+      {card && (
+        <>
+          <p style={{ fontSize: "28px", margin: "8px 0" }}>NT${card.balance}</p>
+          {card.trips.length ? (
+            <>
+              <div style={{ fontSize: "12px", opacity: 0.7 }}>
+                {card.trips.length} recent record{card.trips.length === 1 ? "" : "s"}
+              </div>
+              <TripList trips={card.trips} />
+            </>
+          ) : <p>No recent trips on the card.</p>}
+          <p style={{ fontSize: "12px", opacity: 0.7 }}>
+            Read from the card on this phone, the way Google Wallet does. Trip types are inferred from the card's records.
+          </p>
+        </>
+      )}
+      <Focusable style={{ display: "flex", gap: "12px" }}>
+        <DialogButton disabled={busy} onClick={read}>Read again</DialogButton>
+        <DialogButton disabled={busy} onClick={() => closeModal?.()}>Close</DialogButton>
+      </Focusable>
+    </ModalRoot>
+  );
+}
 
 export function NfcTagModal({ closeModal, changed }: { closeModal?(): void; changed(): void }) {
   const [tag, setTag] = useState<NfcTag | null>(null);
@@ -127,6 +229,16 @@ export function NfcPanel({ status, pending, report, refresh }: {
           </PanelSectionRow>
           <PanelSectionRow>
             <Field label="RF activity" description={`${status.ipass_field_on} fields · ${status.ipass_ese_actions} eSE actions (not transaction confirmations)`} />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              description="IPASS pauses for a few seconds while the card is read."
+              disabled={pending || status.mode !== "ipass"}
+              onClick={() => showModal(<IpassCardModal />)}
+            >
+              Balance and recent trips
+            </ButtonItem>
           </PanelSectionRow>
           {status.mode === "error" && (
             <PanelSectionRow>

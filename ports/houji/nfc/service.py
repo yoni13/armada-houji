@@ -32,6 +32,7 @@ XML = '''<node><interface name="org.armada.Nfc1">
   <method name="StartEmulation"><arg type="s" direction="in"/><arg type="s" direction="in"/></method>
   <method name="StopEmulation"/>
   <method name="TransceiveEse"><arg name="commands" type="aay" direction="in"/><arg name="responses" type="aay" direction="out"/></method>
+  <method name="ReadIpassCard"><arg type="s" direction="out"/></method>
 </interface></node>'''
 SETTINGS = Path('/var/lib/armada-nfc/settings.json')
 DEFAULTS = dict(text='Armada NFC test', serial='12:34:56:78', custom_serial=False,
@@ -95,6 +96,7 @@ class Service:
         self.last_poll = 0
         self.emulation = False
         self.mode_pending = False
+        self.card_request = None
         self.closing = False
         self.settings_error = False
         self.seen_tags = set()
@@ -209,7 +211,10 @@ class Service:
         if method == 'GetStatus':
             self.poll()
             with self.lock:
-                value = json.dumps(dict(self.state, emulation_enabled=self.settings['emulation_enabled'],
+                # A worker stays alive briefly after clearing busy (its final
+                # status refresh); clients must not send a change before it ends.
+                busy = self.state['busy'] or bool(self.worker and self.worker.is_alive())
+                value = json.dumps(dict(self.state, busy=busy, emulation_enabled=self.settings['emulation_enabled'],
                                         ipass_enabled=self.settings['ipass_enabled'],
                                         desired_mode=desired_mode(self.settings)))
             invocation.return_value(GLib.Variant('(s)', (value,)))
@@ -227,6 +232,9 @@ class Service:
                 self.request_mode('off')
             elif method == 'SetReader':
                 self.request_mode('reader' if params.unpack()[0] else 'off')
+            elif method == 'ReadIpassCard':
+                self.read_ipass_card(invocation)
+                return
             elif self.worker and self.worker.is_alive():
                 raise ValueError('NFC is busy. Wait for the current operation to finish.')
             elif method == 'TransceiveEse':
@@ -288,6 +296,57 @@ class Service:
         self.worker = threading.Thread(target=run, name='nfc-ese', daemon=True)
         self.worker.start()
 
+    def read_ipass_card(self, invocation):
+        if self.card_request is not None or self.mode_pending:
+            raise ValueError('NFC is busy. Wait for the current operation to finish.')
+        if self.worker and self.worker.is_alive():
+            if not (self.emulation and self.settings.get('ipass_enabled')):
+                raise ValueError('NFC is busy. Wait for the current operation to finish.')
+            # IPASS stops and restores the eSE state first; completed() then
+            # reads the card, and IPASS starts again afterwards.
+            self.card_request = invocation
+            self.mode_pending = True
+            self.stop.set()
+            self.changed('stopping', 'Pausing IPASS to read the card', None)
+        else:
+            self.card_request = invocation
+            self.start_card_read()
+
+    def start_card_read(self):
+        invocation = self.card_request
+        self.changed('ese', 'Reading the iPASS card', None)
+
+        def run():
+            result = error = None
+            with self.hardware:
+                try:
+                    result = json.dumps(controller.ipass_card())
+                except Exception as failure:
+                    # The card's data and the APDUs stay out of the journal.
+                    print(f'iPASS card read failed: {describe_failure(failure)}', file=sys.stderr, flush=True)
+                    error = (str(failure) if isinstance(failure, ProtocolError) else
+                             'Could not read the iPASS card.')
+                with self.lock:
+                    self.state.update(mode='off', busy=False, message=error or 'iPASS card read')
+                self.refresh()
+            GLib.idle_add(self.card_read, threading.current_thread(), invocation, result, error)
+
+        self.worker = threading.Thread(target=run, name='nfc-ipass-card', daemon=True)
+        self.worker.start()
+
+    def card_read(self, worker, invocation, result, error):
+        self.card_request = None
+        if result is None:
+            invocation.return_dbus_error(NAME + '.CardFailed', error)
+        else:
+            invocation.return_value(GLib.Variant('(s)', (result,)))
+        if self.worker is worker:
+            self.worker = None
+            pending, self.mode_pending = self.mode_pending, False
+            if pending and not self.closing:
+                self.start_desired_mode()
+        return False
+
     def changed(self, mode, message, reads):
         with self.lock:
             self.state.update(mode=mode, message=message, busy=True)
@@ -345,6 +404,9 @@ class Service:
             return False
         self.worker = None
         self.emulation = False
+        if self.card_request is not None and not self.closing:
+            self.start_card_read()
+            return False
         pending, self.mode_pending = self.mode_pending, False
         if success and pending and not self.closing:
             self.start_desired_mode()
