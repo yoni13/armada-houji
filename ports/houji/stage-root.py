@@ -84,6 +84,7 @@ copy(users/'neard/usr/libexec/nfc/neard','usr/libexec/nfc/neard',0o755)
 for name in ['gui.py','service.py','controller.py','transport.py','protocol.py','ese.py','ese-cli.py','ipass.py',
              'ipass_metadata.py','import-ipass-metadata.py']:
     copy(PORT/'nfc'/name,'usr/libexec/armada/nfc-manager/'+name)
+copy(PORT/'nfc/data/ipass-transaction-metadata.json','usr/share/houji/ipass-transaction-metadata.json',0o644)
 copy(users/'bin/Xiaomi-14-tplg.bin','usr/lib/firmware/qcom/houji/Xiaomi-14-tplg.bin')
 for name,path in {'ssccli':'libssc-build/src/ssccli', 'hexagonrpcd':'hexagon-build/hexagonrpcd/hexagonrpcd',
                   'monitor-sensor':'iio-build/src/monitor-sensor'}.items():

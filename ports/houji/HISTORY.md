@@ -2055,12 +2055,31 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   and Wallet's cached table format. The NFC service resolves names locally
   before returning card data, retaining full terminal IDs inside the service.
   Houji Settings displays automatic names and permits local overrides. The
-  imported table remains local data outside the repository.
+  table was initially installed only as local data; the built-in snapshot below
+  makes names available on fresh installations too.
 - **Validation:** Synthetic tests cover location-only entries, variable-length
   prefixes, duplicates, operator fallback, malformed imports and private
   terminal IDs. On the handset all seven records resolved to names, and IPASS
   resumed within about three seconds. The generic partner-shop label in the
   table cannot identify an individual shop.
+
+### Bundle the transaction-name table in fresh images (2026-10-15)
+
+- **Issue:** The lookup code shipped, but new installations still required a
+  separate metadata import before operator and station names appeared.
+- **Fix:** Include the decoded 2,776-entry snapshot under `nfc/data/` and install
+  it to `/usr/share/houji/ipass-transaction-metadata.json`. Preserve row order
+  and duplicate-key precedence. The asset contains only lookup keys and names;
+  account data, transactions and personal overrides are not included.
+- **Updates:** Valid imports under `/var/lib/armada-nfc/` override the built-in
+  table. Missing, unreadable or malformed imports fall back to the snapshot.
+  Local place-name overrides continue to take precedence over automatic names.
+- **Validation:** Tests load the shipped snapshot with no imported table, check
+  representative rail/bus/operator names, and cover import precedence and
+  fallback when an imported file is corrupt, oversized or unreadable. On the
+  handset, temporarily removing the imported table still resolved all seven
+  records using only the built-in copy; IPASS was ready again in 2.7 seconds.
+  The existing imported table was restored afterwards.
 
 ## Session switching
 

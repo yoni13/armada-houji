@@ -25,7 +25,7 @@ function tripAmount(trip: IpassTrip): string {
 
 const placeLabel = (trip: IpassTrip) => trip.place ?? `Place ${trip.system}-${trip.station}`;
 
-// Imported Wallet metadata supplies automatic names. A local name can override
+// Built-in Wallet metadata (or an imported update) supplies automatic names. A local name can override
 // the older two-byte place code without changing the downloaded table.
 function PlaceModal({ trip, named, closeModal }: {
   trip: IpassTrip; named(place: IpassPlace): void; closeModal?(): void;
@@ -152,7 +152,7 @@ export function IpassCardModal({ closeModal }: { closeModal?(): void }) {
             </>
           ) : <p>No recent trips on the card.</p>}
           <p style={{ fontSize: "12px", opacity: 0.7 }}>
-            Names use an imported Google Wallet lookup table. Trip types are inferred from the card's records. Select a trip to set a custom name.
+            Names use a built-in Google Wallet lookup table, with support for imported updates. Trip types are inferred from the card's records. Select a trip to set a custom name.
           </p>
         </>
       )}

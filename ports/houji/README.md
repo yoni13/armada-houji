@@ -804,9 +804,10 @@ channel, never through a logged Decky call, and the service logs none of it.
 
 #### iPASS transaction names
 
-The card contains numeric operator/location/terminal codes. Wallet downloads a
-name table separately; an imported copy lets Houji Settings resolve names
-offline, including labels such as 台鐵新竹站 and 豪泰汽車客運. Where the table
+The card contains numeric operator/location/terminal codes. The port includes
+Wallet's 2,776-entry name-table snapshot from 2026-10-15, so Houji Settings
+resolves names offline on a fresh installation without a Google login or manual
+import, including labels such as 台鐵新竹站 and 豪泰汽車客運. Where the table
 only names an operator, that is the most detail shown (for example
 一卡通特約商店 rather than an individual shop).
 
@@ -818,12 +819,16 @@ only names an operator, that is the most detail shown (for example
   User-defined names in the root-only `ipass-places.json` override automatic
   names. Removing an override restores the automatic name. These legacy local
   overrides use a two-byte code that some operators share across locations.
-- The table is optional and stored in
-  `/var/lib/armada-nfc/ipass-transaction-metadata.json`. Without it, balance and
-  history still work. The downloaded table is local data, not bundled into the
-  source tree or a fresh image.
+- The built-in table is versioned at
+  `nfc/data/ipass-transaction-metadata.json` and installed as
+  `/usr/share/houji/ipass-transaction-metadata.json`. It contains lookup keys
+  and operator/station names only; its provenance is in `nfc/data/README.md`.
+- A valid imported update at
+  `/var/lib/armada-nfc/ipass-transaction-metadata.json` takes precedence. If that
+  file is missing, unreadable or invalid, the service uses the built-in table.
+  Balance and history still work if neither table is usable.
 
-To import an exported response on the phone:
+To optionally update the names from a newer exported response on the phone:
 
 ```sh
 sudo python3 /usr/libexec/armada/nfc-manager/import-ipass-metadata.py response.pb

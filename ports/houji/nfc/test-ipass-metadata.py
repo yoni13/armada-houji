@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import ipass
+import ipass_metadata
 from ipass_metadata import Metadata, decode, load
 
 
@@ -16,6 +17,42 @@ def wire(number, data):
 
 
 class Names(unittest.TestCase):
+    def test_builtin_fallback_and_import_precedence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundled, imported = root / 'bundled.json', root / 'imported.json'
+            bundled.write_text(json.dumps({'version': 1, 'entries': [
+                ['31', '', '12', 'Rail', 'Built-in station']]}))
+            with patch.object(ipass_metadata, 'METADATA', imported), \
+                    patch.object(ipass_metadata, 'BUNDLED_METADATA', bundled):
+                name = lambda: load().lookup(0x31, 0, bytes.fromhex('12345678'))
+                self.assertEqual(name(), 'Built-in station')  # Fresh image.
+                imported.write_text(json.dumps({'version': 1, 'entries': [
+                    ['31', '', '12', 'Rail', 'Updated station']]}))
+                self.assertEqual(name(), 'Updated station')
+                for invalid in ('broken', '{"version":2,"entries":[]}', 'x' * (ipass_metadata.MAX_BYTES + 1)):
+                    imported.write_text(invalid)
+                    self.assertEqual(name(), 'Built-in station')
+                imported.unlink()
+                imported.mkdir()  # Unreadable as a file, even for a root test run.
+                self.assertEqual(name(), 'Built-in station')
+                bundled.unlink()
+                self.assertIsNone(load())
+
+    def test_shipped_snapshot_has_names_without_an_import(self):
+        path = Path(__file__).with_name('data') / 'ipass-transaction-metadata.json'
+        document = json.loads(path.read_text())
+        self.assertEqual(set(document), {'version', 'entries'})
+        self.assertEqual(len(document['entries']), 2776)
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(ipass_metadata, 'METADATA', Path(directory) / 'not-imported.json'), \
+                patch.object(ipass_metadata, 'BUNDLED_METADATA', path):
+            table = load()
+            self.assertIsNotNone(table)
+            self.assertEqual(table.lookup(6, 0, bytes.fromhex('73000000')), '台鐵新竹站')
+            self.assertEqual(table.lookup(7, 0x51, bytes(4)), '豪泰汽車客運')
+            self.assertEqual(table.lookup(0xAC, 0, bytes(4)), '一卡通特約商店')
+
     def test_wallet_matching_rules(self):
         metadata = Metadata({'version': 1, 'entries': [
             ['31', '', '12', 'Rail', 'Broad station'],

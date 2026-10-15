@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 
 METADATA = Path('/var/lib/armada-nfc/ipass-transaction-metadata.json')
+BUNDLED_METADATA = Path('/usr/share/houji/ipass-transaction-metadata.json')
 MAX_BYTES = 4 * 1024 * 1024
 MAX_ROWS = 20000
 
@@ -124,7 +125,7 @@ class Metadata:
         return info['operator'] or None
 
 
-def load(path=METADATA):
+def _load_file(path):
     try:
         with path.open('rb') as stream:
             raw = stream.read(MAX_BYTES + 1)
@@ -132,5 +133,18 @@ def load(path=METADATA):
             return None
         return Metadata(json.loads(raw))
     except (OSError, ValueError, TypeError):
-        # Balance/history still work without a name table.
         return None
+
+
+def load(path=None):
+    """Use an imported update when valid, otherwise the image's built-in table.
+
+    An explicit path reads only that file (for tools and validation).
+    Missing, unreadable or malformed updates must not hide the built-in names.
+    """
+    for candidate in (METADATA, BUNDLED_METADATA) if path is None else (path,):
+        metadata = _load_file(candidate)
+        if metadata is not None:
+            return metadata
+    # Balance/history still work if neither table is usable.
+    return None
