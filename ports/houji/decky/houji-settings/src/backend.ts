@@ -123,6 +123,17 @@ export interface IpassTrip {
   kind: "entry" | "exit" | "payment" | "top-up" | "other";
   amount: number;
   balance: number;
+  system: number;
+  station: string;
+  place: string | null;
+  automatic_place: string | null;
+  custom_place: boolean;
+}
+
+export interface IpassPlace {
+  system: number;
+  station: string;
+  place: string | null;
 }
 
 export interface IpassCard {
@@ -132,6 +143,9 @@ export interface IpassCard {
 
 export const getNfcTag = () => privateNfc<NfcTag>({ action: "get" });
 export const readIpassCard = () => privateNfc<IpassCard>({ action: "ipass_card" });
+// Place names reveal where the card was used: private channel as well.
+export const nameIpassPlace = (system: number, station: string, name: string) =>
+  privateNfc<IpassPlace>({ action: "ipass_place", system, station, name });
 export const updateNfcTag = (action: "save" | "start", tag: NfcTag) =>
   privateNfc<NfcStatus>({ action, ...tag });
 

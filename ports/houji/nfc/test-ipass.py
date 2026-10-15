@@ -146,7 +146,7 @@ def card_reply(payload):
 def trip_record(seconds, status, amount, after):
     return (b'\x01' + seconds.to_bytes(4, 'little') + bytes((status,))
             + amount.to_bytes(2, 'little', signed=True) + after.to_bytes(2, 'little', signed=True)
-            + b'\0\0' + b'\xff' * 4)
+            + b'\x03\x2a' + b'\x12\xab\x00\x01')
 
 
 class Card(unittest.TestCase):
@@ -168,7 +168,7 @@ class Card(unittest.TestCase):
         self.assertEqual([t['time'] for t in result['trips']],
                          [1_700_000_500, 1_700_000_400, 1_700_000_300, 1_700_000_200, 1_700_000_100])
         self.assertEqual(result['trips'][0]['kind'], 'other')
-        self.assertEqual(result['trips'][3], {'time': 1_700_000_200, 'kind': 'exit', 'amount': 37, 'balance': -30})
+        self.assertEqual(result['trips'][3], {'time': 1_700_000_200, 'kind': 'exit', 'amount': 37, 'balance': -30, 'system': 3, 'station': '12AB', 'automatic_place': None})
 
     def test_refusals_and_bad_frames(self):
         good = card_reply(b'\0' * 48)

@@ -168,6 +168,9 @@ class Plugin:
                             status, body = 200, await self._helper("nfc.tag.get")
                         elif data.get("action") == "ipass_card":
                             status, body = 200, await self._helper("nfc.ipass.card")
+                        elif data.get("action") == "ipass_place":
+                            status, body = 200, await self._helper("nfc.ipass.place", system=data.get("system"),
+                                station=data.get("station"), name=data.get("name"))
                         elif data.get("action") in ("save", "start"):
                             status, body = 200, await self._helper("nfc.tag.update", action=data["action"],
                                 text=data.get("text"), serial=data.get("serial"), custom_serial=data.get("custom_serial"))

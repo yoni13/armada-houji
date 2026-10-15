@@ -4,8 +4,8 @@ import {
 } from "@decky/ui";
 import { useEffect, useRef, useState } from "react";
 import {
-  getNfcTag, nfcAction, readIpassCard, setNfcMode, setNfcNotifications, updateNfcTag,
-  type IpassCard, type IpassTrip, type NfcStatus, type NfcTag, type Reply,
+  getNfcTag, nameIpassPlace, nfcAction, readIpassCard, setNfcMode, setNfcNotifications, updateNfcTag,
+  type IpassCard, type IpassPlace, type IpassTrip, type NfcStatus, type NfcTag, type Reply,
 } from "./backend";
 
 type Report = (reply: Promise<Reply<unknown>>) => void;
@@ -23,10 +23,50 @@ function tripAmount(trip: IpassTrip): string {
   return `${trip.kind === "top-up" ? "+" : "−"}NT$${trip.amount} · `;
 }
 
+const placeLabel = (trip: IpassTrip) => trip.place ?? `Place ${trip.system}-${trip.station}`;
+
+// Imported Wallet metadata supplies automatic names. A local name can override
+// the older two-byte place code without changing the downloaded table.
+function PlaceModal({ trip, named, closeModal }: {
+  trip: IpassTrip; named(place: IpassPlace): void; closeModal?(): void;
+}) {
+  const [name, setName] = useState(trip.custom_place ? (trip.place ?? "") : "");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const save = async (value: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const reply = await nameIpassPlace(trip.system, trip.station, value);
+      if (!reply.ok) { setError(reply.error); return; }
+      named(reply.result);
+      closeModal?.();
+    } catch {
+      setError("Could not save the name.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <ModalRoot closeModal={busy ? undefined : closeModal} onCancel={() => { if (!busy) closeModal?.(); }}>
+      <h2 style={{ marginTop: 0 }}>Name this place</h2>
+      <p>Code {trip.system}-{trip.station}. A custom name applies to trips with this code; some operators share codes across locations.</p>
+      {trip.automatic_place && <p>Wallet name: {trip.automatic_place}</p>}
+      <Focusable style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+        <TextField label="Name" description={`${name.length}/40`} value={name} disabled={busy}
+          onChange={(event) => setName(event.target.value)} />
+        <DialogButton disabled={busy || !name.trim() || name.length > 40} onClick={() => save(name)}>Save</DialogButton>
+        {trip.custom_place && <DialogButton disabled={busy} onClick={() => save("")}>Use automatic name</DialogButton>}
+      </Focusable>
+      {error && <p role="alert">{error}</p>}
+    </ModalRoot>
+  );
+}
+
 // Touch scrolls the list; with a controller, focus moves row by row and Steam
 // scrolls the focused row into view. Steam hides scrollbars, so the list draws
 // its own position indicator.
-function TripList({ trips }: { trips: IpassTrip[] }) {
+function TripList({ trips, named }: { trips: IpassTrip[]; named(place: IpassPlace): void }) {
   const list = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState<{ top: number; size: number } | null>(null);
   const measure = () => {
@@ -38,7 +78,15 @@ function TripList({ trips }: { trips: IpassTrip[] }) {
     setThumb({ top: (element.scrollTop / element.scrollHeight) * 100,
                size: (element.clientHeight / element.scrollHeight) * 100 });
   };
-  useEffect(measure, [trips]);
+  useEffect(() => {
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (list.current) {
+      observer.observe(list.current);
+      if (list.current.firstElementChild) observer.observe(list.current.firstElementChild);
+    }
+    return () => observer.disconnect();
+  }, [trips]);
 
   return (
     <div style={{ position: "relative" }}>
@@ -48,8 +96,9 @@ function TripList({ trips }: { trips: IpassTrip[] }) {
             <Field
               key={`${trip.time}-${trip.kind}-${trip.balance}`}
               focusable
-              label={`${TRIP_LABELS[trip.kind]} · ${trip.time}`}
-              description={`${tripAmount(trip)}balance NT$${trip.balance}`}
+              label={`${TRIP_LABELS[trip.kind]} · ${placeLabel(trip)}`}
+              description={`${trip.time} · ${tripAmount(trip)}balance NT$${trip.balance}`}
+              onActivate={() => showModal(<PlaceModal trip={trip} named={named} />)}
             />
           ))}
         </Focusable>
@@ -95,11 +144,15 @@ export function IpassCardModal({ closeModal }: { closeModal?(): void }) {
               <div style={{ fontSize: "12px", opacity: 0.7 }}>
                 {card.trips.length} recent record{card.trips.length === 1 ? "" : "s"}
               </div>
-              <TripList trips={card.trips} />
+              <TripList trips={card.trips} named={(place) => setCard((current) => current && {
+                ...current,
+                trips: current.trips.map((trip) => trip.system === place.system && trip.station === place.station
+                  ? { ...trip, place: place.place ?? trip.automatic_place, custom_place: place.place !== null } : trip),
+              })} />
             </>
           ) : <p>No recent trips on the card.</p>}
           <p style={{ fontSize: "12px", opacity: 0.7 }}>
-            Read from the card on this phone, the way Google Wallet does. Trip types are inferred from the card's records.
+            Names use an imported Google Wallet lookup table. Trip types are inferred from the card's records. Select a trip to set a custom name.
           </p>
         </>
       )}

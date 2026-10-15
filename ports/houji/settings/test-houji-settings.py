@@ -85,9 +85,9 @@ class FakeSystem:
         self.dbus_calls.append((service[0], method, args))
         if method == 'ReadIpassCard':
             return (json.dumps({'balance': 412, 'trips': [
-                {'time': 1_700_000_000, 'kind': 'payment', 'amount': 28, 'balance': 412},
-                {'time': 'bad', 'kind': 'payment', 'amount': 1, 'balance': 1},
-                {'time': 1_600_000_000, 'kind': 'surprise', 'amount': 1, 'balance': 1}]}),)
+                {'time': 1_700_000_000, 'kind': 'payment', 'amount': 28, 'balance': 412, 'system': 9, 'station': '0A1B'},
+                {'time': 'bad', 'kind': 'payment', 'amount': 1, 'balance': 1, 'system': 9, 'station': '0A1B'},
+                {'time': 1_600_000_000, 'kind': 'surprise', 'amount': 1, 'balance': 1, 'system': 9, 'station': '0A1B'}]}),)
         if method == 'Status':
             return (json.dumps(self.state),)
         if method == 'GetStatus':
@@ -106,7 +106,7 @@ class Helper(unittest.TestCase):
                                ('CHARGE_LIMIT', 'etc/houji-charge-limit'), ('CHARGE_STATE', 'run/charge-limit.json'),
                                ('HANDLE_KEY', 'run/settings-handle-key'), ('SIM_SELECTION', 'etc/cellular-sim'),
                                ('NFC_SETTINGS', 'nfc/settings.json'), ('NFC_NOTIFICATIONS', 'etc/nfc-notify'),
-                               ('BATTERY', 'battery')):
+                               ('IPASS_PLACES', 'nfc/ipass-places.json'), ('BATTERY', 'battery')):
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             patcher = mock.patch.object(helper, name, path)
@@ -305,7 +305,20 @@ class Helper(unittest.TestCase):
             self.assertIn(('org.armada.Nfc', method, ()), system.dbus_calls)
 
     def test_ipass_card_keeps_only_valid_trips(self):
+        places = self.root / 'nfc/ipass-places.json'
         result = helper.nfc_ipass_card(FakeSystem(), {})
+        self.assertIsNone(result['trips'][0]['place'])
+        self.assertEqual(helper.set_ipass_place(FakeSystem(), {'system': 9, 'station': '0A1B', 'name': '  Test   Station '}),
+                         {'system': 9, 'station': '0A1B', 'place': 'Test Station'})
+        self.assertEqual(places.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(helper.nfc_ipass_card(FakeSystem(), {})['trips'][0]['place'], 'Test Station')
+        for bad in ({'system': 256, 'station': '0A1B', 'name': 'x'}, {'system': 9, 'station': '0A1B', 'name': 'x' * 41},
+                    {'system': 9, 'station': '0A1B', 'name': 'a\x07b'}, {'system': '9', 'station': '0A1B', 'name': 'x'},
+                    {'system': 9, 'station': '0a1b', 'name': 'x'}, {'system': 9, 'station': '0A1B0', 'name': 'x'}):
+            with self.assertRaises(helper.Failure):
+                helper.set_ipass_place(FakeSystem(), bad)
+        helper.set_ipass_place(FakeSystem(), {'system': 9, 'station': '0A1B', 'name': ''})
+        self.assertIsNone(helper.nfc_ipass_card(FakeSystem(), {})['trips'][0]['place'])
         self.assertEqual(result['balance'], 412)
         self.assertEqual(len(result['trips']), 1)
         self.assertEqual(result['trips'][0]['kind'], 'payment')
@@ -318,6 +331,30 @@ class Helper(unittest.TestCase):
                 raise error
         with self.assertRaisesRegex(helper.Failure, '^No iPASS card data on the secure element.$'):
             helper.nfc_ipass_card(Refused(), {})
+
+    def test_ipass_automatic_name_and_local_override(self):
+        system = FakeSystem()
+        original = system.dbus
+
+        def dbus(*args, **kwargs):
+            result = original(*args, **kwargs)
+            if args[1] == 'ReadIpassCard':
+                card = json.loads(result[0])
+                card['trips'][0]['automatic_place'] = '測試車站'
+                return (json.dumps(card),)
+            return result
+
+        system.dbus = dbus
+        get_trip = lambda: helper.nfc_ipass_card(system, {})['trips'][0]
+        self.assertEqual(get_trip()['place'], '測試車站')
+        self.assertFalse(get_trip()['custom_place'])
+        helper.set_ipass_place(system, {'system': 9, 'station': '0A1B', 'name': 'My stop'})
+        self.assertEqual(get_trip()['place'], 'My stop')
+        self.assertEqual(get_trip()['automatic_place'], '測試車站')
+        self.assertTrue(get_trip()['custom_place'])
+        helper.set_ipass_place(system, {'system': 9, 'station': '0A1B', 'name': ''})
+        self.assertEqual(get_trip()['place'], '測試車站')
+        self.assertFalse(get_trip()['custom_place'])
 
     def test_nfc_validation_rejects_before_touching_hardware(self):
         system = FakeSystem()

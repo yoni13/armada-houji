@@ -2034,6 +2034,34 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   payments made with this port's IPASS mode. The read with the pause took about
   3 seconds, and IPASS was ready again afterwards.
 
+### Automatic transaction names from Wallet metadata (2026-10-15)
+
+- **Issue:** Card history exposed codes, while Wallet showed operator/station
+  names. Mapping system and location alone merged distinct stations; assuming
+  two terminal bytes for every system was also incomplete.
+- **Trace:** Wallet 26.37's `acrq` fetches
+  `g/ipassmifare/gettransactionmetadata`; `acry` builds its indexes and `acse`
+  resolves transactions. Rows contain system, optional location, terminal
+  prefix, operator name and terminal name. Wallet uses a location-specific
+  group where defined, otherwise the system group, then the longest prefix.
+  Location-only entries handle operators such as bus companies.
+- **Result:** The original signed APK ran in the PC's rooted Waydroid with
+  Google apps. After normal sign-in, a version-specific Frida script invoked
+  the metadata request through Wallet's live RPC client. It succeeded without
+  an iPASS card provisioned there and returned 2,776 entries. Authentication
+  stayed in Wallet; only the decoded metadata response was exported. Frida was
+  stopped and its temporary server/export removed afterwards.
+- **Implementation:** A bounded protobuf importer supports both RPC responses
+  and Wallet's cached table format. The NFC service resolves names locally
+  before returning card data, retaining full terminal IDs inside the service.
+  Houji Settings displays automatic names and permits local overrides. The
+  imported table remains local data outside the repository.
+- **Validation:** Synthetic tests cover location-only entries, variable-length
+  prefixes, duplicates, operator fallback, malformed imports and private
+  terminal IDs. On the handset all seven records resolved to names, and IPASS
+  resumed within about three seconds. The generic partner-shop label in the
+  table cannot identify an individual shop.
+
 ## Session switching
 
 - **Issue:** Choosing Game Mode in Plasma returned to Plasma.

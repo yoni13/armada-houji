@@ -802,6 +802,48 @@ not label them, but on the owner's card each balance-after followed from the
 previous record. The data travels only over the plugin's private loopback
 channel, never through a logged Decky call, and the service logs none of it.
 
+#### iPASS transaction names
+
+The card contains numeric operator/location/terminal codes. Wallet downloads a
+name table separately; an imported copy lets Houji Settings resolve names
+offline, including labels such as 台鐵新竹站 and 豪泰汽車客運. Where the table
+only names an operator, that is the most detail shown (for example
+一卡通特約商店 rather than an individual shop).
+
+- `ipass_metadata.py` follows Wallet 26.37's system/location selection and
+  longest terminal-prefix lookup. Prefix lengths vary by system; two terminal
+  bytes are not a universal station ID. Terminal names already include the
+  operator where appropriate, so it is not prepended again.
+- Resolution happens inside the NFC service; full terminal IDs stay there.
+  User-defined names in the root-only `ipass-places.json` override automatic
+  names. Removing an override restores the automatic name. These legacy local
+  overrides use a two-byte code that some operators share across locations.
+- The table is optional and stored in
+  `/var/lib/armada-nfc/ipass-transaction-metadata.json`. Without it, balance and
+  history still work. The downloaded table is local data, not bundled into the
+  source tree or a fresh image.
+
+To import an exported response on the phone:
+
+```sh
+sudo python3 /usr/libexec/armada/nfc-manager/import-ipass-metadata.py response.pb
+```
+
+For Wallet's cached `ipassTransactionMetadata/*.pb` use `--format cache`.
+The importer accepts only lookup keys and names, validates them and replaces the
+local table atomically. The next card read picks it up without a service restart.
+
+An export was tested using the PC's rooted Waydroid, Google apps and the original
+signed Wallet **26.37.985574370**. Wallet was signed in with no iPASS provisioned
+in that Waydroid. Attaching Frida to Wallet and running
+`nfc/wallet-26.37-export-metadata.js` invoked its existing read-only metadata RPC
+and wrote `files/houji-ipass-metadata-response.pb` in Wallet's private app data.
+The response contained 2,776 entries; the script never exported authentication
+tokens. Copy out that response with root, then stop Frida and remove its server
+and temporary export. The script's class names are specific to this APK version.
+Normal Wallet UI paths request the table from iPASS screens, but this test shows
+that the metadata RPC itself does not require a locally provisioned iPASS card.
+
 The selected mode persists across service restarts and boots. Switching to Off,
 Reader or Text-tag emulation stops off-host listening, restores the applet's
 previous contactless activation state, clears the temporary routes, and restores

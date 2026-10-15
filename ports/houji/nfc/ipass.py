@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 from ese import HOST, PIPE, ProtocolError
+from ipass_metadata import load as load_metadata
 
 AID = bytes.fromhex('A0000006914D344D56434D0100')
 CRS = bytes.fromhex('A00000015143525300')
@@ -121,7 +122,11 @@ CARD_QUERY = [bytes.fromhex('00a404000c') + MDAC + b'\0'] + [bytes.fromhex(comma
     '80B0000017E70FD0020005D10100D40101D503040007B004D5020007',
     '80B0000017E70FD0020006D10100D40101D503050007B004D5020007')]
 # Record status byte, inferred from a card's history where each balance-after
-# follows from the previous one; Wallet itself does not label these.
+# follows from the previous one; Wallet itself does not label these. Byte 10 is
+# the system ID, byte 11 the location, and bytes 12-15 the terminal ID. Wallet's
+# metadata determines which of them to match. Resolve inside this service so
+# the full terminal ID never leaves it. The legacy two-byte code remains for
+# user-defined names; it is not a universal station identifier.
 TRIP_KINDS = {0x00: 'entry', 0x11: 'exit', 0x20: 'payment', 0x30: 'top-up'}
 
 
@@ -140,7 +145,7 @@ def trip(data):
         return None
     return (seconds, TRIP_KINDS.get(data[5], 'other'),
             int.from_bytes(data[6:8], 'little', signed=True),
-            int.from_bytes(data[8:10], 'little', signed=True))
+            int.from_bytes(data[8:10], 'little', signed=True), data[10], data[11], data[12:16])
 
 
 def card(replies):
@@ -155,8 +160,14 @@ def card(replies):
         data = card_frame(reply)
         records += [trip(data[start:start + 16]) for start in (0, 16, 32)]
     trips = sorted({record for record in records if record}, reverse=True)
+    metadata = load_metadata()
+    named = []
+    for seconds, kind, amount, after, system, location, terminal in trips:
+        named.append(dict(time=seconds, kind=kind, amount=amount, balance=after,
+                          system=system, station=terminal[:2].hex().upper(),
+                          automatic_place=metadata.lookup(system, location, terminal) if metadata else None))
     return {'balance': int.from_bytes(balance[:4], 'little', signed=True),
-            'trips': [dict(zip(('time', 'kind', 'amount', 'balance'), record)) for record in trips]}
+            'trips': named}
 
 
 def routes():

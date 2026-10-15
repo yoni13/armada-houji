@@ -33,6 +33,10 @@ GYRO_SETTING = Path('/etc/armada/houji-gyro-aim')
 GYRO_STATE = Path('/run/houji-gyro/state')
 GYRO_STATES = ('off', 'waiting', 'active', 'error')
 IPASS_TRIP_KINDS = ('entry', 'exit', 'payment', 'top-up', 'other')
+# The owner's names for iPASS places (system ID and station: the first two
+# terminal-ID bytes), root-only: they reveal where the card was used.
+IPASS_PLACES = Path('/var/lib/armada-nfc/ipass-places.json')
+IPASS_PLACE_LIMIT = 200
 BATTERY = Path('/sys/class/power_supply/battery')
 ORIENTATIONS = ('normal', 'left', 'right', 'upsidedown')
 SIM_MODES = ('auto', 'physical1', 'physical2', 'esim')
@@ -289,6 +293,44 @@ def nfc_tag_update(system, request):
     return nfc_status(system)
 
 
+def ipass_places():
+    try:
+        value = json.loads(IPASS_PLACES.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {key: name for key, name in value.items()
+            if isinstance(key, str) and re.fullmatch(r'\d{1,3}:[0-9A-F]{4}', key)
+            and isinstance(name, str) and 0 < len(name) <= 40}
+
+
+def set_ipass_place(system, request):
+    """Private-channel only: name the place one system and station code stands for."""
+    code, station, name = request.get('system'), request.get('station'), request.get('name')
+    if (type(code) is not int or not 0 <= code <= 255 or not isinstance(station, str)
+            or not re.fullmatch(r'[0-9A-F]{4}', station) or not isinstance(name, str)):
+        raise Failure('Invalid place.')
+    name = ' '.join(name.split())
+    if len(name) > 40 or any(ord(character) < 32 for character in name):
+        raise Failure('A place name is at most 40 characters.')
+    places = ipass_places()
+    key = f'{code}:{station}'
+    if name:
+        if key not in places and len(places) >= IPASS_PLACE_LIMIT:
+            raise Failure('Too many named places.')
+        places[key] = name
+    else:
+        places.pop(key, None)
+    IPASS_PLACES.parent.mkdir(parents=True, exist_ok=True)
+    temporary = IPASS_PLACES.with_name('.' + IPASS_PLACES.name + '.tmp')
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o600)
+    with os.fdopen(descriptor, 'w') as stream:
+        json.dump(places, stream, ensure_ascii=False, sort_keys=True)
+    temporary.replace(IPASS_PLACES)
+    return {'system': code, 'station': station, 'place': places.get(key)}
+
+
 def nfc_ipass_card(system, request):
     """Private-channel reply only: balance and trips never pass through a Decky call."""
     try:
@@ -298,12 +340,18 @@ def nfc_ipass_card(system, request):
         message = getattr(error, 'message', '')
         detail = message.rsplit(': ', 1)[-1] if 'CardFailed' in message or 'InvalidRequest' in message else ''
         raise Failure(detail[:120] or 'Could not read the iPASS card.') from None
-    trips = []
+    trips, places = [], ipass_places()
     for item in card.get('trips', [])[:8]:
-        if (type(item.get('time')) is int and type(item.get('amount')) is int
-                and type(item.get('balance')) is int and item.get('kind') in IPASS_TRIP_KINDS):
+        if (all(type(item.get(name)) is int for name in ('time', 'amount', 'balance', 'system'))
+                and isinstance(item.get('station'), str) and re.fullmatch(r'[0-9A-F]{4}', item['station'])
+                and item.get('kind') in IPASS_TRIP_KINDS):
             trips.append({'time': time.strftime('%Y-%m-%d %H:%M', time.localtime(item['time'])),
-                          'kind': item['kind'], 'amount': item['amount'], 'balance': item['balance']})
+                          'kind': item['kind'], 'amount': item['amount'], 'balance': item['balance'],
+                          'system': item['system'], 'station': item['station'],
+                          'automatic_place': text(item.get('automatic_place'), 256),
+                          'custom_place': places.get(f"{item['system']}:{item['station']}") is not None,
+                          'place': (places.get(f"{item['system']}:{item['station']}")
+                                    or text(item.get('automatic_place'), 256))})
     if type(card.get('balance')) is not int:
         raise Failure('Could not read the iPASS card.')
     return {'balance': card['balance'], 'trips': trips}
@@ -623,6 +671,7 @@ OPERATIONS = {
     'nfc.tag.get': nfc_tag_settings,
     'nfc.tag.update': nfc_tag_update,
     'nfc.ipass.card': nfc_ipass_card,
+    'nfc.ipass.place': set_ipass_place,
     'cellular.enable': enable_cellular,
     'sim.select': select_sim,
     'esim.refresh': refresh_profiles,
