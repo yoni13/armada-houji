@@ -32,10 +32,12 @@ fixed is in [HISTORY.md](HISTORY.md).
 - [Charging and sleep](#charging-and-sleep)
 - [Thermal limits](#thermal-limits)
 - [Ambient light](#ambient-light)
+- [Steam automatic brightness](sensors/als/STEAM-BRIGHTNESS.md)
 - [USB and privacy](#usb-and-privacy)
 - [NFC Manager](#nfc-manager)
 - [Embedded secure element APDUs](#embedded-secure-element-apdus)
 - [Houji Settings](#houji-settings)
+- [Parked FSR 4 experiment](npu/fsr4/README.md)
 
 ## Before you start
 
@@ -71,12 +73,12 @@ Results below are from the development handset.
 | Touch | Taps and swipes work, using Xiaomi's stock touch processing core. A bus error resets the controller automatically. |
 | Rotation | Sensor-driven in Plasma and Game Mode. Game Mode can be locked to one orientation in [Houji Settings](#houji-settings). Touch alignment was tested in Plasma; recheck it in every Game Mode orientation. |
 | Thermal limits | CPU and GPU limits follow the stock skin-temperature estimate, using Xiaomi's tables. Game Mode keeps the GPU at full speed longer and slows the CPU first. See [Thermal limits](#thermal-limits). |
-| Ambient light | The front sensor under the display reports lux through iio-sensor-proxy (`monitor-sensor --light`). It followed room light, a flashlight and a covering hand. Steam detects it through a small kernel device and reads it about five times a second, but in the first test the screen did not brighten under a flashlight. See [Ambient light](#ambient-light). |
+| Ambient light | The front sensor under the display reports lux through iio-sensor-proxy (`monitor-sensor --light`). Steam reads the virtual IIO sensor and uses a filtered lux-dependent brightness range around the user's setting; a flashlight need not change a setting already inside that range. See [Steam automatic brightness](sensors/als/STEAM-BRIGHTNESS.md) and [Ambient light](#ambient-light). |
 | Wi-Fi | WCN7850, 2.4 and 5 GHz, two streams at 80 MHz. About 509 Mb/s down and 424 Mb/s up in a local test. Speed depends on signal and access point. |
 | Bluetooth | Controller pairing and control. A `1949:0402` gamepad's Home button reaches Steam through kernel patch `0025`. On the tested unit, A and B are swapped against SDL's mapping, so Steam's quick access shortcut is Home + the physical B. |
 | Haptics | Short and long vibration. |
 | Speakers and microphone | Stereo playback and recording, using the phone's factory speaker calibration. |
-| Battery | Voltage, current, charge level, Steam time estimates and USB-PD. The battery is named `battery`, as elsewhere in Armada, so Steam's performance overlay (MangoHud) shows its level, power while discharging and time remaining. While discharging, the percentage never reads above the gauge's remaining charge, and while charging it reads at most 3 points above it, so plugging in the charger no longer jumps the figure up. A full battery reads 100%. |
+| Battery | Voltage, current, charge level, Steam time estimates and USB-PD. The battery is named `battery`, as elsewhere in Armada, so Steam's performance overlay (MangoHud) shows its level, power while discharging and time remaining. The displayed percentage uses the firmware's `BATT_CAPACITY / 100` in every charging state, matching stock Android's source. There is no separate discharge clamp or charging margin; firmware smoothing can still lag the raw gauge. See [stock battery reporting](charging/STOCK-BATTERY.md). |
 | Performance overlay | Steam's overlay levels show only readings this phone provides; per-component CPU and GPU power have no sensor here and are left out. The battery percentage matches Steam's: the port builds the overlay (`mangoapp`) with MangoHud patches `0007` and `0008` until the pinned Armada image includes them. With `0008` the overlay only redraws when the app draws, so it doesn't keep the screen busy while Steam is idle. |
 | USB device | Charging by default. File transfer (MTP) on demand through Armada's switch. USB 3 at 5 Gb/s in both cable orientations, USB 2 fallback. No USB shell or network gadget. |
 | USB host (OTG) | Wired gamepad and a Pixel webcam, including 5 Gb/s video. In Game Mode, the GameSir X2s Type-C uses a Steam Deck mapping: Home opens Quick Access and record opens Steam, both on release. Desktop Mode exposes the original X2s gamepad directly, with an SDL gamepad mapping. |
@@ -108,6 +110,16 @@ Results below are from the development handset.
 
 ## Known issues
 
+- **Native-sleep reset persists on 20261010.** The first post-update incident
+  captured partial CPU PSCI return/re-entry before full system resume, without
+  a saved panic or Linux restart marker. See the
+  [post-update evidence](HISTORY.md#first-post-update-reset-reaches-partial-psci-return-2026-10-18).
+- **Steam menu/GPU stall under load.** A live freeze with GTA V Enhanced showed
+  GPU memory reclaim waiting on fences while the retirement worker waited on a
+  buffer reservation lock. The precise dependency is still under investigation.
+  The opt-in `houji-gpu-lock-trace.service` continuously captures lock owners and
+  fence waits when enabled, including across reboots, with bounded retention and
+  automatic re-arming after a capture; see [GPU tracing](diagnostics/README.md).
 - **Sleep may still misbehave.** An intermittent animation freeze around Steam
   wake was reported earlier and never reproduced or explained. The sensor-DSP
   wake and re-sleep path works in testing, but only a few hours of sleep have
@@ -173,10 +185,11 @@ The extracted files the build needs are in [firmware/](firmware/README.md). They
 hold stock defaults, not another phone's calibration, saved connections,
 Bluetooth pairing keys or location data.
 
-**What it builds on.** Armada **20260926** (`c2fd0485b4db`) with Linux **7.2.6**
+**What it builds on.** Armada **20261010** (`c3d178c9e5cc`) with Linux **7.2.6**
 plus the patches in `patches/series`, and the release's pinned arm64 OCI image.
 Touch, sensor, charging, Gamescope, MTP, audio and GPS components are compiled
-from pinned sources. Houji keeps its own pinned Gamescope build for touch rotation.
+from pinned sources. Houji builds Gamescope **3.16.31-ogc1** with the release's
+shared patches plus its touch-association and fresh-frame wake patches.
 
 **Partitions.** Xiaomi's ABL loads Android boot-v4 partitions, so the images map as:
 
@@ -255,6 +268,15 @@ This also needs `lpunpack`, `mcopy` and about 20 GiB of temporary space
 files and verifies the archive first.
 
 ## Install
+
+### Entering fastboot from a running Houji installation
+
+Use `sudo systemctl --reboot-argument=bootloader reboot`, then verify the phone
+appears in `fastboot devices` on the host before flashing. This release rejects
+`systemctl reboot bootloader` with `Too many arguments`; losing SSH does not
+prove a reboot, because ordinary sleep also disconnects Wi-Fi. Check the command
+result and journal if fastboot does not appear. Do not run `qbootctl -s` on the
+already-active slot; see the [partition-table incident](HISTORY.md#both-slots-stopped-booting-after-qbootctl--s-b-2026-10-13).
 
 ### Starting from stock firmware
 
@@ -386,7 +408,10 @@ work with this layout. Use this procedure instead.
 
    This verifies the root image, creates a clean system overlay, keeps your home
    and selected owner settings (including NFC Manager's), and leaves the old root
-   available for rollback. It does not copy personal settings into the public bundle.
+   available for rollback. Private modem stores remain shared with the original
+   layout so an update does not copy changing NV/secure-storage files. Keep that
+   original layout while it backs shared home or modem storage. Personal settings
+   are never copied into the public bundle.
 4. Copy `staged-receipt.json` back to the host and enter bootloader fastboot:
 
    ```sh

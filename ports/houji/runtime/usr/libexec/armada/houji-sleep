@@ -65,6 +65,7 @@ BENIGN = ('fastrpc', 'battmgr', 'battery', 'ucsi', 'rtc')
 # an interrupt but neither wakes nor aborts anything, so watch the counters.
 # Matched case-insensitively against the whole interrupt label.
 INPUT_IRQS = ('pwrkey', 'resin', 'gpio-keys', 'volume')
+HANDOFF_POWER = 'HOUJI_DETACH_POWER_IRQS'
 
 
 def log(message):
@@ -202,6 +203,15 @@ class Platform:
         with open(STATE, 'w') as stream:
             stream.write('mem')
 
+    def record(self, event, **details):
+        if not Path('/etc/armada/houji-sleep-debug').exists():
+            return
+        try:
+            from houji_sleep_diagnostics import record
+            record(event, **details)
+        except (ImportError, OSError, ValueError) as error:
+            log('sleep ledger unavailable: %s' % error)
+
     def wake_irq(self):
         try:
             text = Path(WAKE_IRQ).read_text().strip()
@@ -217,6 +227,20 @@ class Platform:
 
     def input_counts(self):
         return parse_input_irqs(Path(INTERRUPTS).read_text())
+
+    def detach_wake_pending(self):
+        """Preserve a Power press during the charging wrapper's sleep handoff."""
+        baseline = os.environ.get(HANDOFF_POWER)
+        if baseline is None:
+            return False
+        if not baseline.isdecimal():
+            return True
+        try:
+            values = [count for label, count in self.input_counts().items()
+                      if 'pmic_pwrkey' in label.split()]
+        except OSError:
+            return True
+        return not values or sum(values) != int(baseline)
 
     def boottime(self):
         return time.clock_gettime(time.CLOCK_BOOTTIME)
@@ -252,15 +276,24 @@ def suspend_once(platform, awake_inputs=None):
     """
     started = platform.monotonic()
     while True:
+        # The wrapper may have seen no key yet, but a press can arrive during
+        # exec, user.slice freezing or the pre hooks. Let normal cleanup thaw
+        # the desktop instead of entering the kernel's suspend path then.
+        if platform.detach_wake_pending():
+            return 'real', 'Power activity during charger handoff', 0.0, {}
         inputs_before = platform.input_counts()
         if awake_inputs is not None and inputs_before != awake_inputs:
             return 'real', 'key pressed while awake', 0.0, inputs_before
         before = platform.sources()
+        platform.record('kernel-entry', inputs=inputs_before)
         boot0, mono0 = platform.boottime(), platform.monotonic()
+        if platform.detach_wake_pending():
+            return 'real', 'Power activity during charger handoff', 0.0, inputs_before
         try:
             platform.write_state()
             break
         except OSError as error:
+            platform.record('kernel-error', errno=error.errno)
             # fastrpc_pm_prepare returns EBUSY while the listener still owes
             # the DSP an answer; it clears as soon as the answer is sent.
             if error.errno != errno.EBUSY or platform.monotonic() - started > BUSY_TIMEOUT:
@@ -272,6 +305,8 @@ def suspend_once(platform, awake_inputs=None):
     kind, detail = classify(before, platform.sources(), platform.wake_irq())
     if kind != 'real' and inputs_after != inputs_before:
         kind, detail = 'real', 'key interrupt during suspend or resume'
+    platform.record('kernel-return', kind=kind, detail=detail, slept=slept,
+                    inputs=inputs_after)
     return kind, detail, slept, inputs_after
 
 
@@ -318,12 +353,16 @@ def sleep_until_real_wake(platform):
 def run(platform, argv):
     if argv[:1] != ['suspend']:
         return platform.classic(argv)
+    if platform.detach_wake_pending():
+        log('Power activity during charger handoff; staying awake')
+        return 0
     if platform.classic_forced():
         log('plain systemd-sleep requested by %s' % KILL_SWITCH)
         return platform.classic(argv)
     if not platform.supported():
         log('kernel interfaces missing; using systemd-sleep')
         return platform.classic(argv)
+    platform.record('transaction-start')
     if not platform.systemctl('freeze', 'user.slice'):
         log('could not freeze user.slice; using systemd-sleep')
         return platform.classic(argv)
@@ -347,6 +386,7 @@ def run(platform, argv):
                     log('could not thaw user.slice')
             finally:
                 platform.restore_watchdogs(WATCHDOG_RESTORE_DELAY)
+                platform.record('transaction-end')
     return 0
 
 

@@ -5,7 +5,7 @@ import argparse, concurrent.futures, hashlib, json, os, re, shutil, subprocess, 
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from buildlib import checkout, cross_file, run
+from buildlib import checkout, cross_file, run, REPO
 port = Path(__file__).resolve().parent
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--work', type=Path, required=True)
@@ -15,12 +15,28 @@ work=a.work.resolve(); work.mkdir(parents=True,exist_ok=True)
 sysroot=a.sysroot.resolve()
 pin = json.loads((port/'sources.json').read_text())['compositor']
 source=checkout(pin['repository'], pin['revision'], work/'source')
-for patch in pin['patches']:
-    checkout(pin['repository'], pin['revision'], source, port/patch)
+if not (work/'patch-series.sha256').exists():
+    run('git', '-C', source, 'submodule', 'update', '--init', '--depth', '1',
+        'subprojects/wlroots', 'subprojects/libliftoff', 'subprojects/vkroots',
+        'src/reshade', 'thirdparty/SPIRV-Headers')
+patches = (sorted((REPO/'packages/gamescope/patches').glob('*.patch'))
+           if pin.get('shared_patches') else []) + [port/p for p in pin['patches']]
+# Later patches modify earlier contexts. Record the complete ordered series
+# instead of attempting to reverse-check an early patch through later changes.
+digest = hashlib.sha256(pin['revision'].encode())
+for patch in patches:
+    digest.update(patch.name.encode() + patch.read_bytes())
+stamp = work/'patch-series.sha256'
+if stamp.exists():
+    if stamp.read_text().strip() != digest.hexdigest():
+        raise ValueError('Gamescope patch series changed; use a fresh build work directory')
+else:
+    if subprocess.check_output(['git', '-C', str(source), 'diff', '--name-only']).strip():
+        raise ValueError('Unstamped modified Gamescope checkout; use a fresh build work directory')
+    for patch in patches:
+        run('git', '-C', source, 'apply', patch)
+    stamp.write_text(digest.hexdigest()+'\n')
 shutil.copy2(port/'frame-wake.h', source/'src/houji_frame_wake.h')
-run('git', '-C', source, 'submodule', 'update', '--init', '--depth', '1',
-    'subprojects/wlroots', 'subprojects/libliftoff', 'subprojects/vkroots',
-    'src/reshade', 'thirdparty/SPIRV-Headers')
 
 cross_file(work, sysroot)
 opts = ['--reconfigure', '--clearcache'] if (work/'out/build.ninja').exists() else []

@@ -1,7 +1,7 @@
 {
   "protocol": {
-    "url": "https://github.com/OpenGamingCollective/gamescope/blob/4b50dd7a719c09acb1a0141ff6eac9dab1ab4f2f/protocol/gamescope-control.xml",
-    "revision": "4b50dd7a719c09acb1a0141ff6eac9dab1ab4f2f",
+    "url": "https://github.com/OpenGamingCollective/gamescope/blob/afd6eac6e1b5045119831b63854bad68ec4fd92c/protocol/gamescope-control.xml",
+    "revision": "afd6eac6e1b5045119831b63854bad68ec4fd92c",
     "sha256": "84b992b1307ca2f1fc7bfa9aa9a203d92950c4e57014f047812592602ddd92b7",
     "bound_version": 2
   },
@@ -9,7 +9,9 @@
   "rotation": "Gamescope control rotate_display; internal display only; composition rotation required",
   "compositor": {
     "repository": "https://github.com/OpenGamingCollective/gamescope",
-    "revision": "4b50dd7a719c09acb1a0141ff6eac9dab1ab4f2f",
+    "revision": "afd6eac6e1b5045119831b63854bad68ec4fd92c",
+    "version": "3.16.31-ogc1",
+    "shared_patches": true,
     "patches": [
       "0001-associate-houji-touch.patch",
       "0002-wake-on-fresh-frame.patch"

@@ -19,6 +19,17 @@ def sha(path):
     with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
 
 
+def private_backing(path, data, run=subprocess.check_output):
+    """Locate private NV/secure storage in an overlay or a previous bind mount."""
+    fsroot=run(['findmnt','-no','FSROOT','-T',str(path)],text=True).strip()
+    options=run(['findmnt','-no','OPTIONS','-T',str(path)],text=True).strip().split(',')
+    upper=next((x.split('=',1)[1] for x in options if x.startswith('upperdir=')),None)
+    source=(Path(upper)/'var/lib/houji-modem'/path.name if upper else data/fsroot.lstrip('/')).resolve()
+    if not source.is_relative_to(data.resolve()):raise ValueError('Private modem storage escapes userdata')
+    if not source.is_dir():raise ValueError('Private modem backing storage missing')
+    return source
+
+
 def copy_image(source, destination):
     """Throttle local userdata writes too; pause at the handset thermal limits."""
     with source.open('rb') as src, destination.open('xb') as dst:
@@ -44,8 +55,12 @@ def copy_image(source, destination):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('bundle',type=Path)
-    p.add_argument('--serial',required=True,help='This handset\'s fastboot serial, used only as a hash in the receipt')
+    identity=p.add_mutually_exclusive_group(required=True)
+    identity.add_argument('--serial',help='This handset\'s fastboot serial, used only as a hash in the receipt')
+    identity.add_argument('--serial-sha256',help='Previously verified serial hash from this handset\'s earlier staging receipt')
     a=p.parse_args()
+    serial_hash=hashlib.sha256(a.serial.encode()).hexdigest() if a.serial else a.serial_sha256
+    if not re.fullmatch('[0-9a-f]{64}',serial_hash):raise ValueError('Invalid handset serial hash')
     if os.getuid()!=0:raise ValueError('Run as root on the installed phone')
     if Path('/sys/firmware/devicetree/base/model').read_bytes().rstrip(b'\0')!=b'Xiaomi 14':raise ValueError('Wrong handset')
     m=json.loads((a.bundle/'images.json').read_text());layout=m['layout'];build_id=layout['build_id']
@@ -72,8 +87,23 @@ def main():
     (target/'shared-home').write_text(str(home.relative_to(data.resolve()))+'\n')
     # Copy settings, not old executable/module hotfixes, into the clean system overlay.
     for name in ['etc/NetworkManager/system-connections','var/lib/bluetooth','etc/ssh',
-                 'var/lib/armada-nfc/settings.json',
-                 'etc/armada/cellular-sim',
+                  'etc/localtime','etc/timezone','etc/locale.conf','etc/hostname',
+                  'var/lib/armada-nfc/settings.json',
+                  'var/lib/armada-nfc/ipass-transaction-metadata.json',
+                  'etc/armada', 'etc/sddm.conf.d/zz-steamos-autologin.conf',
+                  'etc/sddm.conf.d/zz-holo-autologin.conf',
+                  'etc/sysctl.d/90-houji-sleep-diagnostics.conf',
+                  'etc/tmpfiles.d/houji-sleep-diagnostics.conf',
+                  'etc/systemd/journald.conf.d/90-houji-sleep-debug.conf',
+                  'var/lib/armada/sleep-debug',
+                  'var/lib/systemd/pstore',
+                  'var/lib/chrony/drift',
+                  'var/lib/houji-zram-writeback.json',
+                  'etc/systemd/system/run-houji-data-houji.swap.swap',
+                  'etc/systemd/system/swap.target.wants/run-houji-data-houji.swap.swap',
+                  'etc/systemd/system/plugin_loader.service',
+                  'etc/systemd/system/multi-user.target.wants/plugin_loader.service',
+                  'etc/armada/cellular-sim',
                  'etc/systemd/system/multi-user.target.wants/houji-cellular.service',
                  'etc/passwd','etc/shadow','etc/group','etc/gshadow',
                  'etc/systemd/system/houji-ssh.service',
@@ -85,22 +115,32 @@ def main():
         if not src.exists():continue
         dst.parent.mkdir(parents=True,exist_ok=True)
         if src.is_symlink():dst.symlink_to(src.readlink())
-        elif src.is_dir():shutil.copytree(src,dst,symlinks=True)
-        else:shutil.copy2(src,dst)
-    # This state is created locally from factory NV/secure storage and must
-    # survive preserving updates, but must never be part of a distributable root.
-    # Stage while the radio is off; never stop/restart MPSS just to stage files.
+        elif src.is_dir():shutil.copytree(src,dst,symlinks=True,dirs_exist_ok=True)
+        else:
+            shutil.copy2(src,dst)
+            if name=='var/lib/chrony/drift':
+                owner=src.stat();os.chown(dst,owner.st_uid,owner.st_gid)
+    # Preserve explicit diagnostic enablement, but resolve to the new image's
+    # validated helpers/module rather than copying old executable overrides.
+    for target_name,unit in [('graphical.target','houji-gpu-lock-trace.service'),
+                             ('multi-user.target','houji-sleep-debug.service')]:
+        name='etc/systemd/system/'+target_name+'.wants/'+unit
+        if (Path('/')/name).is_symlink():
+            dst=target/'upper'/name;dst.parent.mkdir(parents=True,exist_ok=True)
+            dst.symlink_to('/usr/lib/systemd/system/'+unit)
+    # Reuse live private storage instead of copying files that the modem's
+    # listeners can still update. As with shared-home, the old layout remains
+    # the backing storage. Do not stop/restart MPSS just to stage an update.
     private=Path('/var/lib/houji-modem')
     if private.exists():
-        destination=target/'upper/var/lib/houji-modem'
-        destination.mkdir(parents=True,mode=0o700)
         for name in ['efs','tee']:
-            source=private/name
-            if source.is_dir():
-                shutil.copytree(source,destination/name,symlinks=True,copy_function=lambda src,dst: copy_image(Path(src),Path(dst)))
+            path=private/name
+            if not path.is_dir():continue
+            source=private_backing(path,data)
+            (target/('shared-modem-'+name)).write_text(str(source.relative_to(data.resolve()))+'\n')
     (target/'build-id').write_text(build_id+'\n')
     receipt={'build_id':build_id,'rootfs_sha256':layout['rootfs_sha256'],
-             'serial_sha256':hashlib.sha256(a.serial.encode()).hexdigest()}
+              'serial_sha256':serial_hash}
     (a.bundle/'staged-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
     os.chmod(a.bundle/'staged-receipt.json',0o600)
     os.sync()

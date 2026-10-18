@@ -1,5 +1,31 @@
 # FSR 4 INT8 on Houji's Hexagon v75 — experimental bring-up
 
+**Parked (2026-10-18):** runtime entry points now require the explicit master
+opt-in `HOUJI_FSR4_EXPERIMENTAL=1`. Existing `FSR4_NPU_LIVE`, `FSR4_NPU_DIRECT`
+or frame-generation config values alone cannot activate a newly built hook,
+server or layer. The Decky backend refuses enable/restart without the master
+opt-in and its toggle is disabled. All experiment sources, models and build
+instructions are retained; measurements below are historical, not current
+runtime defaults. The master gate also disables capture-only hooks by default.
+
+For intentional future testing, set the master opt-in in the game environment,
+server environment and Decky Loader environment, as well as the existing
+per-feature flags. The user service additionally checks the user manager's
+environment (`systemctl --user set-environment HOUJI_FSR4_EXPERIMENTAL=1`).
+Rebuild hooks/server before testing; old installed binaries predate this gate.
+Normal gaming should have no experiment DLL injection, launch flags, services
+or render-scale overrides. Frame generation remains parked.
+
+On the development handset, the cleanup restored Goat's launch options to
+`/usr/libexec/armada/armada-game-launch %command%`, removed the four forced
+TAA/screen-percentage settings from `Engine.ini`, and moved the injected
+`dxgi.dll`, `Houji-TAA.addon`, `_nvngx.dll` and `ReShade.ini` into the private
+`~/.local/state/houji-game-debug/fsr-disabled-20261018T013752/` backup. Existing
+game quality/resolution preferences were already identical to the pre-experiment
+backup and were kept. Models, shaders and binaries in `~/.local/opt/fsr4-htp`
+remain available. The inactive user service now checks the master gate, and the
+Decky plugin's backend/frontend are updated for the parked state.
+
 Goal: native ARM64 Linux inference of AMD's FSR 4 INT8 neural network on the
 Snapdragon 8 Gen 3 HTP, with Turnip handling temporal preprocessing and final
 image reconstruction. The experimental Wine/Proton bridge upscales Goat

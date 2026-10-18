@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cmath>
 #include "reshade.hpp"
+#include "experimental-gate.h"
 
 extern "C" __declspec(dllexport) const char *NAME="Houji TAA capture";
 extern "C" __declspec(dllexport) const char *DESCRIPTION="Read-only Goat 3 temporal-input diagnostic";
@@ -219,6 +220,7 @@ static bool capture(reshade::api::command_list*c,bool compute){
 static bool draw(reshade::api::command_list*c,uint32_t,uint32_t,uint32_t,uint32_t){return capture(c,false);}
 static bool dispatch(reshade::api::command_list*c,uint32_t,uint32_t,uint32_t){return capture(c,true);}
 BOOL WINAPI DllMain(HMODULE module,DWORD reason,LPVOID){
+    if(!houji_fsr4_experimental_enabled())return TRUE;
     if(reason==DLL_PROCESS_ATTACH){if(!reshade::register_addon(module))return FALSE;reshade::register_event<reshade::addon_event::init_pipeline>(init_pipeline);reshade::register_event<reshade::addon_event::bind_pipeline>(bind);reshade::register_event<reshade::addon_event::draw>(draw);reshade::register_event<reshade::addon_event::dispatch>(dispatch);
         reshade::register_event<reshade::addon_event::init_resource>(init_resource);reshade::register_event<reshade::addon_event::destroy_resource>(destroy_resource);
         reshade::register_event<reshade::addon_event::map_buffer_region>(map_view);reshade::register_event<reshade::addon_event::unmap_buffer_region>(unmap_view);

@@ -52,6 +52,10 @@ class Fake(sleep.Platform):
         self.boot = 1000.0
         self.mono = 100.0
         self.writes = 0
+        self.records = []
+
+    def record(self, event, **details):
+        self.records.append((event, details))
 
     def classic(self, argv):
         self.calls.append('classic')
@@ -168,6 +172,52 @@ class SleepFlowTests(unittest.TestCase):
     def run_sleep(self, platform):
         return sleep.run(platform, ['suspend'])
 
+    def test_detach_power_press_before_native_helper_stays_awake(self):
+        phone = Fake([])
+        with mock.patch.dict(os.environ, {sleep.HANDOFF_POWER: '6'}):
+            self.assertEqual(self.run_sleep(phone), 0)
+        self.assertEqual(phone.calls, [])
+
+    def test_detach_power_press_during_pre_hooks_thaws_without_suspend(self):
+        phone = Fake([])
+        hooks = phone.run_hooks
+        def press(phase):
+            hooks(phase)
+            if phase == 'pre':
+                phone.during_awake(pmic_pwrkey=1)
+        phone.run_hooks = press
+        with mock.patch.dict(os.environ, {sleep.HANDOFF_POWER: '7'}):
+            self.assertEqual(self.run_sleep(phone), 0)
+        self.assertEqual(phone.writes, 0)
+        self.assertIn('hooks post', phone.calls)
+        self.assertIn('systemctl thaw user.slice', phone.calls)
+
+    def test_quiet_detach_still_allows_battery_native_sleep(self):
+        phone = Fake([{'irq': '21'}])
+        with mock.patch.dict(os.environ, {sleep.HANDOFF_POWER: '7'}):
+            self.assertEqual(self.run_sleep(phone), 0)
+        self.assertEqual(phone.writes, 1)
+
+    def test_unreadable_handoff_key_state_stays_awake(self):
+        phone = Fake([])
+        phone.input_counts = mock.Mock(side_effect=OSError('unavailable'))
+        with mock.patch.dict(os.environ, {sleep.HANDOFF_POWER: '7'}):
+            self.assertEqual(self.run_sleep(phone), 0)
+        self.assertEqual(phone.writes, 0)
+
+    def test_detach_power_press_after_source_read_cancels_first_suspend(self):
+        phone = Fake([])
+        sources = phone.sources
+        def press():
+            result = sources()
+            phone.during_awake(pmic_pwrkey=1)
+            return result
+        phone.sources = press
+        with mock.patch.dict(os.environ, {sleep.HANDOFF_POWER: '7'}):
+            self.assertEqual(self.run_sleep(phone), 0)
+        self.assertEqual(phone.writes, 0)
+        self.assertIn('systemctl thaw user.slice', phone.calls)
+
     def test_single_real_wake_matches_systemd_sleep_order(self):
         phone = Fake([{'irq': '21', 'slept': 120}])
         self.assertEqual(self.run_sleep(phone), 0)
@@ -175,6 +225,8 @@ class SleepFlowTests(unittest.TestCase):
             'systemctl freeze user.slice', 'systemctl service-watchdogs no', 'hooks pre',
             'suspend', 'shield', 'hooks post', 'systemctl thaw user.slice',
             'restore watchdogs'])
+        self.assertEqual([event for event, _ in phone.records],
+                         ['transaction-start', 'kernel-entry', 'kernel-return', 'transaction-end'])
 
     def test_dsp_wakes_are_absorbed_and_the_desktop_thaws_once(self):
         phone = Fake([dsp(), dsp(), dsp(), {'irq': '21'}])

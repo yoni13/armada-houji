@@ -251,6 +251,8 @@ def userspace_pins():
         pins.append((name, entry['source'], entry['revision'],
                      [(PORT / 'sensors' / entry['local_patch'], entry['patch_sha256'])]))
     pins.append(('gamescope', gamescope['repository'], gamescope['revision'],
+                 ([(patch, None) for patch in sorted((REPO / 'packages/gamescope/patches').glob('*.patch'))]
+                  if gamescope.get('shared_patches') else []) +
                  [(PORT / 'sensors/gamescope' / patch, None) for patch in gamescope['patches']]))
     pins.append(('tqftpserv', 'https://github.com/linux-msm/tqftpserv.git', gps['tqftpserv'],
                  [(PORT / 'gps/tqftpserv-mbnconfig.patch', None)]))
@@ -297,6 +299,9 @@ def check_userspace(keep):
                     ok = False
             try:
                 fetch_revision(url, revision, tree)
+                if name == 'gamescope':
+                    git('submodule', 'update', '--init', '--depth', '1',
+                        'subprojects/libliftoff', cwd=tree)
             except (SystemExit, subprocess.CalledProcessError, OSError) as failure:
                 detail = getattr(failure, 'stderr', '') or failure
                 error('%s: cannot fetch %s: %s' % (name, revision, str(detail).strip()))

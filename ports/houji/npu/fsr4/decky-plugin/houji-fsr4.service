@@ -1,9 +1,11 @@
 [Unit]
 Description=FSR 4 Hexagon NPU Upscaler Service
 After=graphical-session.target
+ConditionEnvironment=HOUJI_FSR4_EXPERIMENTAL=1
 
 [Service]
 Type=simple
+PassEnvironment=HOUJI_FSR4_EXPERIMENTAL
 Environment=FSR4_SHARED_FILE=/dev/shm/houji-fsr4-850190.bin
 Environment=LD_LIBRARY_PATH=/var/home/armada/.local/opt/fsr4-htp/lib
 Environment=DSP_LIBRARY_PATH=/var/home/armada/.local/opt/fsr4-htp/dsp;/run/houji/dsp/cdsp

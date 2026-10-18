@@ -3,6 +3,7 @@
 #include "run-graph.c"
 #include <limits.h>
 #include "HTP/QnnHtpDevice.h"
+#include "experimental-gate.h"
 
 struct FsrQnn {
     void *library, *rpc;
@@ -43,6 +44,7 @@ void fsr_qnn_free(struct FsrQnn *s)
 
 struct FsrQnn *fsr_qnn_create(void)
 {
+    if(!houji_fsr4_experimental_enabled())return NULL;
     struct FsrQnn *s=calloc(1,sizeof(*s));
     if(!s)return NULL;
     s->library=dlopen("libQnnHtp.so",RTLD_NOW|RTLD_LOCAL);

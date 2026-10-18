@@ -40,6 +40,17 @@ if [ -f "$base/shared-home" ]; then
     mkdir -p "$base/home-work"
     mount -t overlay overlay -o lowerdir=/run/houji/lower/var/home,upperdir="$home",workdir="$base/home-work" /newroot/var/home || fail 'persistent home'
 fi
+# The modem's private stores remain writable during staging. Bind their
+# existing backing directories rather than snapshotting changing secure/NV data.
+for name in efs tee; do
+    if [ -f "$base/shared-modem-$name" ]; then
+        private=$(realpath "/run/houji/data/$(cat "$base/shared-modem-$name")")
+        case "$private" in /run/houji/data/*) ;; *) fail 'invalid private modem storage';; esac
+        [ -d "$private" ] || fail 'private modem storage missing'
+        mkdir -p "/newroot/var/lib/houji-modem/$name"
+        mount --bind "$private" "/newroot/var/lib/houji-modem/$name" || fail 'private modem storage bind'
+    fi
+done
 printf '%s\n' "$rootdev" >/run/houji/root-device
 # The DSP firmware and factory calibration belong to this handset. Never replay
 # the ext4 journal or write to these stock partitions.

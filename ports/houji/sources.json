@@ -51,9 +51,9 @@
       "source": "Stock boot.img AVB com.android.build.boot properties; compatibility metadata, not an Armada security-patch claim"
     }
   },
-  "armada_image": "ghcr.io/armada-os/armada@sha256:8ccff5e25bcea814b316624bf2f2f4cd2193cd1c87ecf7c0e98b6ca3e9f19193",
-  "armada_version": "20260926.c2fd048",
-  "armada_revision": "c2fd0485b4dbc4947319d4a512f8061bdc8e7660",
+  "armada_image": "ghcr.io/armada-os/armada@sha256:f1be3089bb7c917adf41068704ce8dd9a679e3c47cab466b3d2832be1b2f0cde",
+  "armada_version": "20261010.c3d178c",
+  "armada_revision": "c3d178c9e5cc7107aaa128b8c1f384a9c6bd8dfa",
   "neard": {
     "version": "0.19-8.fc44",
     "url": "https://kojipkgs.fedoraproject.org/packages/neard/0.19/8.fc44/aarch64/neard-0.19-8.fc44.aarch64.rpm",

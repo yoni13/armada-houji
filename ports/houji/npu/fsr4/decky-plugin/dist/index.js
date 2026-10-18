@@ -44,7 +44,7 @@ function Content() {
             setStatus(res);
             toaster.toast({
                 title: "FSR 4 NPU",
-                body: val ? "Upscaler enabled (Hexagon NPU active)" : "Upscaler disabled (Native game rendering)"
+                body: res.available === false ? res.disabled_reason : (res.enabled ? "Upscaler enabled (Hexagon NPU active)" : "Upscaler disabled (Native game rendering)")
             });
         } catch (e) {
             toaster.toast({ title: "FSR 4 NPU", body: "Failed to update state" });
@@ -76,7 +76,7 @@ function Content() {
         });
     }
 
-    let description = "Disabled (Game uses native rendering / TAA)";
+    let description = status.available === false ? status.disabled_reason : "Disabled (Game uses native rendering / TAA)";
     if (status.enabled) {
         if (status.npu_active) {
             description = `Active: ${status.render_res} → ${status.output_res} (${status.preset})`;
@@ -97,11 +97,11 @@ function Content() {
                             label: "Enable FSR 4 NPU",
                             description: description,
                             checked: status.enabled,
-                            disabled: pending,
+                            disabled: pending || status.available === false,
                             onChange: handleToggle
                         })
                     }),
-                    status.enabled && SP_JSX.jsx(DFL.PanelSectionRow, {
+                    status.enabled && status.available !== false && SP_JSX.jsx(DFL.PanelSectionRow, {
                         children: SP_JSX.jsx(DFL.ButtonItem, {
                             layout: "below",
                             disabled: pending,

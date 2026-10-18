@@ -21,6 +21,8 @@ static double ms(Clock::time_point a,Clock::time_point b){return std::chrono::du
 
 #ifndef FSR4_NO_PIPELINE_MAIN
 int main(int argc,char **argv){
+    const char *enabled=getenv("HOUJI_FSR4_EXPERIMENTAL");
+    if(!enabled||strcmp(enabled,"1")){fprintf(stderr,"Houji FSR4 experiment is disabled\n");return 1;}
     try{
         if(argc!=5)throw std::runtime_error("Usage: npu-pipeline SHADER_DIR FRAME_ROOT OUTPUT_DIR FRAME_COUNT");
         std::string shaders=argv[1],frames=argv[2],out=argv[3];int count=std::stoi(argv[4]);

@@ -16,6 +16,7 @@
 #include <math.h>
 #include <xmmintrin.h>
 #include "frame-wire.h"
+#include "experimental-gate.h"
 
 #define OK 1u
 #define MISSING 0xbad00005u
@@ -35,6 +36,7 @@ static unsigned char *shared_frames;
 static double milliseconds(void){LARGE_INTEGER t,f;QueryPerformanceCounter(&t);QueryPerformanceFrequency(&f);return 1000.*(double)t.QuadPart/(double)f.QuadPart;}
 
 static void init(void){
+    if(!houji_fsr4_experimental_enabled())return;
     if(logfile)return;
     GetEnvironmentVariableA("FSR4_CAPTURE_DIR",folder,sizeof(folder));
     if(!folder[0])strcpy(folder,"C:\\fsr4-goat-capture");
@@ -79,7 +81,7 @@ static void correct_vtable(void){
 static Params *make_params(void){Params*p=calloc(1,sizeof(*p));if(p){correct_vtable();p->vt=vtable;}return p;}
 static unsigned optimal(Params*p){unsigned w=0,h=0;get_ui(p,"Width",&w);get_ui(p,"Height",&h);set_ui(p,"OutWidth",w);set_ui(p,"OutHeight",h);set_f(p,"Sharpness",0);set_ui(p,"DLSS.Get.Dynamic.Min.Render.Width",32);set_ui(p,"DLSS.Get.Dynamic.Min.Render.Height",32);set_ui(p,"DLSS.Get.Dynamic.Max.Render.Width",w);set_ui(p,"DLSS.Get.Dynamic.Max.Render.Height",h);return OK;}
 static unsigned stats(Params*p){set_ull(p,"SizeInBytes",0);return OK;}
-static void capabilities(Params*p){set_i(p,"SuperSampling.Available",1);set_i(p,"SuperSampling.NeedsUpdatedDriver",0);set_i(p,"SuperSampling.FeatureInitResult",1);set_ptr(p,"DLSSOptimalSettingsCallback",(void*)optimal);set_ptr(p,"DLSSGetStatsCallback",(void*)stats);}
+static void capabilities(Params*p){set_i(p,"SuperSampling.Available",houji_fsr4_experimental_enabled());set_i(p,"SuperSampling.NeedsUpdatedDriver",0);set_i(p,"SuperSampling.FeatureInitResult",houji_fsr4_experimental_enabled()?OK:UNSUPPORTED);set_ptr(p,"DLSSOptimalSettingsCallback",(void*)optimal);set_ptr(p,"DLSSGetStatsCallback",(void*)stats);}
 
 typedef struct{ID3D11Texture2D*stage;D3D11_TEXTURE2D_DESC desc;unsigned bytes;unsigned char*data;} Transfer;
 static Transfer transfers[3];
@@ -342,7 +344,7 @@ done:
     if(stage)ID3D11Texture2D_Release(stage);if(device)ID3D11Device_Release(device);ID3D11Texture2D_Release(texture);return SUCCEEDED(hr);
 }
 
-EXP NVSDK_NGX_D3D11_Init_ProjectID(void){init();note(live_enabled?"Goat native HTP bridge initialized":"Goat capture backend initialized; returns fallback on evaluate");return OK;}
+EXP NVSDK_NGX_D3D11_Init_ProjectID(void){if(!houji_fsr4_experimental_enabled())return UNSUPPORTED;init();note(live_enabled?"Goat native HTP bridge initialized":"Goat capture backend initialized; returns fallback on evaluate");return OK;}
 EXP NVSDK_NGX_D3D11_Init_with_ProjectID(void){return NVSDK_NGX_D3D11_Init_ProjectID();}
 EXP NVSDK_NGX_D3D11_Init(void){return NVSDK_NGX_D3D11_Init_ProjectID();}
 EXP NVSDK_NGX_D3D11_Init_Ext(void){return NVSDK_NGX_D3D11_Init_ProjectID();}
@@ -355,12 +357,14 @@ EXP NVSDK_NGX_D3D11_Shutdown1(void*p){(void)p;return OK;}
 EXP NVSDK_NGX_D3D11_GetFeatureRequirements(void*a,void*b,void*out){(void)a;(void)b;if(out)*(unsigned*)out=0;return OK;}
 EXP NVSDK_NGX_D3D11_GetScratchBufferSize(int feature,Params*p,size_t*s){(void)feature;(void)p;if(s)*s=0;return OK;}
 EXP NVSDK_NGX_D3D11_CreateFeature(ID3D11DeviceContext*ctx,unsigned type,Params*p,Feature**out){
+    if(!houji_fsr4_experimental_enabled()){if(out)*out=NULL;return UNSUPPORTED;}
     (void)ctx;if(type!=1)return UNSUPPORTED;Feature*f=calloc(1,sizeof(*f));if(!f)return UNSUPPORTED;
     f->id=1;get_ui(p,"Width",&f->width);get_ui(p,"Height",&f->height);get_ui(p,"OutWidth",&f->out_width);get_ui(p,"OutHeight",&f->out_height);get_ui(p,"DLSS.Feature.Create.Flags",&f->flags);*out=f;
     char b[180];snprintf(b,sizeof(b),"create %ux%u -> %ux%u flags=%u",f->width,f->height,f->out_width,f->out_height,f->flags);note(b);return OK;
 }
 EXP NVSDK_NGX_D3D11_ReleaseFeature(Feature*f){free(f);return OK;}
 EXP NVSDK_NGX_D3D11_EvaluateFeature(ID3D11DeviceContext*ctx,Feature*f,Params*p,void*callback){
+    if(!houji_fsr4_experimental_enabled())return UNSUPPORTED;
     (void)callback;LONG seq=InterlockedIncrement(&sequence);if(live_enabled)return live_frame(ctx,f,p,(unsigned)seq);if(seq>3)return UNSUPPORTED;
     char dir[MAX_PATH],path[MAX_PATH];snprintf(dir,sizeof(dir),"%s\\f%02ld",folder,seq-1);CreateDirectoryA(dir,NULL);snprintf(path,sizeof(path),"%s\\frame.txt",dir);FILE*meta=fopen(path,"w");if(!meta)return UNSUPPORTED;
     fprintf(meta,"feature %u %u %u %u flags=%u\n",f->width,f->height,f->out_width,f->out_height,f->flags);
@@ -374,6 +378,7 @@ EXP NVSDK_NGX_D3D11_EvaluateFeature(ID3D11DeviceContext*ctx,Feature*f,Params*p,v
 EXP NVSDK_NGX_UpdateFeature(void){return OK;}
 EXP NVSDK_NGX_GetSnippetVersion(void){return 0x15;}
 EXP Houji_EvaluateTAA(ID3D11DeviceContext*ctx,ID3D11Resource*color,ID3D11Resource*depth,ID3D11Resource*mv,ID3D11Resource*out,const float*view,unsigned is_reset){
+    if(!houji_fsr4_experimental_enabled())return UNSUPPORTED;
     init();if(!live_enabled)return UNSUPPORTED;
     Params*p=make_params();if(!p)return UNSUPPORTED;
     set_ptr(p,"Color",color);set_ptr(p,"Depth",depth);set_ptr(p,"MotionVectors",mv);set_ptr(p,"Output",out);

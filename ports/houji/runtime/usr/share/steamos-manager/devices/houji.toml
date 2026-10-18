@@ -1,0 +1,9 @@
+# Stock-ABL Houji port: armada-powerd owns CPU/GPU policy through remotes.d.
+[[device]]
+dt.compatible = "xiaomi,houji"
+device = "xiaomi_houji"
+variant = "Houji"
+friendly_name = "Xiaomi 14"
+
+[cpu_scaling]
+driver = "none"

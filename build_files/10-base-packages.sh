@@ -42,10 +42,10 @@ dnf5 -y install --setopt=install_weak_deps=False \
     lsb_release \
     htop \
     lsof \
-    scx-scheds \
     unzip \
     fuse \
     fuse-libs \
+    libxcrypt-compat \
     sdl2-compat \
     evtest \
     dbus-x11 \
@@ -168,7 +168,7 @@ dnf5 -y install --setopt=install_weak_deps=False \
 
 # scx_cosmos/scx_lavd for the Armada Control scheduler setting; without the
 # binaries armada-powerd reports the scheduler choice as unavailable.
-dnf5 -y install --setopt=install_weak_deps=False scx-scheds
+dnf5 -y install --setopt=install_weak_deps=False /packages/scx-scheds/scx-scheds-[0-9]*.rpm
 
 dnf5 -y install --setopt=install_weak_deps=False \
     --repofrompath 'copr-ublue-os-packages,https://download.copr.fedorainfracloud.org/results/ublue-os/packages/fedora-$releasever-$basearch/' \

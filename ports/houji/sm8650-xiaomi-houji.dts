@@ -207,14 +207,12 @@ arch_timer: &{/timer} {
 };
 
 /*
- * The trusted-UI and OEM Gunyah VMs never run here. Stock hands
- * trust_ui_vm_mem to the host as a reusable CMA pool and gives oem_vm_mem no
- * fixed region, and every page of f3800000..fc400000 was written and read
- * back from Linux on the handset. ABL removes no-map regions from /memory,
- * so these 140 MiB become ordinary RAM (as on sm8650-ayaneo-ps2).
+ * Keep the original VM reservations during the native-sleep reset comparison.
+ * The 140 MiB reclaim experiment is parked, matching the restored handset DTB.
+ * Re-enable these deletions only as a separate, explicitly chosen experiment.
  */
-/delete-node/ &trust_ui_vm_mem;
-/delete-node/ &oem_vm_mem;
+/* /delete-node/ &trust_ui_vm_mem; */
+/* /delete-node/ &oem_vm_mem; */
 
 &apps_rsc {
 	regulators-0 {

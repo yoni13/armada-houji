@@ -86,16 +86,22 @@ systemctl enable armada-input-calibration.service
 systemctl enable armada-controller-type.service
 systemctl enable inputplumber.service
 systemctl enable armada-guestos.service
+systemctl enable usr-share-guestos-android.mount
 systemctl enable armada-device-quirks.service
 systemctl enable armada-rgb.service
+systemctl enable armada-rgb-brightness-watch.service
+systemctl enable armada-rgb-brightness-watch.path
 systemctl enable armada-fixups.service
 systemctl enable armada-update-reserve.service
 systemctl enable armada-installer-visibility.service
 systemctl enable armada-steamapps.service
 systemctl enable armada-powerd.service
 systemctl enable armada-control.service
-systemctl enable armada-steamos-manager.service
-systemctl --global enable armada-steamos-manager.service
+systemctl enable steamos-manager.service
+systemctl --global enable steamos-manager.service
+systemctl --global enable steamos-manager-session-cleanup.service
+systemctl --global enable armada-steam-default-session.service
+systemctl --global enable armada-steam-charging-eta.service
 systemctl enable armada-bootimg-sync.service
 systemctl enable armada-esp-rename.service
 systemctl enable armada-boot-hotkeys.service
@@ -140,3 +146,6 @@ systemctl mask systemd-backlight@.service
 # We ship the flathub repo by default, the fedora repo only contains a subset of
 # the same apps that are in flathub, so we mask it to avoid confusion and issues.
 systemctl mask flatpak-add-fedora-repos.service
+
+# No CEC hardware on any Armada device.
+systemctl --global mask steamos-manager-configure-cecd.service

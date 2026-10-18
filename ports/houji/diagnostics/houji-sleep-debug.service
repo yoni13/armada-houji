@@ -1,0 +1,17 @@
+[Unit]
+Description=Houji persistent sleep/reset breadcrumbs (opt-in)
+After=systemd-tmpfiles-setup.service
+Before=systemd-suspend.service
+ConditionPathExists=/etc/armada/houji-sleep-debug
+ConditionPathExists=/usr/libexec/armada/houji-sleep-observer.ko
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/insmod /usr/libexec/armada/houji-sleep-observer.ko
+ExecStartPost=/usr/bin/python3 /usr/libexec/armada/houji_sleep_diagnostics.py boot
+ExecStop=/usr/sbin/rmmod houji_sleep_observer
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

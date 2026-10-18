@@ -85,6 +85,8 @@ static size_t tensor_bytes(const Qnn_Tensor_t *t)
 #ifndef FSR4_NO_MAIN
 int main(int argc,char **argv)
 {
+    const char *enabled=getenv("HOUJI_FSR4_EXPERIMENTAL");
+    if(!enabled||strcmp(enabled,"1")){fprintf(stderr,"Houji FSR4 experiment is disabled\n");return 1;}
     if(argc!=3){fprintf(stderr,"Usage: run-graph INPUT_NHWC_U8 OUTPUT_NHWC_F16\n");return 2;}
     int status=1;
     void *lib=dlopen("libQnnHtp.so",RTLD_NOW|RTLD_LOCAL);

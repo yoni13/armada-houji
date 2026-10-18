@@ -63,6 +63,8 @@ for pattern in ('*shanwan*','*gamesir*'):
 copy(REPO/'system_files/usr/lib/tmpfiles.d/armada-decky.conf','usr/lib/tmpfiles.d/armada-decky.conf')
 # Houji Settings: armada-decky-sync seeds it into Decky beside Armada's own plugins.
 copy(PORT/'settings/houji-settings.py','usr/libexec/armada/houji-settings',0o755)
+copy(PORT/'diagnostics/gpu-lock-trace.py','usr/libexec/armada/houji-gpu-lock-trace',0o755)
+copy(PORT/'diagnostics/sleep-state.py','usr/libexec/armada/houji_sleep_diagnostics.py',0o755)
 link('etc/systemd/system/sockets.target.wants/houji-settings.socket','/usr/lib/systemd/system/houji-settings.socket')
 link('etc/systemd/system/multi-user.target.wants/houji-pstore-archive.service','/usr/lib/systemd/system/houji-pstore-archive.service')
 for name in ['plugin.json','package.json','main.py','dist/index.js']:
@@ -132,6 +134,9 @@ for name in ['armada-power-profiles','houji-wait-battery','houji-steam-power']:
 for name in ['armada-power-profiles.service','houji-steam-power.service']:
     copy(PORT/'power'/name,'etc/systemd/system/'+name)
 copy(PORT/'power/upower-houji.conf','etc/systemd/system/upower.service.d/20-houji-battery-ready.conf')
+# Houji already owns /run/vpower with readiness and stale-data handling.
+# The release's user-session ETA writer would otherwise race that provider.
+link('etc/systemd/user/armada-steam-charging-eta.service','/dev/null')
 copy(PORT/'power/armada-power-profiles.conf','etc/dbus-1/system.d/armada-power-profiles.conf')
 copy(PORT/'power/org.armada.power-profiles.policy','usr/share/polkit-1/actions/org.armada.power-profiles.policy')
 copy(PORT/'audio/prepare-protection.py','usr/libexec/houji-audio/prepare-protection.py',0o755)

@@ -1,0 +1,16 @@
+[Unit]
+Description=Houji GPU lock-owner and fence-wait diagnostics (opt-in)
+After=multi-user.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/libexec/armada/houji-gpu-lock-trace --continuous
+ExecStopPost=/usr/bin/python3 /usr/libexec/armada/houji-gpu-lock-trace --cleanup
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=graphical.target

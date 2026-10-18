@@ -5,6 +5,9 @@ from pathlib import Path
 
 
 class Plugin:
+    def _available(self):
+        return os.environ.get("HOUJI_FSR4_EXPERIMENTAL") == "1"
+
     async def get_status(self):
         return await asyncio.to_thread(self._get_status)
 
@@ -60,6 +63,8 @@ class Plugin:
                 pass
 
         return {
+            "available": self._available(),
+            "disabled_reason": "FSR 4 experiment parked; native rendering restored",
             "enabled": service_active,
             "game_running": game_running,
             "npu_active": npu_active,
@@ -73,6 +78,8 @@ class Plugin:
         }
 
     def _set_enabled(self, enabled: bool):
+        if enabled and not self._available():
+            return self._get_status()
         if enabled:
             self._ensure_system_heap()
             subprocess.run(
@@ -87,6 +94,8 @@ class Plugin:
         return self._get_status()
 
     def _restart_service(self):
+        if not self._available():
+            return self._get_status()
         self._ensure_system_heap()
         subprocess.run(
             ["systemctl", "--machine=armada@.host", "--user", "restart", "houji-fsr4.service"],

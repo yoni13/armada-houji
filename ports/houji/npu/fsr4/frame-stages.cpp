@@ -238,6 +238,8 @@ public:
 
 #ifndef FSR4_NO_MAIN
 int main(int argc,char **argv){
+    const char *enabled=getenv("HOUJI_FSR4_EXPERIMENTAL");
+    if(!enabled||strcmp(enabled,"1")){fprintf(stderr,"Houji FSR4 experiment is disabled\n");return 1;}
     try{
         if(argc!=5)throw std::runtime_error("Usage: frame-stages pre|post SHADER_DIR FRAME_DIR STATE_DIR");
         std::string mode=argv[1],shaders=argv[2],frame=argv[3],state=argv[4];

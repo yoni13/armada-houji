@@ -24,6 +24,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include "blend.spv.h"
+#include "../experimental-gate.h"
 
 #define EXPORT __attribute__((visibility("default")))
 #define MAX_OBJECTS 16
@@ -118,6 +119,7 @@ static Device *find_device(const void *d) { void *k = key(d); for (int i = 0; i 
 static int cfg_enabled; static double cfg_pace; static double cfg_checked; static time_t cfg_mtime = -1;
 static void read_config(void)
 {
+    if (!houji_fsr4_experimental_enabled()) { cfg_enabled = 0; return; }
     double t = now_ms();
     if (t - cfg_checked < 1000) return;
     cfg_checked = t;
@@ -349,6 +351,7 @@ static int setup_swapchain(Device *d, Swapchain *s)
 static VkResult VKAPI_CALL CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR *info, const VkAllocationCallbacks *alloc, VkSwapchainKHR *out)
 {
     Device *d = find_device(device);
+    if (!houji_fsr4_experimental_enabled()) return d->CreateSwapchainKHR(device, info, alloc, out);
     VkSwapchainCreateInfoKHR mine = *info;
     /* One extra image for the generated frame; blits read and write swapchain images. */
     mine.minImageCount += 1;

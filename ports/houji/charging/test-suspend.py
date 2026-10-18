@@ -3,6 +3,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest import mock
 from unittest.mock import Mock
@@ -13,6 +14,28 @@ spec.loader.exec_module(s)
 
 
 class ChargingSleepTest(unittest.TestCase):
+    def setUp(self):
+        environment = mock.patch.dict(os.environ, {}, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+        counter = mock.patch.object(s, 'power_key_count', return_value=10)
+        self.counter = counter.start()
+        self.addCleanup(counter.stop)
+
+    def test_hardware_power_count_uses_all_cpus(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'interrupts'
+            path.write_text(' CPU0 CPU1\n 21: 4 8 spmi-pmic-arb pmic_pwrkey\n'
+                            ' 22: 2 9 spmi-pmic-arb pmic_resin\n')
+            # Call the original function through a freshly loaded module.
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self.assertEqual(module.power_key_count(path), 12)
+            path.write_text(' 21: invalid spmi-pmic-arb pmic_pwrkey\n')
+            self.assertIsNone(module.power_key_count(path))
+            path.unlink()
+            self.assertIsNone(module.power_key_count(path))
+
     def test_power_wake_returns_without_native_suspend(self):
         child = Mock()
         child.wait.return_value = 0
@@ -115,7 +138,36 @@ class ChargingSleepTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {}, clear=True):
             s.main()
             self.assertEqual(os.environ['ARMADA_SYSTEMD_SLEEP'], s.NATIVE_SLEEP)
+            self.assertEqual(os.environ[s.HANDOFF_POWER], '10')
             execv.assert_called_once_with(s.DISPATCH, [s.DISPATCH])
+
+    def test_power_during_detach_cleanup_prevents_native_sleep(self):
+        for counts in ([10, 11], [None], [10, None]):
+            with self.subTest(counts=counts), \
+                    mock.patch.object(s, 'charger_connected', return_value=True), \
+                    mock.patch.object(s, 'sleep_while_connected', return_value=True), \
+                    mock.patch.object(s, 'power_key_count', side_effect=counts), \
+                    mock.patch.object(s.os, 'execv') as execv:
+                s.main()
+                execv.assert_not_called()
+
+    def test_power_during_final_charger_recheck_prevents_native_sleep(self):
+        with mock.patch.object(s, 'charger_connected', side_effect=[True, False]), \
+                mock.patch.object(s, 'sleep_while_connected', return_value=True), \
+                mock.patch.object(s, 'power_key_count', side_effect=[10, 10, 11]), \
+                mock.patch.object(s.os, 'execv') as execv:
+            s.main()
+            execv.assert_not_called()
+
+    def test_power_on_reconnection_keeps_original_handoff_baseline(self):
+        # A press after the reconnect check must still cancel the next detach.
+        with mock.patch.object(s, 'charger_connected', side_effect=[True, True, False]), \
+                mock.patch.object(s, 'sleep_while_connected', return_value=True) as sleep, \
+                mock.patch.object(s, 'power_key_count', side_effect=[10, 10, 10, 11, 11]), \
+                mock.patch.object(s.os, 'execv') as execv:
+            s.main()
+            self.assertEqual(sleep.call_count, 2)
+            execv.assert_not_called()
 
 
 if __name__ == '__main__':

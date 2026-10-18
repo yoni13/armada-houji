@@ -1,6 +1,7 @@
 // Local D3D11 prototype bridge. GPU/NPU tensors share DMA-BUFs, while Wine game
 // texture transfer is staged over loopback and is NOT an end-to-end zero-copy path.
 #define FSR4_NO_MAIN
+#include "experimental-gate.h"
 #define FSR4_NO_PIPELINE_MAIN
 #include "npu-pipeline.cpp"
 #include "frame-wire.h"
@@ -169,6 +170,10 @@ public:
 };
 
 int main(int argc,char**argv){
+    if(!houji_fsr4_experimental_enabled()){
+        fprintf(stderr,"Houji FSR4 is disabled; explicit HOUJI_FSR4_EXPERIMENTAL=1 opt-in required.\n");
+        return 1;
+    }
     int listener=-1,client=-1;
     try{
         if(argc!=4)throw std::runtime_error("Usage: frame-server SHADERS OUTPUT_WIDTH OUTPUT_HEIGHT");

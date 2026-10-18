@@ -24,7 +24,6 @@
 0025-hid-lab126-gamepad-home-button.patch
 0026-houji-battery-unknown-times.patch
 0027-drm-panel-xiaomi-n3-idle-refresh.patch
-0028-houji-capacity-tracks-gauge.patch
 0029-nfc-houji-retain-shared-euicc-power.patch
 0030-net-ipa-sm8650-endpoint-map.patch
 0031-wifi-ath12k-panic-handler-without-mhi-wake.patch

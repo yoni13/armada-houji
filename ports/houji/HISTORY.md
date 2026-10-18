@@ -37,6 +37,102 @@ and build and install steps are in [README.md](README.md).
 18. [Installing over stock Android](#installing-over-stock-android)
 19. [Open problems](#open-problems)
 
+Latest release migration: [Armada 20261010](#armada-20261010-migration-2026-10-18).
+
+## Armada 20261010 migration (2026-10-18)
+
+- **Request:** Update to the latest upstream release, park the FSR experiment
+  without deleting its code, and research Steam automatic brightness.
+- **Release identity:** GitHub's latest stable release is `20261010`, source
+  `c3d178c9e5cc7107aaa128b8c1f384a9c6bd8dfa`, image version `20261010.c3d178c`.
+  The arm64 OCI manifest is pinned at
+  `sha256:f1be3089bb7c917adf41068704ce8dd9a679e3c47cab466b3d2832be1b2f0cde`;
+  all downloaded blobs were checksum-verified. Source changes were imported
+  relative to the previous release with Houji changes preserved. No merge
+  commit or publication was performed during preparation.
+- **Port integration:** The 192 shared kernel patches plus 30 Houji patches
+  apply cleanly to pinned Linux 7.2.6. New kernel release `k20261010` includes
+  upstream GMU interrupt/timeout, GPU priority, UFS, UART and Wi-Fi scan fixes;
+  these are not claimed to resolve Houji's unexplained native-sleep resets.
+  Original VM reservations remain selected for the ongoing comparison.
+  Gamescope 3.16.31-ogc1 is built with all release patches plus Houji's touch
+  association/fresh-frame wake. MangoHud retains capacity reporting and overlay
+  throttling alongside the release's fdinfo/upscaler changes. A Houji device
+  entry enables the new steamos-manager integration; the duplicate user-session
+  vpower writer is masked because Houji already publishes that telemetry.
+- **FSR parked:** A master `HOUJI_FSR4_EXPERIMENTAL=1` gate now controls the
+  game hook, NGX bridge, frame server, QNN session, standalone runner, framegen
+  path and Decky controls. Old per-feature flags cannot activate those paths
+  alone. On the handset, the server was stopped, Goat's original launch options
+  restored, forced TAA/50% render-scale overrides removed, and injected files
+  moved to a private reversible backup. Sources/models/build scripts remain.
+  The pre-experiment game preferences were already restored and were retained.
+- **Preserving installation:** The stager retains owner settings, diagnostics,
+  writeback budget, SSH/Decky setup and home. Modem private storage uses existing
+  backing directories through bind mounts rather than copying live NV/secure
+  files. On this installation, all five slot-B boot images were flashed through
+  fastboot, with init_boot last. No slot-selection or GPT-writing command was
+  used. The proposed direct-write installer was stopped before any boot writes.
+- **Preparation checks:** All 36 Houji test suites and performance-settings
+  checks passed, including the stager's two backing-store tests and
+  27 installer tests. Gamescope, MangoHud, kernel and external
+  modules built; target-loader dependency checks passed. Packaging verifies
+  stock-ABL metadata, device-tree symbols/reservations and image hashes.
+  The new kernel's BTF validates all 15 GPU probe definitions; instrumented
+  GEM/fence/mutex and PSCI tracepoint source semantics match the previous build.
+  Runtime validation is recorded after installation, not inferred from builds.
+- **Reboot-command failure and correction (Taiwan time, UTC+8):** At 03:04:43,
+  `systemctl reboot bootloader` failed with `Too many arguments`. At 03:05 the
+  handset entered charger light sleep; its lost SSH connection was incorrectly
+  taken as evidence of a reboot. The boot ID was unchanged. At about 12:22,
+  `systemctl --reboot-argument=bootloader reboot` succeeded and fastboot appeared
+  immediately on the already-connected cable. Check command results and the
+  transient unit's journal, rather than treating a scheduled unit as success.
+- **Installed validation (12:24–12:25 UTC+8):** Booted Armada
+  `20261010.c3d178c` and `7.2.6-armada-houji-k20261010`. All five flashed payloads
+  matched their manifest hashes when read back from Linux. GPT verification
+  reported no problems (the same stock-layout warnings as before). Steam's
+  library UI rendered, Gamescope associated the built-in touch with DSI-1, audio
+  exposed the internal speakers/microphone, and device services were active.
+  Shared home and private modem bind mounts were present. GPU tracing armed and
+  the matching sleep observer loaded. The existing controller-type oneshot
+  failed with no composite controller attached; InputPlumber itself was active.
+  FSR remained disabled. Native-sleep reset stability is still unresolved.
+
+### First post-update reset reaches partial PSCI return (2026-10-18)
+
+- **Report:** A resume reboot after the release update. The handset booted the
+  same `k20261010` kernel again; raw evidence was preserved privately before
+  further tests. All times below are Taiwan time (UTC+8).
+- **Before native sleep:** The independent recorder confirms charger light
+  sleep at 12:26:51: both DRM CRTCs inactive and app.slice frozen. A Power wake
+  at 12:29:07 completed normally. On battery, the first native attempt returned
+  on Power IRQ 21 at 12:30:33. The next sleep transaction began at 12:30:40 and
+  completed five sensor-DSP dark-wake cycles before its final re-entry.
+- **New endpoint:** Cycle 7 entered at 12:31:31. All eight CPUs printed PSCI
+  entry markers, including one selected state `0x4100c344`. After a recorded
+  30.658-second sleep, CPU0 returned and repeatedly re-entered/returned with
+  `0x4100c344`; CPU1 also returned and re-entered. The console then ends without
+  `machine-exit`, device-resume callbacks, `post`, or the ledger's kernel-return.
+  The last retained activity is approximately 12:32:02 after accounting for
+  suspended time. Only 26 bounded detail records were printed in this attempt,
+  below the 256-record limit; the missing completion is not that limit.
+- **Interpretation:** Unlike the older consoles ending at the general
+  `PM: suspend-to-idle` marker, this capture establishes that CPUs reached the
+  PSCI call boundary and at least CPU0/CPU1 returned before full system resume.
+  The markers surround `psci_cpu_suspend_enter()` and do not record its return
+  value. They do not prove why a selected state immediately returns, which
+  component initiated the reset, or that an unprinted CPU never returned.
+  There is no saved panic or Linux restart-probe marker. The narrowed target is
+  the CPU/domain idle exit/re-entry and wake coordination, before device resume.
+- **GPU:** The interrupted checkpoint has empty allocation/reclaim/retirement/
+  lock/fence maps and no candidates after 257,118 processed trace lines. The
+  retained console has no translation-fault report. Missing final loss counters
+  prevent treating that as proof that every GPU path was healthy.
+- **Status:** The upstream update has not fixed the native-sleep reset. The
+  observer and continuous collector remain enabled; no new suspend trial or
+  power-policy change was made to investigate this report.
+
 ## Boot and storage
 
 ### Cellular bring-up (October 2026, ongoing)
@@ -651,6 +747,137 @@ for every DSP request.
   stability test was performed for this change; the reset root cause remains
   unresolved.
 
+### Warm reset on a Power-key wake with the original memory layout (2026-10-15)
+
+- **Report:** A short Power press brought up the boot logo, without a long
+  Power hold. The phone was running again around 20:37 (all times UTC+8).
+- **Retained sequence:** Charging light sleep ended normally at 20:21:12.
+  Another Power press was recorded at 20:21:29 and native sleep started at
+  20:21:37. Sensor services, including gyro aiming, stopped successfully.
+  The journal records six sensor-DSP dark wakes through 20:23:46; the retained
+  console contains later suspend/resume cycles and audit activity at 20:25:14.
+  Its final cycle ends after `simple_pm_bus_suspend returned 0`, with every
+  recorded device callback completed and no following resume callback.
+- **Reset mechanism:** Read-only inspection of the PMIC PON ring, decoded
+  against the stock `pmic-pon-log.ko`, shows PS_HOLD, WARM_RESET, count 1, then
+  ON. The preceding Power-only recovery has a distinct KPD_PWR stage-2 /
+  HARD_RESET sequence. This distinguishes the latest event from a forced
+  long-button reset; it does not identify the software or firmware initiator.
+- **What this rules out:** The restored original memory layout was active.
+  Steam removed the Rockstar game session from its running list at 18:35:17;
+  the 20:20 sample had about 7.3 GiB available RAM. No panic, OOM kill, GPU
+  fault or UFS calibration/I/O error appears in the retained final sequence.
+  Thus neither the reclaimed VM carve-outs nor an actively running GTA session
+  is required for this failure signature. The earlier 11:53 reboot remains of
+  unknown origin, and the 12:35 hang lost its RAM console on forced recovery.
+- **Next diagnostic:** Existing suspend-to-idle entry/exit messages are
+  KERN_DEBUG, hidden from the ramoops console at `kernel.printk=7`. Raise only
+  the current boot's console threshold to 8 (PM debug already enabled) so the
+  next naturally occurring failure can distinguish the end of device suspend
+  from entry into / return from CPU idle. Previous values are saved with the
+  private evidence. No new suspend trial, kernel flash or sleep-policy change
+  was made; this is instrumentation, not a fix. Exact reset timing and the
+  failing low-power stage remain unresolved.
+
+### Charger-detach handoff and another warm reset (2026-10-17)
+
+- **Report:** A short Power press after unplugging the charger brought up the
+  boot logo. GTA was left running. The original memory layout was active; all
+  times below are Taiwan time (UTC+8).
+- **Retained sequence:** Steam recorded a successful resume at 23:52:43 on
+  October 16, another suspend at 23:53:04, and a duplicate suspend request at
+  00:23:37 on October 17 while the first was still in progress. Console audit
+  anchors place panel initialization at about 00:23:37.5 and native-sleep
+  entry at 00:23:37.8. The final device callback returned successfully at about
+  00:23:38.2, with no recorded resume. This fits light-sleep cleanup followed
+  by native sleep after charger detach. The previous journal ended at 23:35;
+  its timestamp and the archive filename do not date the final console event.
+- **Reset evidence:** The PMIC ring again records PS_HOLD, WARM_RESET, count 1,
+  then ON, with no saved panic. The console threshold had reverted to 7 after
+  reboot, filtering the CPU-idle debug markers. The handset's existing diagnostic
+  sysctl override now sets threshold 8 across reboots; the previous setting was
+  backed up. These records still do not identify the reset initiator or prove
+  the exact point of failure after device suspend.
+- **Handoff race:** After confirmed detach, the charging wrapper requested
+  light-sleep cleanup and treated its successful exit as permission to enter
+  native sleep. A concurrent Power press could be lost in that interval. The
+  wrapper now carries a PMIC Power-IRQ baseline through cleanup, charger
+  rechecks and exec. The native helper checks it before freezing and again
+  after pre hooks, immediately before kernel sleep. Detected Power activity
+  ends the sleep transaction and runs any required thaw/cleanup. A quiet
+  detach still permits battery native sleep. This guards the userspace
+  handoff; it does not establish that the race caused this warm reset or fix
+  the underlying native-sleep failure.
+- **Verification:** 16 charging-sleep tests, 45 native-sleep tests, 25 charging
+  policy tests and the light-sleep shell checks passed. Coverage includes a
+  key during cleanup, pre hooks or charger rechecks, a reconnect, missing key
+  telemetry, and a quiet detach. Helpers were installed with backups while
+  awake. Both live IRQ readers agreed and recognized a deliberately mismatched
+  baseline; no live sleep or reboot was invoked for verification.
+- **GPU evidence:** The preserved run has no final stop record or loss counters
+  because it was interrupted by the reset. Its last checkpoint has no pending
+  allocation, reclaim, lock, retirement or fence waits. One older candidate
+  already had its software fence signaled, and its raw events had rotated out;
+  it does not prove a deadlock. These partial records cannot exclude a later
+  GPU problem. The collector's six-hour limit uses monotonic time, which pauses
+  in native suspend, explaining why the 14:30 run had not expired by wall-clock
+  time. Raw console, PMIC and trace evidence remains in private build storage.
+
+### Repeated daytime resets reach the CPU-idle phase (2026-10-17)
+
+- **Report:** Multiple restarts while asleep or waking. The owner also used
+  both forced Power recovery and a deliberate menu reboot, so not every boot
+  transition is an unexplained crash.
+- **Timeline:** Five subsequent boot starts are estimated at about 07:09,
+  08:14, 09:09, 11:28 and 14:42 (Taiwan UTC+8), using the PMIC RTC-relative
+  boot records and the current synchronized wall/boottime anchor. These are
+  boot-start estimates, not exact failure times. An orderly shutdown precedes
+  the fourth; the third has no surviving crash console. The first two and last
+  have retained native-sleep consoles. Large clock rollback on boot made later
+  records appear dated October 16; chrony finally corrected the current boot
+  forward by 75,574 seconds at 21:54:54 on October 17. Directory names alone
+  cannot establish chronology.
+- **Narrower endpoint:** All three new crash consoles finish at
+  `PM: suspend-to-idle`, after aggregate noirq device suspend completes, with
+  no matching `resume from suspend-to-idle`. The persistent level-8 setting
+  exposed the marker previously filtered out. In matching kernel source this
+  is the beginning of `s2idle_loop()`, before its wake checks and CPU-idle
+  entry; it does not prove that the final PSCI firmware call was reached.
+  The first two final idle entries date to approximately 07:08:21 and 08:12:54;
+  the last is about 14:41:08 after RTC-relative correction. No saved panic or
+  UFS PHY-calibration error explains these endings. The latest PMIC sequence
+  is PS_HOLD, WARM_RESET, count 1, then ON; earlier hard resets also remain in
+  the ring and cannot all be assigned to incidents by its untimestamped data.
+- **GPU evidence:** All interrupted continuous-trace checkpoints have no
+  pending allocation/reclaim/retirement/lock/fence maps and no candidates. The
+  last failed boot's retained window has 101,597 retirement entries and returns
+  each, and 1,212 contended lock entries and returns each. Crash-time loss
+  counters are unavailable, so this does not exclude all GPU failure modes.
+  Its console separately records 128 UCHE translation-fault messages plus
+  suppressed callbacks, beginning after a successful wake and ending about
+  22 seconds before the final native-sleep entry. Earlier two crashes have no
+  such fault in their retained windows. Steam and trace task labels show Euro
+  Truck Simulator 2 in the affected boot; they do not identify which address
+  space owned the faulting TTBR. The translation faults are actionable
+  GPU evidence, but not proof of the previously suspected lock cycle or a
+  shared reset cause.
+- **Evidence loss:** The 128 MiB persistent journal had retained only part of
+  the current boot; device-callback debug logging produced roughly a thousand
+  lines per suspend cycle, and this boot had completed 356 cycles. Captures
+  were preserved before changing diagnostics. The handset now retains
+  aggregate PM/idle debug markers without the per-device flood, with a bounded
+  512 MiB journal and an independent fsynced sleep ledger carrying boot ID,
+  RTC/monotonic clocks, charger/battery telemetry and attempt outcomes.
+- **Next-stage observer:** A diagnostic-only module now records existing
+  s2idle PSCI entry/return tracepoints and Linux restart-function entry into
+  the crash console. It leaves normal awake idle silent and caps detail at
+  256 records per sleep attempt. Matching running/local ABI layouts were
+  verified; load, unload and re-load passed while awake. It is boot-enabled
+  alongside continuous GPU tracing. The 45 native-sleep tests and three
+  ledger tests passed; no sleep/reboot was forced to validate the hooks.
+  See [sleep diagnostics](diagnostics/SLEEP.md) for limitations and rollback.
+  The reset cause remains unresolved; native battery sleep stays enabled.
+
 ### Crash logs did not survive a reset (2026-10-08)
 
 - **Problem:** pstore was empty after every reset, including the wake resets
@@ -1037,6 +1264,28 @@ for every DSP request.
   brighten the screen. Steam's mapping from lux to backlight, and how it
   writes the backlight on this panel, are not yet traced.
 
+### Steam automatic brightness: adaptive bounds, not a fixed lux curve (2026-10-18)
+
+- **Request:** Research how Steam implements automatic brightness.
+- **Implementation:** Inspected the ARM64 binary actually mapped by the running
+  client (`steamrtarm64/steamclient.so`) and its live settings callback. Steam
+  reads the virtual IIO `als` device, takes the higher of up to two sensors,
+  filters the latest two seconds through a median, and derives adaptive minimum
+  and maximum brightness. The user's selected brightness is adjusted only when
+  outside those bounds. At 100 lux and above the normal allowed range is about
+  15–100% raw backlight; a medium setting need not brighten under a flashlight.
+  The UI slider is nonlinear and is not the raw backlight fraction.
+- **Output:** The loaded client discovers `/sys/class/backlight`, reads the
+  maximum, combines adaptive changes with manual preference/idle dimming/resume
+  fades, then writes an integer to `brightness`. It first tries a user write,
+  with SteamOS privileged helper fallbacks. This is separate from SensorProxy.
+- **Read-only check:** Steam reported adaptive available/enabled, about 683 lux,
+  min/max 0.15/1.0 and raw backlight 646; the panel agreed at 646/2047. No forced
+  sensor injection or slider movement was used. These readings explain why the
+  earlier flashlight observation alone was insufficient to call the path broken.
+  Details, thresholds, binary identity and addresses are in
+  [Steam brightness](sensors/als/STEAM-BRIGHTNESS.md).
+
 ### Gyro aiming through the controller's virtual Steam Deck (2026-10-15)
 
 - **Issue:** Steam gyro aiming needs motion on the same controller as the
@@ -1264,7 +1513,161 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   under load. It needs a check the next time the percentage has run well ahead of
   the gauge. Until then the fix rests on the host test of the shipped function.
 
+### Use stock Android's one battery-percentage source (2026-10-18)
+
+- **Request:** Use one percentage consistently before and after plugging in,
+  after checking what stock Android uses.
+- **Stock evidence:** The pinned firmware's `android.hardware.health-service.qti`
+  configures `/sys/class/power_supply/battery/capacity` as its battery-level
+  source. `BatteryMonitor::getProperty` reads it directly for capacity. Stock
+  `qti_battery_charger.ko` maps capacity to GLINK wire ID 4 and divides that
+  firmware value by 100, independent of charging status. Raw gauge SOC and the
+  charge counter are separate properties, not the normal displayed percentage.
+  See [stock battery reporting](charging/STOCK-BATTERY.md).
+- **Change:** Removed patch `0028` and the obsolete clamp-specific test. The
+  port now reports the firmware capacity in every state, without a remembered
+  discharge minimum, raw-counter substitution, charging-only +3 margin or a
+  full-status source switch. This supersedes the two clamp fixes above.
+  Firmware smoothing can still lag or re-estimate; this change removes the
+  port's formula switch, not all firmware-originated percentage changes.
+- **Verification:** Replaying the pre-change patches and rebuilding reproduced
+  the installed battery module's `.text` byte-for-byte. Rebuilt with only the
+  capacity patch omitted; all 196 remaining kernel patches apply without fuzz,
+  the module builds, 25 charging-policy tests pass, and the new capacity getter
+  returns firmware percent directly. The battery module was replaced and loaded
+  while awake at 00:19 UTC+8 with a verified backup, keeping the same kernel and
+  boot. Linux and UPower both reported Full / 100%. The on-disk module is updated
+  for subsequent boots; sleep/GPU diagnostics remain enabled. No physical cable
+  transition or long-discharge accuracy test was induced during deployment.
+
 ## Memory
+
+### Steam menu freeze with GPU reclaim and teardown blocked (2026-10-15)
+
+- **Report:** Pressing Steam while GTA V Enhanced was running left the whole
+  picture, including MangoHud, frozen. SSH still worked; InputPlumber remained
+  responsive, Steam had logged the menu presses, and neither `user.slice` nor
+  `app.slice` was frozen by the sleep mechanism.
+- **Live evidence:** A Steam webhelper graphics thread was blocked in
+  `msm_ioctl_gem_submit` → `msm_gem_pin_vma_locked` → shmem page allocation →
+  direct reclaim → `msm_gem_shrinker_scan` → `active_evict` →
+  `dma_resv_wait_timeout`. The GPU retirement worker was blocked in
+  `msm_submit_retire` at the object reservation-lock acquisition. GTA, Xwayland,
+  MangoHud and Gamescope threads subsequently waited on graphics fences during
+  buffer or address-space teardown. CPU and major-fault counters were essentially
+  stationary during a five-second sample, rather than showing swap-in thrashing.
+- **Interpretation:** This is a kernel graphics synchronization/reclaim stall,
+  distinct from the later-stage native-sleep reset signature. The reclaim wait
+  is bounded per buffer but its context-switch count kept advancing while the
+  retirement worker made no progress. The exact lock/fence dependency cycle has
+  not been proven; a single sampled wait is not enough to call it an unbounded
+  fence wait or identify a fix.
+- **Recovery:** Steam's automatic session restart did not clear the blocked
+  kernel tasks. Temporarily setting `msm.enable_eviction=N` also did not release
+  the already-running reclaim scan, so the setting was restored. With owner
+  approval a software reboot recovered the UI. No kernel or persistent memory
+  policy was changed; raw evidence is saved privately on the handset and host.
+
+### GPU retirement dependency follow-up (2026-10-15)
+
+- **Source mapping:** The saved `msm_ioctl_gem_submit+0xe50` return address maps
+  to buffer pinning. Submission has already acquired its VM/buffer reservation
+  locks, which stay held across page allocation and direct reclaim. The saved
+  `msm_submit_retire+0x6c` address maps to `msm_gem_lock(obj)` before dropping
+  a `drm_gpuvm_bo` reference.
+- **Signaling dependency:** `msm_update_fence()` updates the hardware completion
+  counter but does not itself notify fence callbacks. The retirement loop calls
+  `dma_fence_is_signaled()` on the first submitted job, which signals its hardware
+  fence and the scheduler's user fence, then cleans up that job before checking
+  the next one. Reservation-lock contention in cleanup therefore delays fence
+  notification for later jobs, including jobs in other rings. Recovery work also
+  shares the same GPU worker. The hardware hangcheck can see completed counters
+  even while user-visible fences remain unsignaled.
+- **Reclaim amplification:** `active_evict()` waits ten jiffies per object
+  (40 ms at HZ=250) while holding that object's reservation lock. A submitter
+  reaching this path retains its previously acquired locks too. The GEM LRU
+  scanner's target counts pages freed, not time spent waiting, so scanning many
+  active buffers can accumulate long delays. Disabling eviction after a scan
+  starts does not change the already-selected stage or interrupt its waits.
+- **New capture:** A bounded kprobe trace, with offsets checked against running
+  BTF, identified a 42.746 ms retirement wait on a reservation lock whose owner
+  was independently observed as Steam's GPU process. Separately, a GTA reclaim
+  thread spent 43.386 ms waiting on a Gamescope scheduler fence and timed out.
+  These are different events: they do not establish the original lock/fence
+  cycle. The five-minute ring buffer overwrote some earlier CPU records, so
+  unmatched entries alone are not evidence of a permanent wait.
+- **Control capture:** A narrower 20-second capture had no overruns and matched
+  11,411 retirement entries/exits; the longest was about 0.142 ms, with no active
+  eviction wait recorded. During the reported transient recurrence, the later
+  live sample found the GPU worker progressing and Steam's JS responsive; the
+  owner confirmed recovery. It was not the earlier persistent blocked state.
+- **Ordering experiment:** A host pthread harness extracted the actual
+  `retire_submits()` loop and mocked two hardware-complete jobs plus a contested
+  cleanup lock. The second fence stayed unchecked until cleanup of the first
+  could proceed. A separate-signaler control permitted completion of the second
+  fence even when hardware finished it after the first cleanup blocked. This
+  verifies the code's head-of-line dependency, not the original handset cycle.
+- **Next fix direction:** Separate fence notification from potentially blocking
+  buffer/VM cleanup, maintaining references, active-submit accounting and teardown
+  ordering. Merely signaling all currently completed jobs once before cleanup
+  would still block notifications for jobs completing later. An address-matched
+  capture of the persistent stall is still needed to close the causal chain.
+  No kernel fix was flashed and all temporary probes were removed.
+
+### Bounded lock-owner/fence tracing for the next stall (2026-10-16)
+
+- **Request:** Capture whether GPU retirement is blocked by a submitter that
+  is itself reclaiming memory and waiting for a later GPU fence.
+- **Instrumentation:** `diagnostics/gpu-lock-trace.py` uses opt-in tracefs
+  probes on the existing `kufs1` kernel, with member offsets read from running
+  BTF. It records backing-page allocations, active eviction/purge, reservation
+  waits, generic and typed scheduler/MSM fence waits, GPU-worker mutex slowpaths
+  and return events. Mutex-owner flag bits are accounted for when fetching the
+  owner PID. Captures contain no GPU-buffer contents or user command lines.
+- **Correlation:** Candidate chains require matching owner pointer and TID,
+  allocation/reclaim/reservation context, and an unreturned retirement lock
+  attempt. Hardware-completed sequence comparisons are wrap-aware. Candidate
+  status is explicitly not proof: nofault field reads can race ownership and
+  signaling, and loss/missed-probe counters must be checked.
+- **Retention:** Continuously drain kernel buffers into at most eight 8 MiB
+  private chunks and checkpoint in-flight identities. Save automatically when
+  retirement stays blocked for two seconds, on a manual SIGUSR1, or at the
+  six-hour monotonic-time/8 GiB total-write limit; native suspend pauses the
+  time limit. Remove only this collector's probes. The
+  service is installed but not enabled at boot. No sleep or GPU policy changes.
+- **Checks:** Synthetic tests cover owner/lock correlation, completed versus
+  pending hardware fences, stale returns, probe ordering, bounded file rotation,
+  BTF offsets and partial-setup cleanup. An eight-second live smoke capture
+  recorded 3,331 retirement entry/return pairs with zero per-CPU overruns or
+  missed probes and complete cleanup. This validates capture mechanics, not
+  reproduction of the persistent stall. Manual SIGUSR1 capture also completed
+  with full probe cleanup. The final collector was armed at 00:57 UTC+8; an
+  initial sample used about 7% of one core and 53 MiB RSS with zero overruns,
+  and all nine sampled contended owners resolved to plausible task IDs.
+
+### Continuous debug tracing enabled (2026-10-17)
+
+- **Request:** Keep tracing enabled indefinitely for debugging.
+- **Change:** The handset's GPU trace service is now enabled at boot, uses
+  continuous mode without the six-hour or cumulative-write expiry, and
+  automatically re-arms five seconds after a stall/manual capture or collector
+  failure. Explicitly stopping the service still stops it. Persistent suspend
+  debug logging remains enabled. No reboot was needed to apply the change.
+- **Retention:** Keep eight continuous runs, each with eight 8 MiB trace chunks
+  (about 512 MiB of trace data plus metadata in total), under the separate
+  `continuous/` directory. Interrupted/reset runs participate in retention;
+  previous one-shot evidence remains outside it. A process lock and systemd
+  post-exit cleanup prevent overlapping collectors and clean up owned probes
+  after abnormal exits. Fresh images install this opt-in service without
+  automatically enabling it.
+- **Checks:** Eleven synthetic tests passed, including continuous-limit bypass,
+  retention across incomplete runs, and scoped probe cleanup. The installed
+  unit passed `systemd-analyze verify`. At 00:58 UTC+8, a live SIGUSR1 capture
+  saved successfully and automatically re-armed under a new PID/directory;
+  tracing was on, startup enabled, and `RuntimeMaxUSec=infinity`. The saved
+  capture had zero overruns, dropped events, missed probes or cleanup errors,
+  with 36,694 matched retirement entry/return events. Boot persistence is
+  configured; no reboot was induced for this check.
 
 ### GTA V Enhanced thrashed: idle memory filled zram (2026-10-12)
 
