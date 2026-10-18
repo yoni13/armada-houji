@@ -192,14 +192,15 @@ def nfc_status(system):
         return value if type(value) is int and value >= 0 else 0
     return {'enabled': desired != 'off', 'emulating': emulating,
             'desired_mode': desired,
-            'mode': status.get('mode') if status.get('mode') in modes else 'unavailable',
+            'mode': status.get('mode') if status.get('mode') in modes else ('off' if desired == 'off' else 'unavailable'),
             'powered': status.get('powered') is True, 'polling': status.get('polling') is True,
             'reads': count('reads'), 'tags': count('tags'),
             'ipass_field_on': count('ipass_field_on'), 'ipass_ese_actions': count('ipass_ese_actions'),
             'notify_on_scan': nfc_notifications_enabled(),
             'detections': count('detections'),
             'detection_session': text(status.get('detection_session'), 32),
-            'busy': status.get('busy') is True, 'message': text(status.get('message'), 120)}
+            'busy': status.get('busy') is True,
+            'message': text(status.get('message', 'NFC is off' if desired == 'off' else ''), 120)}
 
 
 def nfc_notifications_enabled():

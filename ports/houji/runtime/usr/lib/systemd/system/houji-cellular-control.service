@@ -4,6 +4,8 @@ Description=Houji SIM and eSIM settings service
 [Service]
 Type=dbus
 BusName=org.armada.Cellular
-ExecStart=/usr/libexec/houji-cellular/service.py
+ExecStart=/usr/libexec/houji-cellular/cellular-control
 UMask=0077
 Restart=on-failure
+TimeoutStopSec=75
+LimitCORE=0

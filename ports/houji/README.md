@@ -110,9 +110,13 @@ Results below are from the development handset.
 
 ## Known issues
 
-- **Native-sleep reset persists on 20261010.** The first post-update incident
-  captured partial CPU PSCI return/re-entry before full system resume, without
-  a saved panic or Linux restart marker. See the
+- **Native-sleep reset guard under validation.** The first 20261010 incident
+  captured partial CPU PSCI return/re-entry before full system resume. Patch
+  `0033` now avoids the deepest APSS/LLCC collapse state only during native
+  suspend; an equivalent live guard is installed on the development handset.
+  Twelve kernel sleep/resume attempts passed with the guard, including rapid
+  re-entry, but long standby and its power tradeoff remain unverified. See the
+  [guard and rollback](power/s2idle-guard/README.md) and
   [post-update evidence](HISTORY.md#first-post-update-reset-reaches-partial-psci-return-2026-10-18).
 - **Steam menu/GPU stall under load.** A live freeze with GTA V Enhanced showed
   GPU memory reclaim waiting on fences while the retirement worker waited on a
@@ -621,9 +625,9 @@ over a long sleep or with wireless charging.
 
 ## Memory
 
-Linux receives about 11.26 GB of the 12 GiB part; firmware keeps the rest for
-the modem, DSPs, hypervisor and TrustZone. The unused trusted-UI and OEM VM
-carve-outs (140 MiB) are ordinary RAM here. Swap is zram (zstd) in RAM, a
+Linux currently reports about 10.60 GiB of the 12 GiB part; firmware keeps the
+rest for the modem, DSPs, hypervisor and TrustZone. The 140 MiB trusted-UI/OEM VM
+reclaim experiment is parked; the original reservations are restored. Swap is zram (zstd) in RAM, a
 4 GB overflow swap file, and zram writeback: pages untouched for 30 minutes
 move to `/run/houji/data/houji-zram-writeback.img` every 2 minutes, at most
 16 GiB per day across reboots. Check it with:
@@ -636,6 +640,17 @@ The Game Mode session runs with kernel same-page merging (KSM), so identical
 pages, such as those of a launcher's many browser processes, are stored once.
 Because the GPU uses system RAM, a game's texture setting directly reduces
 free memory.
+
+Eight resident services now use native C++: Steam battery telemetry, Gamescope
+orientation, X2s session routing, gyro aiming, charging policy, thermal policy,
+the modem license relay and the SIM/eSIM settings broker. The first three saved
+about 42 MiB PSS; gyro/charging/thermal/license saved another 38 MiB PSS, and
+the SIM/eSIM settings broker saved about 18 MiB PSS when resident.
+NFC Manager exits when fully off and idle, but retains its process for active
+iPASS/reader/emulation operation. The parked
+FSR4 Decky plugin is outside the scanned plugin directory, eliminating its
+82.1 MiB RSS / 53.4 MiB PSS process while retaining its files. Details and
+build/tests are in [native helpers](helpers/README.md).
 
 ## Thermal limits
 

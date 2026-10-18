@@ -1,0 +1,81 @@
+Subject: [PATCH] cpuidle: psci: keep Houji in cluster collapse during s2idle
+
+Houji's stock firmware can warm-reset during a partial return from the
+APSS/LLCC-collapse state (0x4100c344). A retained trace shows CPU0 and CPU1
+returning and re-entering while the suspend thread never reaches machine-exit.
+Device suspend completed; no panic or Linux restart path was recorded.
+
+Select the shallower cluster-collapse state (0x41000044) for this board during
+suspend-to-idle. Preserve per-CPU rail collapse, device suspend, the ordinary
+runtime-idle governor, and the normal latency-constraint rejection path. This
+is a containment quirk for the observed firmware transition, not a claim that
+the firmware reset initiator has been identified.
+
+Apply it through the governor so genpd's selected-state accounting matches
+the state passed to PSCI. Fail closed if the expected shallower state is not
+present; never substitute a state that was not described by the firmware DT.
+
+--- a/drivers/cpuidle/cpuidle-psci-domain.c
++++ b/drivers/cpuidle/cpuidle-psci-domain.c
+@@ -18,6 +18,7 @@
+ #include <linux/psci.h>
+ #include <linux/slab.h>
+ #include <linux/string.h>
++#include <linux/suspend.h>
+ 
+ #include "cpuidle-psci.h"
+ #include "dt_idle_genpd.h"
+@@ -29,6 +30,34 @@
+ 
+ static LIST_HEAD(psci_pd_providers);
+ 
++static struct dev_power_governor houji_pd_gov;
++
++static bool houji_s2idle_power_down_ok(struct dev_pm_domain *domain)
++{
++	struct generic_pm_domain *pd = pd_to_genpd(domain);
++	u32 *state;
++	unsigned int i;
++
++	if (!pm_domain_cpu_gov.system_power_down_ok(domain))
++		return false;
++	if (pm_suspend_target_state != PM_SUSPEND_TO_IDLE)
++		return true;
++
++	state = pd->states[pd->state_idx].data;
++	if (!state || *state != 0x4100c344)
++		return true;
++
++	/* Keep native CPU/cluster collapse, but retain the APSS/LLCC domain. */
++	for (i = 0; i < pd->state_idx; i++) {
++		state = pd->states[i].data;
++		if (state && *state == 0x41000044) {
++			pd->state_idx = i;
++			return true;
++		}
++	}
++	return false;
++}
++
+ static int psci_pd_power_off(struct generic_pm_domain *pd)
+ {
+ 	struct genpd_power_state *state = &pd->states[pd->state_idx];
+@@ -77,6 +106,8 @@
+ 
+ 	/* Use governor for CPU PM domains if it has some states to manage. */
+ 	pd_gov = pd->states ? &pm_domain_cpu_gov : NULL;
++	if (pd_gov && use_osi && of_machine_is_compatible("xiaomi,houji"))
++		pd_gov = &houji_pd_gov;
+ 
+ 	ret = pm_genpd_init(pd, pd_gov, false);
+ 	if (ret)
+@@ -136,6 +167,9 @@
+ 	if (!np)
+ 		return -ENODEV;
+ 
++	houji_pd_gov = pm_domain_cpu_gov;
++	houji_pd_gov.system_power_down_ok = houji_s2idle_power_down_ok;
++
+ 	/*
+ 	 * Parse child nodes for the "#power-domain-cells" property and
+ 	 * initialize a genpd/genpd-of-provider pair when it's found.

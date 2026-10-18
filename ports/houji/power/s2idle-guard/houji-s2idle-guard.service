@@ -1,0 +1,13 @@
+[Unit]
+Description=Houji native-sleep APSS collapse guard for the release kernel
+ConditionKernelVersion=7.2.6-armada-houji-k20261010
+After=systemd-modules-load.service
+Before=sleep.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/modprobe houji_s2idle_guard
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

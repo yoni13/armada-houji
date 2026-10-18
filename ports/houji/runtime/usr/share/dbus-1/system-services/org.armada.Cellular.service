@@ -1,5 +1,5 @@
 [D-BUS Service]
 Name=org.armada.Cellular
-Exec=/usr/libexec/houji-cellular/service.py
+Exec=/usr/libexec/houji-cellular/cellular-control
 User=root
 SystemdService=houji-cellular-control.service

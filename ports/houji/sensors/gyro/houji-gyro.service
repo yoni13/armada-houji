@@ -4,7 +4,7 @@ After=houji-sensors.service inputplumber.service
 Wants=houji-sensors.service
 
 [Service]
-ExecStart=/usr/bin/python3 /usr/libexec/armada/houji-gyro
+ExecStart=/usr/libexec/armada/houji-gyro
 Restart=on-failure
 RestartSec=5
 

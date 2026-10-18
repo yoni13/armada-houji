@@ -135,6 +135,37 @@ Latest release migration: [Armada 20261010](#armada-20261010-migration-2026-10-1
 
 ## Boot and storage
 
+### Suspend-only APSS collapse guard deployed (2026-10-18)
+
+- **Change:** The live governor guard caps Houji's shared cluster state at
+  `0x41000044` during s2idle, avoiding the `0x4100c344` APSS/LLCC transition
+  captured in the reset. CPU rail collapse, device suspension and battery
+  native sleep remain enabled; awake idle selection is unchanged. Original
+  latency constraints and rejection results remain authoritative. Patch `0033`
+  implements the equivalent board-specific rule for future kernel builds.
+- **Validation, Taiwan UTC+8:** A 20-second RTC smoke test passed. A subsequent
+  attempt served a DSP dark wake and resumed on Power IRQ 21; the test stopped
+  rather than suspend again while the owner was using the phone. With approval,
+  six 90-second RTC transactions then passed from 12:49:06 to 12:59:06. Together
+  these exercised 12 kernel suspend/resume cycles and 68 guarded selections
+  without a reboot, device-resume failure or new kernel fault. All 161 observed
+  PSCI entries had matching exits. Two attempts included 38 and 43 CPU entries
+  respectively, so rapid re-entry itself was exercised. No detail records were
+  suppressed, every system resume completed, and the user slice thawed.
+- **Deployment:** The matching module was installed and boot-enabled on
+  `k20261010`, then unloaded/reloaded through its installed service successfully
+  while awake. Its callback/init/unload machine code matches the trial build.
+  No boot partition or slot state changed. The source patch applies with zero
+  fuzz, compiles against the kernel, and its extracted governor test covers
+  latency vetoes, alternate state layouts and non-s2idle selection.
+- **Limits:** This is tested containment of one failing power transition, not
+  identification of the firmware reset initiator. The PMIC ring from the crash
+  decodes as PS_HOLD/WARM_RESET. Six transactions plus their awake intervals
+  consumed a reported 33 mAh over 600 seconds; the batched gauge updates do not
+  establish sleep-only power or the difference from the previous policy.
+  Long standby is still unverified. Diagnostics remain active. See
+  [guard build and rollback](power/s2idle-guard/README.md).
+
 ### Cellular bring-up (October 2026, ongoing)
 
 - **eSIM:** stock switches slot 2 through the modem's `esim_enable` EFS item.
@@ -1541,6 +1572,110 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   transition or long-discharge accuracy test was induced during deployment.
 
 ## Memory
+
+### Native resident helpers and parked Decky plugin (2026-10-18)
+
+- **Request:** Reduce resident RAM, including the inactive FSR4 NPU Decky
+  process, and replace simple Houji helpers with native code.
+- **Plugin:** The upscaler toggle was off but Decky still loaded its FEX/Python
+  backend at 82.1 MiB RSS / 53.4 MiB PSS. Moved its directory into
+  `~/homebrew/disabled-plugins/fsr4-npu` and restarted Decky. The process is gone;
+  the three other plugins remain, and the FSR sources/settings/models are kept.
+- **Native conversions:** Steam's UPower/vpower bridge, Gamescope orientation
+  bridge and X2s session routing are now C++17. The battery protocol keeps atomic
+  publication, readiness, stale-estimate clearing and the `-1` shutdown sentinel.
+  Orientation keeps sensor claims/releases, lock semantics, debouncing and
+  compositor/socket identity. Controller routing preserves custom config,
+  Plasma precedence and profile publication before InputPlumber restart.
+  Build/staging and unit-test dependencies now include the native helpers.
+- **Live deployment:** Installed with a rollback copy at 13:18 UTC+8. All three
+  units run the ARM64 binaries; UPower and vpower agree, the owner's rotation
+  lock remains selected, and Game Mode routing applies. The sleep guard and
+  diagnostics remain active. All 38 Houji test scripts pass, including nine
+  private-D-Bus/native integration tests.
+- **Memory:** Same-boot PSS for the three helpers fell from 48.6 MiB to 6.1–6.5 MiB
+  (42–43 MiB saved). The measured Decky process group fell by about 60 MiB after its
+  restart, including removal of FSR4; the combined observed reduction was
+  102.5 MiB PSS in the final sample. Some Decky delta is restart-related, and shared pages mean RSS
+  cannot be summed as unique physical savings. Locked orientation was measured;
+  sensor-following mode establishes additional D-Bus state. Private snapshots
+  are retained outside the repository.
+
+### Native gyro, charging, thermal and modem-license relay (2026-10-18)
+
+- **Request:** Extend the RAM optimization to the remaining resident Houji
+  helpers. Added C++ implementations for gyro aiming, charging policy, thermal
+  policy and QTEELS relay; Python sources remain as reference models and rollback.
+- **Gyro:** Direct libssc callbacks preserve 200 Hz gyro / 50 Hz acceleration,
+  the Deck unit conversion and display rotation, sensor-object lifetime,
+  connected-controller/gamepad gating, and cleanup on light/native sleep.
+  Controller disconnect entered waiting mode; reconnect resumed live samples.
+- **Charging/thermal:** Differential tests cover thousands of thermal thresholds,
+  hysteresis trajectories, battery limits, authentication flags, history resets,
+  ramp and SIC states. Temporary-sysfs tests exercise missing telemetry, the
+  charge-limit hold/resume, stop fallback and stronger kernel GPU cooling caps.
+  The deployed charging process repeated the three adapter-auth attempts and
+  ramped back from 500 mA to the configured 3 A standard-PD limit. Kernel lease
+  and authentication checks remain independent of the native process.
+- **License:** Fake-QTEE/datagram tests verify exact ACK/indication bytes,
+  malformed/duplicate/truncated-field rejection, busy retry and output bounds.
+  A temporary systemd direct auto-restart was first tested with dummy units,
+  then used for the relay handover. Modem storage, modem-start and QTEE services
+  retained their PIDs/invocations. Six real secure checks succeeded immediately
+  after the native relay registered; the transient restart override was removed.
+- **NFC:** Retained the existing protocol implementation and added idle exit
+  when fully off; active reader/emulation/iPASS, recovery and in-flight work
+  prevent exit. D-Bus actions reactivate it, while passive status polls do not.
+  The installed update restored iPASS with byte-identical saved settings.
+  No memory reduction is claimed while iPASS remains active.
+- **Measured result:** Same-boot PSS fell from 22.6 to 7.4 MiB for active gyro,
+  8.8 to 0.5 MiB for charging, 8.8 to 0.5 MiB for thermal and 7.0 to 0.4 MiB for
+  the license relay: about 38 MiB saved. Ten-second CPU samples were 1.57% to
+  0.69% for charging and 0.88% to 0.39% for thermal. Active gyro was 10.01% to
+  9.65%; that does not establish a meaningful CPU reduction. All 41 Houji test
+  scripts passed, including the native protocol/model/integration suites.
+
+### MangoHud-only display after a blocked sleep request (2026-10-18)
+
+- **Report:** Black Steam UI with only MangoHud after pressing Power. At
+  13:54:30 (Taiwan UTC+8), Steam logged `Issuing Suspend Command`, but the
+  system journal showed no suspend/resume transaction. A temporary development
+  `sleep:idle` block inhibitor was still held by the native-helper validation.
+- **Live state:** The boot ID was unchanged, both user/app slices were thawed,
+  the display compositor and Steam processes were alive, and the sampled GPU
+  stacks showed no fence/reclaim stall. Steam's own screenshot was black and
+  its `SuspendResumeStore.suspending` flag remained true.
+- **Recovery:** Removed the temporary inhibitor and invoked the running Steam
+  UI's existing resume handler once. Its suspending flag cleared; the resume
+  animation and then the library rendered again without rebooting or restarting
+  Steam/Gamescope. This was an inhibited pre-sleep UI transition, not evidence
+  of another kernel resume reset. The private UI progress enum stayed at 1 and
+  is not used as proof of system sleep state.
+- **Development rule:** Do not leave a sleep-blocking inhibitor around general
+  UI validation. Restrict one to an actual short install transaction and remove
+  it on success/failure; Power-button tests must first verify it is gone.
+
+### Native SIM/eSIM settings broker and NFC off-state verification (2026-10-18)
+
+- **Request:** Check the still-resident `houji-cellular/service.py` after the
+  license relay conversion, and restart NFC after the owner turned iPASS off.
+- **Cellular:** Replaced the settings broker with native C++ while retaining
+  its Polkit checks, two-method D-Bus interface, operation lock, SIM/lpac command
+  order, sanitized errors and profile-result filtering. Activation codes still
+  go through stdin. Cancellation and timeouts restore ModemManager before the
+  operation lock is released. The license relay and modem itself are separate.
+- **Validation:** Seven private-bus tests cover authorized/denied status and
+  mutation, invalid requests, busy/interprocess serialization, stdin/environment
+  handling, profile filtering, command failures, timeouts and graceful shutdown.
+  ARM64 target-loader validation passed. Live deployment used only Status:
+  saved SIM selection and modem/storage/QTEE/license invocations were unchanged.
+- **Memory:** At 14:16 UTC+8, settings-broker RSS fell from 35.2 to 10.9 MiB and
+  PSS from 22.9 to 4.9 MiB. The new entry point is
+  `/usr/libexec/houji-cellular/cellular-control`; the Python reference is retained.
+- **NFC:** The owner had turned all NFC modes off. The existing Python service
+  had already exited on its idle timer at 14:06:13. A requested restart preserved
+  off mode and exited normally again after 30 seconds. It uses no resident RAM
+  when off; no native NFC protocol implementation is claimed.
 
 ### Steam menu freeze with GPU reclaim and teardown blocked (2026-10-15)
 

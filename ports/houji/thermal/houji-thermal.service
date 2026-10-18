@@ -6,7 +6,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/libexec/armada/houji-thermal
+ExecStart=/usr/libexec/armada/houji-thermal
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=5

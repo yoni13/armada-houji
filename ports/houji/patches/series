@@ -28,3 +28,4 @@
 0030-net-ipa-sm8650-endpoint-map.patch
 0031-wifi-ath12k-panic-handler-without-mhi-wake.patch
 0032-phy-qcom-qmp-ufs-sm8650-calibration-budget.patch
+0033-cpuidle-psci-houji-avoid-apss-collapse-in-s2idle.patch

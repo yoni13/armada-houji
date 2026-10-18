@@ -73,6 +73,9 @@ for name in ['plugin.json','package.json','main.py','dist/index.js']:
 stage_modules(work,release,target('usr/lib/modules'))
 for name in ['houji-stock-core','houji-stock-auth']:
     copy(users/'bin'/name,'usr/libexec/armada/'+name,0o755)
+for name in ['houji-x2s-session','houji-steam-power','houji-gamescope-orientation',
+             'houji-gyro','houji-thermal','houji-charge-policy']:
+    copy(users/'helpers'/name,'usr/libexec/armada/'+name,0o755)
 for name in ['qbootctl','umtprd']:
     copy(users/'bin'/name,'usr/bin/'+name,0o755)
 # NFC stays off until explicitly enabled through neard's D-Bus interface.
@@ -97,13 +100,11 @@ for name,path in {'libssc.so.2':'libssc-build/src/libssc.so.2','libhexagonrpc.so
 copy(users/'gamescope/gamescope','usr/bin/gamescope',0o755)
 copy(users/'mangohud/mangoapp','usr/bin/mangoapp',0o755)
 copy(users/'sensors/gamescope-build/houji-gamescope-rotate','usr/libexec/armada/houji-gamescope-rotate',0o755)
-copy(PORT/'sensors/gamescope/orientation.py','usr/libexec/armada/houji-gamescope-orientation',0o755)
 copy(PORT/'sensors/gamescope/49-houji-orientation.rules','etc/polkit-1/rules.d/49-houji-orientation.rules')
 copy(PORT/'sensors/gamescope/houji-gamescope-orientation.service','etc/systemd/system/houji-gamescope-orientation.service')
 copy(users/'sensors/iio-build/data/iio-sensor-proxy.service','etc/systemd/system/iio-sensor-proxy.service')
 copy(users/'sensors/als-build/houji-als','usr/libexec/armada/houji-als',0o755)
 copy(PORT/'sensors/als/houji-als.service','etc/systemd/system/houji-als.service')
-copy(PORT/'sensors/gyro/houji-gyro.py','usr/libexec/armada/houji-gyro',0o755)
 copy(PORT/'sensors/gyro/houji-gyro.service','etc/systemd/system/houji-gyro.service')
 write('etc/udev/rules.d/90-houji-sensors.rules','SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", ENV{IIO_SENSOR_PROXY_TYPE}="ssc-accel ssc-light", ENV{ACCEL_MOUNT_MATRIX}="-1,0,0;0,-1,0;0,0,1", TAG+="systemd", ENV{SYSTEMD_WANTS}+="iio-sensor-proxy.service"\n'
       # houji-als feeds the "als" IIO device and watches its reads; the proxy
@@ -122,14 +123,13 @@ write('etc/xdg/powerdevilrc', ''.join(
 write('etc/modules-load.d/houji.conf','qcom-hv-haptics\nhci_uart\n')
 write('etc/modprobe.d/houji-touch.conf','blacklist houji_tcm_probe\n')
 write('etc/udev/rules.d/70-houji-haptics.rules','ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="qcom-hv-haptics", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra"\n')
-for src in ['charge-policy.py','board_thermal.py','stock_thermal.py']:
-    copy(PORT/'charging'/src,'usr/libexec/armada/'+('houji-charge-policy' if src=='charge-policy.py' else src),0o755)
+for src in ['board_thermal.py','stock_thermal.py']:
+    copy(PORT/'charging'/src,'usr/libexec/armada/'+src,0o755)
 copy(PORT/'charging/houji-charging.service','etc/systemd/system/houji-charging.service')
-copy(PORT/'thermal/houji-thermal','usr/libexec/armada/houji-thermal',0o755)
 copy(PORT/'thermal/thermal_policy.py','usr/libexec/armada/thermal_policy.py')
 copy(PORT/'thermal/houji-thermal.service','etc/systemd/system/houji-thermal.service')
 copy(PORT/'charging/suspend.py','usr/libexec/armada/houji-suspend',0o755)
-for name in ['armada-power-profiles','houji-wait-battery','houji-steam-power']:
+for name in ['armada-power-profiles','houji-wait-battery']:
     copy(PORT/'power'/name,'usr/libexec/armada/'+name,0o755)
 for name in ['armada-power-profiles.service','houji-steam-power.service']:
     copy(PORT/'power'/name,'etc/systemd/system/'+name)
@@ -181,6 +181,9 @@ copy(PORT/'gps/nmea-bridge.py','usr/libexec/houji-gps/nmea-bridge.py',0o755)
 cell=work/'cellular/stage'
 for name in ['prepare.py','qmi.py','license-relay.py','sim.py','service.py','wifi-priority.py','start-modem','run-supplicant']:
     copy(PORT/'cellular'/name,'usr/libexec/houji-cellular/'+name,0o755)
+copy(users/'helpers/houji-license-relay','usr/libexec/houji-cellular/license-relay',0o755)
+copy(users/'helpers/houji-cellular-control','usr/libexec/houji-cellular/cellular-control',0o755)
+copy(PORT/'helpers/LICENSE.nlohmann-json','usr/share/licenses/houji-helpers/LICENSE.nlohmann-json',0o644)
 copy(PORT/'cellular/houji-cellular','usr/bin/houji-cellular',0o755)
 for name in ['qtee_supplicant','lpac']:
     copy(cell/'bin'/name,'usr/libexec/houji-cellular/'+name,0o755)

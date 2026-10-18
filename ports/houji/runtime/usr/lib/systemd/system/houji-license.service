@@ -6,7 +6,7 @@ Before=houji-cellular.service
 
 [Service]
 Type=notify
-ExecStart=/usr/libexec/houji-cellular/license-relay.py
+ExecStart=/usr/libexec/houji-cellular/license-relay
 TimeoutStartSec=45
 Restart=on-failure
 RestartSec=2

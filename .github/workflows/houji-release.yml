@@ -66,7 +66,8 @@ jobs:
       - name: Install test tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends android-sdk-libsparse-utils e2fsprogs kmod tar zstd
+          sudo apt-get install -y --no-install-recommends android-sdk-libsparse-utils e2fsprogs kmod tar zstd \
+            g++ make pkg-config libglib2.0-dev python3-gi gir1.2-glib-2.0 dbus-daemon nlohmann-json3-dev
 
       # Sleep, charging, thermal, installer, kernel and userdata updates, session
       # switching, NFC and GPS helpers, panel gamma, and the patch checker's tests.

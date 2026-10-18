@@ -4,7 +4,7 @@ Wants=inputplumber.service
 After=inputplumber.service
 
 [Service]
-ExecStart=/usr/bin/python3 /usr/libexec/armada/houji-x2s-session
+ExecStart=/usr/libexec/armada/houji-x2s-session
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15

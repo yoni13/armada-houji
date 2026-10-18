@@ -34,6 +34,7 @@ class Application(Adw.Application):
         self.settings_ready = False
         self.dirty = False
         self.save_source = None
+        self.last_status = None
 
     def activate(self, app):
         if self.window:
@@ -226,15 +227,26 @@ class Application(Adw.Application):
                 return
             try:
                 status = json.loads(connection.call_finish(result).unpack()[0])
+                self.last_status = status
                 self.update(status)
-            except (GLib.Error, ValueError, KeyError):
+            except GLib.Error as error:
+                remote = Gio.DBusError.get_remote_error(error)
+                if (remote in ('org.freedesktop.DBus.Error.ServiceUnknown',
+                               'org.freedesktop.DBus.Error.NameHasNoOwner') and
+                        self.last_status and self.last_status.get('desired_mode') == 'off'):
+                    # Off-mode daemon idle exit is expected. Mode-changing calls
+                    # below use normal bus activation when the user acts again.
+                    self.update(self.last_status)
+                    return
                 self.status.set_title('NFC service unavailable')
                 self.status.set_subtitle('Try reopening the app or restarting the phone.')
                 for widget in (self.mode, self.reader, self.scan, self.start, self.stop):
                     widget.set_sensitive(False)
+            except (ValueError, KeyError):
+                self.status.set_title('Invalid NFC service status')
 
         self.connection.call(NAME, PATH, IFACE, 'GetStatus', None, GLib.VariantType.new('(s)'),
-                             Gio.DBusCallFlags.NONE, 8000, None, done)
+                             Gio.DBusCallFlags.NO_AUTO_START, 8000, None, done)
         return True
 
     def update(self, status):

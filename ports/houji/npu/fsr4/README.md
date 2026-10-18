@@ -8,6 +8,14 @@ opt-in and its toggle is disabled. All experiment sources, models and build
 instructions are retained; measurements below are historical, not current
 runtime defaults. The master gate also disables capture-only hooks by default.
 
+**Decky memory:** a disabled toggle still loads the plugin's Python/FEX process.
+The development handset therefore keeps its installed plugin directory at
+`~/homebrew/disabled-plugins/fsr4-npu`, outside Decky's scanned `plugins/` tree.
+The plugin is not included in fresh Houji images. Its settings, sources, models
+and binaries are retained. To intentionally restore the UI, stop Decky Loader,
+move that directory back to `~/homebrew/plugins/fsr4-npu`, then start the loader;
+the separate experimental gates below still apply.
+
 For intentional future testing, set the master opt-in in the game environment,
 server environment and Decky Loader environment, as well as the existing
 per-feature flags. The user service additionally checks the user manager's

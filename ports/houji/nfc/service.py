@@ -94,6 +94,7 @@ class Service:
         self.worker = None
         self.poll_worker = None
         self.last_poll = 0
+        self.last_use = time.monotonic()
         self.emulation = False
         self.mode_pending = False
         self.card_request = None
@@ -118,6 +119,7 @@ class Service:
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, self.shutdown)
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self.shutdown)
         GLib.idle_add(self.restore)
+        GLib.timeout_add_seconds(30, self.idle_exit)
 
     def save(self):
         temporary = None
@@ -222,6 +224,7 @@ class Service:
         if self.closing or not self.authorized(sender):
             invocation.return_dbus_error(NAME + '.NotAuthorized', 'Use NFC Manager in the active local session.')
             return
+        self.last_use = time.monotonic()
         try:
             if method == 'GetSettings':
                 invocation.return_value(GLib.Variant('(s)', (json.dumps(self.settings),)))
@@ -445,6 +448,30 @@ class Service:
         self.stop.set()
         self.loop.quit()
         return False
+
+    def idle_exit(self):
+        """Release the interpreter when off; D-Bus starts it on the next action.
+
+        Passive GetStatus polling must not keep an otherwise idle daemon alive.
+        Persistent reader/emulation/iPASS modes, recovery and work in flight do.
+        """
+        if self.closing:
+            return False
+        busy = ((self.worker and self.worker.is_alive()) or
+                (self.poll_worker and self.poll_worker.is_alive()))
+        with self.lock:
+            idle = (desired_mode(self.settings) == 'off' and not busy and
+                    not self.emulation and not self.mode_pending and
+                    self.card_request is None and not self.settings_error and
+                    self.state.get('mode') == 'off' and not self.state.get('busy') and
+                    not self.state.get('powered') and not self.state.get('polling'))
+        if not idle or controller.RECOVERY.exists():
+            self.last_use = time.monotonic()
+        elif time.monotonic() - self.last_use >= 30:
+            print('NFC off and idle; releasing service until the next D-Bus action', flush=True)
+            self.shutdown()
+            return False
+        return True
 
     def run(self):
         self.loop.run()
