@@ -1,0 +1,26 @@
+Subject: [PATCH] power: supply: expose Houji stock display and thermal state
+
+Stock xm_batt_update_work polls XM116 (THERMAL_TEMP). Its panel notifier
+forwards blank state via XM117. Expose only the verified scalar ABI to the
+charging owner. Preserve the existing capacity source and FCC protections.
+Do not couple USB liquid-port detection to the display on this port: Type-C
+and moisture handling have a separate owner.
+
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -2315,6 +2315,8 @@
+ HOUJI_XM_RO(charger_user_value_map, 13, false);
+ HOUJI_XM_RO(smart_chg, 131, false);
+ HOUJI_XM_RO(fg1_rsoc, 195, false);
++HOUJI_XM_RO(thermal_temp, 116, false);
++HOUJI_XM_BOOL(fb_blank_state, 117);
+ HOUJI_XM_RO(connector_temp, 2, false);
+ static struct houji_xm_attribute houji_attr_thermal_board_temp = {
+ 	.attr = __ATTR(thermal_board_temp, 0600, houji_xm_show, houji_board_temp_store),
+@@ -2621,4 +2623,6 @@
+ 	&houji_attr_fg1_rsoc.attr.attr,
++	&houji_attr_thermal_temp.attr.attr,
++	&houji_attr_fb_blank_state.attr.attr,
+ 	&houji_attr_connector_temp.attr.attr,
+ 	&houji_attr_thermal_board_temp.attr.attr,
+ 	&houji_attr_fastchg_mode.attr.attr,

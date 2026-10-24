@@ -1602,6 +1602,43 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   for subsequent boots; sleep/GPU diagnostics remain enabled. No physical cable
   transition or long-discharge accuracy test was induced during deployment.
 
+### The main percentage disagreed with the gauge after heavy gaming (2026-10-18)
+
+- **Issue:** After a long GTA V session unplugged, the phone read 0% (3.04 V,
+  charge counter 0). With the charger attached and the game closed it read 60%,
+  settled at 56%, and then rose, while the raw gauge (Xiaomi property 195) and
+  the charge counter were near 29% and rising normally.
+- **What was established:** A kprobe trace of GLINK replies showed firmware
+  returning `5600` for property 4 with result 0, so Linux and Steam were
+  reporting what firmware said. Stock's driver divides property 4 by 100 as we
+  do, and has no fallback that explains a non-zero reply. The stock ADSP image
+  contains an SOC-smoothing state machine (charger attach, charging-state
+  transitions, raw versus system SOC, SOC saved at charger removal); which branch
+  ran here is unknown. Continued charging brought the main figure within about 2
+  points of the gauge (86% against 84%) without any reset or driver change.
+- **Request:** "Implement how Android represents the value." Android already
+  shows property 4, so what stock does differently is traffic: it re-reads
+  capacity and Xiaomi property 116 every 5–20 s, and it forwards the panel's
+  blank state to firmware as Xiaomi property 117.
+- **Change:** Kernel patch `0034` exposes `thermal_temp` (116) and
+  `fb_blank_state` (117). `houji-charge-policy` keeps 117 equal to the backlight
+  state, reads it back at every poll, and polls capacity and 116 at stock's
+  interval. Polarity comes from the BTF in stock `qti_amoled_ecm.ko`
+  (`BLANK=1`, `UNBLANK=2`): 1 means blank. USB moisture detection, which stock
+  couples to the same flag, is not ported. See
+  [stock battery reporting](charging/STOCK-BATTERY.md).
+- **Verification:** All 224 kernel patches apply without fuzz; a rebuilt module's
+  disassembly differs from the installed one only in `.rodata` offsets and the two
+  new attributes. Helper tests: 1 new, 8 policy-native, 10 native, 25 charging
+  policy. Installed live at 00:19–00:21 UTC+8 on the running kernel, with the
+  charger connected at 100% and rollback copies kept. A GLINK trace showed the
+  expected reads, a forced wrong value was corrected at the next poll, and
+  blanking the panel flipped property 117 within a second.
+- **Status:** **Not shown to fix the disagreement.** The battery was full and
+  charging when installed. The next discharge under load, followed by a plug-in
+  on a low battery, is the test that matters. If the main figure still diverges,
+  the cause is inside the ADSP state machine and needs firmware-side evidence.
+
 ## Memory
 
 ### Native resident helpers and parked Decky plugin (2026-10-18)

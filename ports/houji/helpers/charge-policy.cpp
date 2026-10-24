@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Retain authentication, telemetry freshness, current lease and stock tables.
 #include "charge-model.hpp"
+#include "stock-battery-state.hpp"
 #include <iostream>
 
 using namespace houji;
@@ -115,9 +116,13 @@ int main(int argc,char **argv){
         if(action=="--finish-auth"){finish(p);return 0;}
         long long normal=ceiling(p,"houji-charge-ceiling",3000000),hyper=ceiling(p,"houji-hypercharge-ceiling",normal);
         syswrite(p.at("/sys/module/qcom_battmgr/parameters/houji_max_fcc_ua"),std::max(normal,hyper));
-        signals();ChargingControl control;Authentication auth;ChargeLimit hold;double next=0;std::string previous;int published=-2;bool published_hold=false;
+        signals();ChargingControl control;Authentication auth;ChargeLimit hold;StockBatteryState stock;double next=0;std::string previous;int published=-2;bool published_hold=false;
         do{
             auto start=Clock::now();std::string message;
+            // Independent of authentication eligibility and board-current policy.
+            // A state-forwarding failure must not prevent FCC lease renewal.
+            try{stock.update(p.bat(),p.usb(),p.aux().parent_path()/"houji_charger",screen(p),boot());}
+            catch(const std::exception&e){std::cerr<<"Stock battery state refresh failed: "<<e.what()<<'\n';}
             try{
                 long long cap=FCC;bool fast=false,wls=wireless(p),board_ok=false;
                 try{

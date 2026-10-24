@@ -24,7 +24,7 @@ $(OUT)/houji-thermal: thermal.cpp common.hpp board-thermal.hpp | $(OUT)
 	$(CXX) $(CXXFLAGS) $< $(LDFLAGS) -o $@
 $(OUT)/houji-license-relay: license-relay.cpp common.hpp | $(OUT)
 	$(CXX) $(CXXFLAGS) $< $(LDFLAGS) -ldl -o $@
-$(OUT)/houji-charge-policy: charge-policy.cpp charge-model.hpp board-thermal.hpp common.hpp | $(OUT)
+$(OUT)/houji-charge-policy: charge-policy.cpp charge-model.hpp stock-battery-state.hpp board-thermal.hpp common.hpp | $(OUT)
 	$(CXX) $(CXXFLAGS) $< $(LDFLAGS) -o $@
 $(OUT)/houji-cellular-control: cellular-control.cpp capture.hpp common.hpp bus.hpp | $(OUT)
 	$(CXX) $(CXXFLAGS) $(GIO_CFLAGS) $(JSON_CFLAGS) $< $(LDFLAGS) $(GIO_LIBS) -pthread -o $@

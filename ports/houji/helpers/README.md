@@ -24,7 +24,12 @@ the underlying services or protocols:
 - `houji-charge-policy`: preserves authentication attempts, conservative fallback,
   current ramp, kernel lease renewal, wired/wireless thermal votes, charge-limit
   hysteresis and the charger/light-sleep query. The stock authentication binary
-  and kernel current guard still make the same independent checks.
+  and kernel current guard still make the same independent checks. It also
+  mirrors stock Android's battery-state traffic: the display's blank state is
+  written to Xiaomi property 117 (and read back), and capacity plus property 116
+  are polled at stock's interval. A failure there is logged and does not stop
+  lease renewal; kernels without the attributes are tolerated. See
+  [stock battery reporting](../charging/STOCK-BATTERY.md).
 - `license-relay`: strict QRTR/QMI framing and the existing native QTEE ABI.
   License decisions remain with stock QTEE; malformed packets do not reach it.
   The service publishes readiness only after secure storage is ready, and never
@@ -47,6 +52,7 @@ python3 ports/houji/helpers/build.py --sysroot WORK/userspace/sysroot \
   --output WORK/userspace/helpers
 python3 ports/houji/helpers/test-native.py
 python3 ports/houji/helpers/test-policy-native.py
+python3 ports/houji/helpers/test-stock-battery-state.py
 python3 ports/houji/helpers/test-license-native.py
 python3 ports/houji/helpers/test-cellular-native.py
 ```
