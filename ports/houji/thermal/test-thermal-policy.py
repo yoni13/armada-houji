@@ -102,6 +102,26 @@ class ThermalPolicyTest(unittest.TestCase):
         self.assertEqual(g.update(30000, 1)[1], 6)
         self.assertEqual(g.update(30000, 1)[2], {2, 3, 4, 7})
 
+    def test_balanced_budget_retains_hot_and_low_battery_limits(self):
+        # Sweep both directions: no relaxation at/above the old game trip.
+        old, new = Policy(game=True), Policy(game=True, balanced=True)
+        for skin in list(range(25000,55001,100))+list(range(55000,24999,-100)):
+            a,ag,ap=old.update(skin,80);b,bg,bp=new.update(skin,80)
+            self.assertEqual(ap,bp)
+            if skin>=46000:
+                self.assertTrue(all(b[c]<=a[c] for c in a))
+                self.assertGreaterEqual(bg,ag)
+        new=Policy(game=True,balanced=True)
+        caps,gpu,_=new.update(44000,80)
+        self.assertEqual((caps[2],caps[5],caps[7],gpu),(1824000,1612800,1939200,5))
+        caps,gpu,paused=new.update(44000,1)
+        self.assertLessEqual(caps[2],1497600)
+        self.assertLessEqual(caps[5],1497600)
+        self.assertGreaterEqual(gpu,6)
+        self.assertEqual(paused,{2,3,4,7})
+        # Optional policy cannot change desktop behavior.
+        self.assertEqual(Policy(False,True).update(44000,80),Policy().update(44000,80))
+
     def test_rejects_bad_readings(self):
         with self.assertRaises(ValueError):
             Policy().update(150000, 50)

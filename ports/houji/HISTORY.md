@@ -1960,6 +1960,70 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
 
 ## Thermal limits
 
+### Game Mode CPU/GPU budget rebalanced (2026-10-18)
+
+- **Request:** Optimize thermals after repairing GTA's ARM64EC graphics path.
+  The old policy combined normal/desktop CPU caps with a relaxed GPU ceiling;
+  the generic Performance profile also fixed the GPU minimum at its maximum.
+  Under the measured CPU-bound game load, prime was capped near 1.1 GHz while
+  GPU utilization was about 40%. The stock virtual-skin formula was verified
+  against the decoded configuration; it was not recalibrated or offset.
+- **First comparison, Taiwan UTC+8:** At 17:11 the stationary outdoor baseline
+  averaged 32.1 FPS, MangoHud 1% minimum 20.5. Removing the Performance GPU
+  floor for five minutes lowered estimated skin from about 45.6 to 44.1°C,
+  but the subsequent 60-second sample was only 32.4/20.9. The original CPU
+  table still limited throughput. An unrelated debugfs GPU-state read occurred
+  during this first trial's settling interval, so it is not a clean energy
+  benchmark. Later frame captures avoided that read.
+- **Revised curve:** The selected `balanced` Game Mode policy progressively
+  caps GPU to 720/680/629 MHz at 39/42/44°C skin while retaining more CPU
+  headroom. At 44°C the prime ceiling is 1939.2 MHz, big clusters 1824/1612.8;
+  at 45°C, prime 1708.8 and big 1612.8/1497.6. At 46°C and above CPU ceilings
+  converge to the previous limits; GPU caps become 578 MHz at 46°C and 500 MHz
+  at 48°C. Original low-battery/core-pause rules and independent kernel GPU
+  protection remain active. This is a measured Houji tuning curve, not the
+  stock Android gaming policy. The stock mgame/hp-mgame profiles also budget
+  less GPU clock (720/629 MHz), but use different CPU/framework controls.
+- **Restart failure caught and fixed:** The first curve trial stopped on its
+  initial sample when a die sensor reached 95°C. The old daemon released all
+  CPU cooling votes on exit, so Performance briefly ran every cluster at max
+  before its successor installed limits. That run produced no performance
+  result and restored the old configuration. Subsequent transitions used
+  independent temporary power-profile ceilings. The durable daemon/reference
+  fix retains CPU cooling votes on exit/restart; an explicit
+  `--exit-caps release` remains available for deliberate service removal.
+- **Twelve-minute trial, 17:22–17:34:** Estimated skin averaged 45.10°C and ranged
+  44.66–45.33°C, battery averaged 38.60°C. Maximum sampled die was 85.3°C early,
+  and 79.5°C in the final three minutes. GPU averaged about 627 MHz; late CPU
+  ceilings were 1344/1612.8/1497.6/1708.8 MHz. The 60-second captures at roughly
+  three and ten minutes measured 37.0/23.5 and 38.7/26.2 FPS (average/1% minimum).
+  Returning to the original policy/floor measured 35.0/21.9; final installed
+  balanced policy measured 39.9/25.7 at 17:38:52–17:39:52. The same stationary
+  view was used, but time-varying traffic/lighting and sequential testing mean
+  these are not a universal percentage gain or evidence of sustained 60 FPS.
+- **Tradeoff:** Late net battery discharge was about 5.2 W versus about 4.3 W
+  in the GPU-DVFS-only trial. USB supplied only approximately 2.2 W, despite
+  the battery status saying Charging; these are net battery readings rather
+  than total system power. More CPU throughput costs battery power, and this
+  curve's earlier GPU caps may reduce GPU-bound game performance. No claim
+  of improved battery life or physical cooling capacity is made.
+- **Installed:** Native daemon, matching Python reference, boot service selecting
+  `--game-policy balanced`, and Houji factory Performance `gpu_min=0.0`.
+  The stager reproduces the board-specific factory change while preserving
+  `/etc` owner overrides and manual GPU selection. Private original files and
+  install receipt are under `/var/lib/armada/thermal-before-20261018/`.
+  At 17:38:49, a live daemon restart sampled 143 frequency sets over three
+  seconds without any CPU cap exceeding its pre-restart value. Thermal and
+  sleep-guard services remained active; no sleep inhibitor was added.
+- **Checks:** Nine policy tests and eight native policy/runtime tests passed,
+  including threshold/low-battery trajectories, restart with missing telemetry,
+  explicit release, stronger kernel GPU votes and simulated resume resets.
+  All 43 Houji scripts passed before the final added runtime case; its containing
+  suite passed again afterward. AArch64 cross-build, stager factory/owner
+  precedence check and diff checks passed. See [thermal policy](thermal/README.md)
+  for the curve and rollback. Hour-long endurance and GPU-bound workloads remain
+  unmeasured.
+
 ### Nothing limited the CPU or GPU by heat
 
 - **Issue:** The kernel's only CPU trips are critical ones at 110 °C. The GPU has
@@ -3266,6 +3330,85 @@ Against the build that was flashed and booted:
   not change the logged game entry point (`GTA5_Enhanced_BE.exe`) and was also
   removed; it was not the successful fix. Diagnostic evidence and the prior
   settings are private on the handset. GTA Online was not tested.
+
+### GTA V Enhanced: sustained CPU-side limit near 30 FPS (2026-10-18)
+
+- **Report:** Why does this Snapdragon 8 Gen 3 handset not reach 60 FPS when
+  Snapdragon 8 Gen 2 demonstrations show 50–60? Captures were taken on Armada
+  `20261010.c3d178c`, kernel `k20261010`, from 14:56 to 15:22 Taiwan time
+  (UTC+8). The running game was Enhanced at 1280×720, largely minimum settings,
+  ray tracing off, frame generation off, and in-game VSync on. Gamescope's
+  limiter was 60, not 30. Recorded frame times varied substantially and included
+  frames faster than 25 ms; the average near 30 is not evidence of a fixed
+  30 FPS cap. VSync's contribution has not been isolated.
+- **Measured load:** A 30-second Mangoapp frame log averaged 32.9 FPS with
+  its reported 1% minimum at 19.9 FPS, 88% whole-system CPU load and 43.6%
+  GPU load. A separate DRM fdinfo delta also showed the game GPU engine busy
+  for only about 38% of its capture interval. Under sustained load the virtual
+  skin estimate reached about 46°C; cpufreq caps were 1344 MHz on the little
+  cluster, 1286.4 MHz on both big clusters and 1132.8 MHz on the prime core.
+  The GPU was then 770 MHz. These are active stock-derived thermal-policy
+  caps despite the Performance profile, not the silicon's maximum clocks.
+- **Memory A/B:** Available RAM initially fell to roughly 200–300 MiB, with
+  about 4.7 MiB/s of swap-ins during the moving baseline. The owner then held
+  a stationary scene. One approved writeback pass selected pages untouched
+  for ten minutes and imposed a 1 GiB limit within the existing daily budget.
+  zram physical use fell by about 688 MiB; available memory rose by about
+  607 MiB between the ends of the two samples. The kernel returned `EIO`
+  after consuming the pass limit (an explicit path in `zram_writeback_slots`);
+  counters show 1 GiB was written and the daily allowance was restored by
+  `finally`. The subsequent capture was run separately after that exception.
+  No persistent idle-age change was made; the normal 30-minute timer remains.
+
+  | Capture | Average FPS | MangoHud 1% minimum | CPU load | GPU load |
+  | --- | ---: | ---: | ---: | ---: |
+  | Moving baseline, 30 seconds | 32.9 | 19.9 | 88.0% | 43.6% |
+  | Stationary before writeback, 25 seconds | 30.0 | 19.0 | 89.1% | 43.5% |
+  | Stationary after writeback, 25 seconds | 29.3 | 18.8 | 89.4% | 43.3% |
+  | GPU at 578 MHz after two minutes, 25 seconds | 27.0 | 17.6 | 89.3% | 52.8% |
+
+  The single short A/B does not show an FPS gain from writeback. Paging was
+  already much lower in the stationary scene; this does not settle its impact
+  on driving/streaming stutters. These runs are not repeated benchmark-suite
+  results, and the moving baseline is not directly comparable to the others.
+- **GPU/heat A/B:** With the owner's approval, the normal power-service API
+  temporarily selected a 578 MHz manual GPU clock. GPU/CPU sensor averages
+  fell to about 66/67°C, but the virtual skin estimate only fell to about
+  45.4°C and CPU caps did not rise. FPS decreased. The original `auto` mode
+  and stored manual-clock value were restored in `finally` and independently
+  read back. This short trial does not measure performance with cold or
+  externally cooled CPU clusters.
+- **Translation path:** `/proc` mappings and SHA-256 identities confirm the
+  game-local DXGI and D3D12 core match Proton's x86-64 fallback copies. The PE
+  load-config CHPE pointer is zero in those files and nonzero in the bundled
+  ARM64EC counterparts; a PE machine value of `0x8664` alone cannot distinguish
+  them. Thus the graphics implementation also incurs x86 translation. That
+  fallback previously resolved the launch/overlay crashes documented above;
+  its incremental cost is still unmeasured. Live FEX shared-memory statistics
+  identify the active ARM64EC translator as **FEX-2607**, bundled with Proton,
+  rather than the host release's FEX-2610. A ten-second sample contained no
+  SIGBUS or soft-float fallback events; this is not a CPU hotspot profile.
+- **Launcher fix:** `STEAM_COMPAT_APP_ID=0` masked the non-Steam shortcut's
+  real `SteamAppId`, so FEX cache names and performance overrides used app 0.
+  The wrapper now skips zero/invalid IDs and decodes a shortcut `SteamGameId`
+  only when its type word is valid. Regression coverage checks normal games,
+  non-Steam shortcuts, packed IDs and invalid values. Performance-settings
+  tests passed, and the installed wrapper matches the source hash with a
+  rollback copy retained. It takes effect on the next launch. No per-game
+  override was configured in this capture, so this fix alone is not a measured
+  FPS improvement.
+- **Comparison and conclusion:** The retrieved
+  [Odin 2 Max demonstration](https://www.youtube.com/watch?v=tlRSQFOzYoA) uses
+  Winlator 7.0.1, DXVK 2.3.1 and 720p; at 6:49–7:06 its author describes
+  50–60 FPS in the indoor opening heist. That is the older D3D11/Legacy path,
+  not an equivalent Enhanced/D3D12 outdoor test. The current captures support
+  a CPU-side throughput limit under thermal caps, with additional translated
+  graphics work and memory pressure. They do not quantify each contribution
+  or demonstrate that Enhanced can sustain 60 FPS. A restart-controlled test
+  of a compatible ARM64EC graphics path/newer bundled FEX and a matched
+  cold-versus-hot workload are the next useful measurements. The current game
+  stayed running, graphics preferences were not edited, and raw captures,
+  process data and rollback receipts remain outside Git.
 
 ## Open problems
 

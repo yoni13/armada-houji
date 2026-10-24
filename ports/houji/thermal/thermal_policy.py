@@ -9,9 +9,8 @@ Sources: mi_thermald from OS3.0.303.0.WNCTWXM (timer_expires 0xa6298 for
 thermal-mgame.conf and thermald-devices.conf, and the stock KGSL GPU level
 table selected for feature code 2 (msm_kgsl.ko adreno_device_probe).
 
-Plasma uses the stock normal profile. Game Mode keeps the normal CPU steps but
-leaves the GPU unlimited until the stock game-profile trip, so games keep
-graphics performance and lose CPU speed first.
+Plasma uses the stock normal profile. The selectable balanced Game Mode policy
+trades some GPU clock for CPU headroom below the existing hot-skin limits.
 """
 
 # KGSL power levels: pwrlevels-3 matches feature code 2 (sku-codes <0>).
@@ -35,10 +34,25 @@ NORMAL_CPU = {
          1248000, 1248000, 1248000, 1132800, 1132800, 1017600, 1017600, 1017600)),
 }
 
+# Measured CPU/GPU budget split: progressive limits below the original 46 C
+# game trip, converging to the previous policy at 46 C and above. No overclock.
+BALANCED_GAME_CPU = {
+    0: ((25000, 39000, 40000, 45000, 48000),
+        (2035200, 1689600, 1459200, 1344000, 1017600)),
+    2: ((25000, 39000, 41000, 43000, 44000, 45000, 46000, 47000, 48000, 49000, 50000),
+        (2630400, 2323200, 2131200, 1920000, 1824000, 1612800, 1286400, 1190400, 1190400, 1075200, 960000)),
+    5: ((25000, 39000, 41000, 43000, 44000, 45000, 46000, 47000, 48000, 49000, 50000),
+        (2630400, 2188800, 1920000, 1708800, 1612800, 1497600, 1286400, 1190400, 1190400, 1075200, 960000)),
+    7: ((25000, 39000, 41000, 43000, 44000, 45000, 46000, 47000, 48000, 50000),
+        (2630400, 2438400, 2246400, 2035200, 1939200, 1708800, 1132800, 1017600, 1017600, 1017600)),
+}
+
 # (trigger, clear, targets); targets are GPU levels.
 NORMAL_GPU = ((15000,), (13000,), (2,))
 # Game Mode: the stock game trip (46/44 C) and boost limit (48/45 C).
 GAME_GPU = ((46000, 48000), (44000, 45000), (2, 3))
+BALANCED_GAME_GPU = ((39000, 42000, 44000, 46000, 48000),
+                     (37000, 40000, 42000, 44000, 46000), (3, 4, 5, 6, 7))
 
 # Both stock profiles pause cpu7, cpu3 and cpu4 at 50 C skin.
 CORE_PAUSE = ((50000,), (48000,), (frozenset({3, 4, 7}),))
@@ -130,9 +144,10 @@ class Policy:
     """Combine the stock sections like select_device_target does: the lowest
     CPU frequency, the highest GPU level and every paused CPU win."""
 
-    def __init__(self, game=False):
+    def __init__(self, game=False, balanced=False):
         self.game = game
-        self.gpu = Monitor(*(GAME_GPU if game else NORMAL_GPU))
+        self.balanced = game and balanced
+        self.gpu = Monitor(*(BALANCED_GAME_GPU if self.balanced else GAME_GPU if game else NORMAL_GPU))
         self.pause = Monitor(*CORE_PAUSE)
         self.battery = Monitor(*(GAME_LOW_BATTERY if game else NORMAL_LOW_BATTERY), reverse=True)
 
@@ -141,7 +156,8 @@ class Policy:
             raise ValueError('implausible skin temperature')
         if not isinstance(battery, int) or not 0 <= battery <= 100:
             raise ValueError('implausible battery level')
-        caps = {cpu: ss_target(trig, targets, skin) for cpu, (trig, targets) in NORMAL_CPU.items()}
+        table = BALANCED_GAME_CPU if self.balanced else NORMAL_CPU
+        caps = {cpu: ss_target(trig, targets, skin) for cpu, (trig, targets) in table.items()}
         gpu = self.gpu.update(skin) or 0
         paused = set(self.pause.update(skin) or ())
         low = self.battery.update(battery)

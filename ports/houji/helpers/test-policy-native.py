@@ -33,17 +33,18 @@ class Policy(unittest.TestCase):
     def test_thermal_thresholds_hysteresis_low_battery_and_random_walk(self):
         rng=random.Random(43)
         boundaries={x for table in thermal_policy.NORMAL_CPU.values() for x in table[0]}
+        boundaries.update(x for table in thermal_policy.BALANCED_GAME_CPU.values() for x in table[0])
         boundaries.update((13000,15000,44000,45000,46000,48000,50000))
         temperatures=[v+d for v in sorted(boundaries) for d in (-1,0,1)]
         samples=[(t,p) for t in temperatures+temperatures[::-1] for p in (100,4,3,2,1,0,1,2,3,4)]
         samples += [(rng.randrange(12000,53000),rng.randrange(0,101)) for _ in range(5000)]
-        for game in (False,True):
-            policy=thermal_policy.Policy(game)
+        for game,balanced in ((False,False),(True,False),(True,True)):
+            policy=thermal_policy.Policy(game,balanced)
             expected=[]
             for skin,percent in samples:
                 caps,gpu,paused=policy.update(skin,percent)
                 expected.append([*(caps[n] or 0 for n in (0,2,5,7)),gpu,*sorted(paused)])
-            result=subprocess.check_output([str(self.bin/'houji-thermal'),'--policy','game' if game else 'normal'],
+            result=subprocess.check_output([str(self.bin/'houji-thermal'),'--policy','balanced' if balanced else 'game' if game else 'normal'],
                 input=''.join(f'{s} {p}\n' for s,p in samples),text=True)
             self.assertEqual([list(map(int,l.split())) for l in result.splitlines()],expected)
 
@@ -173,7 +174,58 @@ class Policy(unittest.TestCase):
                 self.assertEqual([(root/f'thermal/cooling_device{i}/cur_state').read_text() for i in range(4)],before)
             finally:p.terminate();p.wait(timeout=5)
             self.assertEqual(int(gpu.read_text()),3)
+            self.assertEqual([(root/f'thermal/cooling_device{i}/cur_state').read_text() for i in range(4)],before)
+            # A replacement with missing telemetry also retains the old CPU
+            # votes rather than exposing max clocks during failure/restart.
+            failed=subprocess.run([str(self.bin/'houji-thermal'),*args,'--once'],capture_output=True)
+            self.assertNotEqual(failed.returncode,0)
+            self.assertEqual([(root/f'thermal/cooling_device{i}/cur_state').read_text() for i in range(4)],before)
+            # Explicit removal can release them, without touching a stronger
+            # kernel-owned GPU cooling vote.
+            (root/'iio/iio:device0/in_temp0_input').write_text('25000\n')
+            subprocess.run([str(self.bin/'houji-thermal'),*args,'--once','--exit-caps','release'],check=True,stdout=subprocess.DEVNULL)
             self.assertEqual([int((root/f'thermal/cooling_device{i}/cur_state').read_text()) for i in range(4)],[0]*4)
+            self.assertEqual(int(gpu.read_text()),3)
+
+    def test_balanced_runtime_selection_and_resume_reapplies_cooling_votes(self):
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            def put(path,value):
+                p=root/path;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(str(value)+'\n');return p
+            put('proc/1/cmdline','/usr/bin/gamescope\0')
+            freqs={0:(2265600,2035200,1689600,1459200,1344000,1017600),
+                   2:(3148800,2630400,1824000,1612800,1286400,960000),
+                   5:(2956800,2630400,1612800,1497600,1286400,960000),
+                   7:(3052800,2630400,1939200,1708800,1248000,1132800,1017600)}
+            controls=[]
+            for i,(n,fs) in enumerate(freqs.items()):
+                put(f'thermal/cooling_device{i}/type',f'cpufreq-cpu{n}')
+                put(f'thermal/cooling_device{i}/max_state',len(fs)-1)
+                controls.append(put(f'thermal/cooling_device{i}/cur_state',0))
+                put(f'cpus/cpufreq/policy{n}/scaling_available_frequencies',' '.join(map(str,fs)))
+            put('thermal/cooling_device4/type','devfreq-3d00000.gpu')
+            gpu=put('thermal/cooling_device4/cur_state',0)
+            put('devfreq/3d00000.gpu/available_frequencies','834000000 770000000 720000000 680000000 629000000 578000000 500000000')
+            put('battery/temp',460);put('battery/capacity',80)
+            put('iio/iio:device0/name','spmi-adc5-gen3')
+            for i,n in enumerate(('pa_therm0','quiet_therm','charger_therm0','cpu_therm','wifi_therm','usb_therm')):
+                put(f'iio/iio:device0/in_temp{i}_label',n);put(f'iio/iio:device0/in_temp{i}_input',46000)
+            # Equal 46C inputs produce 44.559C virtual skin, a warm CPU-bound case.
+            args=[v for n in ('thermal','cpus','devfreq','battery','iio','proc') for v in ('--'+n,str(root/n))]
+            p=subprocess.Popen([str(self.bin/'houji-thermal'),*args,'--game-policy','balanced','--interval-ms','100'],stdout=subprocess.DEVNULL)
+            try:
+                time.sleep(.5);self.assertIsNone(p.poll())
+                expected=[3,2,2,2]
+                self.assertEqual([int(c.read_text()) for c in controls],expected)
+                self.assertEqual(int(gpu.read_text()),4)
+                # Kernel cooling controls can reset on resume. Reapply policy.
+                for c in controls+[gpu]:c.write_text('0\n')
+                time.sleep(.3)
+                self.assertEqual([int(c.read_text()) for c in controls],expected)
+                self.assertEqual(int(gpu.read_text()),4)
+            finally:p.terminate();p.wait(timeout=5)
+            self.assertEqual([int(c.read_text()) for c in controls],expected)
 
 
 if __name__=='__main__':unittest.main()

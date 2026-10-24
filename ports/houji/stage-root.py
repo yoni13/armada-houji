@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Populate a freshly created Armada OCI container; never reads a handset."""
 import argparse
+import configparser
+import io
 import json
 from pathlib import Path
 import shutil
@@ -47,6 +49,15 @@ for name in ['armada-powerd','device-env','fake-suspend','mtp-gadget','armada-ga
     rel='usr/libexec/armada/'+name;copy(REPO/'system_files'/rel,rel,0o755)
 for name in ['defaults.conf','xiaomi-14.conf']:
     rel='usr/lib/armada/devices/'+name;copy(REPO/'system_files'/rel,rel)
+# A passively cooled phone cannot usefully spend GPU power at the top OPP
+# throughout CPU-bound workloads. Keep boost available through simple_ondemand;
+# change the Houji factory default, leaving /etc owner overrides authoritative.
+profiles=target('usr/share/armada/power-profiles.conf')
+power_config=configparser.ConfigParser()
+power_config.read_string(profiles.read_text())
+power_config.set('profile.performance','gpu_min','0.0')
+power_text=io.StringIO();power_config.write(power_text)
+write('usr/share/armada/power-profiles.conf',power_text.getvalue())
 # The device profile's cursor scale needs gamescope-session support; apply Armada's
 # package patch until the pinned image ships it.
 session_script=target('usr/share/gamescope-session-plus/gamescope-session-plus')

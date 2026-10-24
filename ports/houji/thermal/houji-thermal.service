@@ -6,7 +6,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStart=/usr/libexec/armada/houji-thermal
+ExecStart=/usr/libexec/armada/houji-thermal --game-policy balanced
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=5

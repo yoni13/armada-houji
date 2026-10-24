@@ -18,9 +18,11 @@ the underlying services or protocols:
   cycles. It preserves 200 Hz gyro / 50 Hz accelerometer sampling, rotation,
   Steam Deck units and InputPlumber's connected-controller/gamepad-target gate.
   Sensor subscriptions and the virtual IMU are released while off or waiting.
-- `houji-thermal`: preserves the stock skin formula, CPU frequency steps,
+- `houji-thermal`: preserves the stock skin formula, stepped CPU transitions,
   thermal and low-battery hysteresis, paused-core ownership and stronger
-  kernel GPU cooling limits. Missing readings hold the previous caps.
+  kernel GPU cooling limits. Missing readings hold the previous caps. CPU
+  votes are retained across daemon restart; `--exit-caps release` explicitly
+  removes them. See [thermal policy and budget split](../thermal/README.md).
 - `houji-charge-policy`: preserves authentication attempts, conservative fallback,
   current ramp, kernel lease renewal, wired/wireless thermal votes, charge-limit
   hysteresis and the charger/light-sleep query. The stock authentication binary

@@ -13,17 +13,28 @@ static const std::map<int,Table> tables={
  {7,{{25000,32000,34000,37000,39000,40000,41000,41500,42000,43000,44000,45000,46000,47000,48000,50000},
      {2630400,2169600,1939200,1824000,1708800,1363200,1248000,1248000,1248000,1248000,1248000,1132800,1132800,1017600,1017600,1017600}}}
 };
+static const std::map<int,Table> balanced_tables={
+ {0,{{25000,39000,40000,45000,48000},{2035200,1689600,1459200,1344000,1017600}}},
+ {2,{{25000,39000,41000,43000,44000,45000,46000,47000,48000,49000,50000},
+     {2630400,2323200,2131200,1920000,1824000,1612800,1286400,1190400,1190400,1075200,960000}}},
+ {5,{{25000,39000,41000,43000,44000,45000,46000,47000,48000,49000,50000},
+     {2630400,2188800,1920000,1708800,1612800,1497600,1286400,1190400,1190400,1075200,960000}}},
+ {7,{{25000,39000,41000,43000,44000,45000,46000,47000,48000,50000},
+     {2630400,2438400,2246400,2035200,1939200,1708800,1132800,1017600,1017600,1017600}}}
+};
 static constexpr int gpu_mhz[]={903,834,770,720,680,629,578,500,422,366,310,231};
 struct Limits {std::map<int,int> cpu;int gpu=0;std::set<int> paused;};
 class Policy {
-    bool game; Hysteresis gpu,cores{{50000},{48000}},battery{{1,3},{2,4},true};
+    bool game,balanced; Hysteresis gpu,cores{{50000},{48000}},battery{{1,3},{2,4},true};
 public:
-    explicit Policy(bool g):game(g),gpu(g?Hysteresis({46000,48000},{44000,45000}):Hysteresis({15000},{13000})) {}
+    explicit Policy(bool g,bool b=false):game(g),balanced(g&&b),gpu(balanced?
+        Hysteresis({39000,42000,44000,46000,48000},{37000,40000,42000,44000,46000}):
+        g?Hysteresis({46000,48000},{44000,45000}):Hysteresis({15000},{13000})) {}
     Limits update(int skin,int percent) {
         if(skin < -20000 || skin > 100000 || percent<0 || percent>100) throw std::runtime_error("Invalid thermal input");
         Limits out;
-        for(const auto &[cpu,t]:tables) {out.cpu[cpu]=0;for(size_t i=0;i<t.trigger.size();++i) if(skin>=t.trigger[i]) out.cpu[cpu]=t.cap[i];}
-        int level=gpu.update(skin);out.gpu=level<0?0:game?level+2:2;
+        for(const auto &[cpu,t]:balanced?balanced_tables:tables) {out.cpu[cpu]=0;for(size_t i=0;i<t.trigger.size();++i) if(skin>=t.trigger[i]) out.cpu[cpu]=t.cap[i];}
+        int level=gpu.update(skin);out.gpu=level<0?0:balanced?level+3:game?level+2:2;
         if(cores.update(skin)>=0) out.paused={3,4,7};
         level=battery.update(percent);
         if(level>=0) {
@@ -67,11 +78,18 @@ static bool game_mode(const fs::path &proc) {
 int main(int argc,char **argv) {
     try {
         if(argc==3 && std::string(argv[1])=="--policy") {
-            Policy policy(std::string(argv[2])=="game");int skin,percent;
+            std::string mode(argv[2]);
+            if(mode!="normal" && mode!="game" && mode!="balanced")throw std::runtime_error("Invalid policy mode");
+            Policy policy(mode!="normal",mode=="balanced");int skin,percent;
             while(std::cin>>skin>>percent) {auto l=policy.update(skin,percent);for(auto [cpu,cap]:l.cpu){(void)cpu;std::cout<<cap<<' ';}std::cout<<l.gpu;for(int c:l.paused)std::cout<<' '<<c;std::cout<<'\n';}
             return 0;
         }
-        Options o(argc,argv,{"--thermal","--cpus","--devfreq","--battery","--iio","--proc","--interval-ms"});
+        Options o(argc,argv,{"--thermal","--cpus","--devfreq","--battery","--iio","--proc","--interval-ms","--game-policy","--exit-caps"});
+        auto selected=o.get("--game-policy","legacy");
+        if(selected!="legacy" && selected!="balanced")throw std::runtime_error("Invalid game policy");
+        bool balanced=selected=="balanced";
+        auto exit_caps=o.get("--exit-caps","hold");
+        if(exit_caps!="hold" && exit_caps!="release")throw std::runtime_error("Invalid exit cap policy");
         fs::path root=o.get("--thermal","/sys/class/thermal"),cpu=o.get("--cpus","/sys/devices/system/cpu"),devfreq=o.get("--devfreq","/sys/class/devfreq"),
             bat=o.get("--battery","/sys/class/power_supply/battery"),iio=o.get("--iio","/sys/bus/iio/devices"),proc=o.get("--proc","/proc");
         std::map<int,CpuCap> caps;fs::path gpu;std::vector<long long> gf;
@@ -82,13 +100,18 @@ int main(int argc,char **argv) {
             else if(kind.rfind("devfreq-",0)==0 && kind.size()>4 && kind.substr(kind.size()-4)==".gpu"){gpu=d.path();gf=frequencies(devfreq/kind.substr(8)/"available_frequencies");}
         }
         if(caps.size()!=4 || !caps.count(0)||!caps.count(2)||!caps.count(5)||!caps.count(7)||gpu.empty())throw std::runtime_error("Unexpected cooling devices");
-        signals();std::set<int> offline;int written=0;bool game=game_mode(proc),jump=true;Policy policy(game);
+        signals();std::set<int> offline;int written=0;bool game=game_mode(proc),jump=true;Policy policy(game,balanced);
         auto mode_check=Clock::now(),logged=Clock::time_point{};std::string last_error,last_major;
         auto online=[&](int n,int value){try{syswrite(cpu/("cpu"+std::to_string(n))/"online",value);return true;}catch(const std::exception&e){std::cerr<<e.what()<<'\n';return false;}};
-        auto cleanup=[&](){for(int n:offline)online(n,1);try{if(integer(gpu/"cur_state")==written)syswrite(gpu/"cur_state",0);}catch(...){}for(auto &[n,c]:caps){(void)n;try{syswrite(c.device/"cur_state",0);}catch(...){}}};
+        // Keep CPU frequency votes across service restarts. Dropping them under
+        // the Performance governor briefly drove all clusters to maximum before
+        // the successor read its first thermistors. The next process can adjust
+        // these independent cooling votes immediately; explicit release is for
+        // a deliberate service removal, not normal restart/failure handling.
+        auto cleanup=[&](){for(int n:offline)online(n,1);try{if(integer(gpu/"cur_state")==written)syswrite(gpu/"cur_state",0);}catch(...){}if(exit_caps=="release")for(auto &[n,c]:caps){(void)n;try{syswrite(c.device/"cur_state",0);}catch(...){}}};
         try {
             do {
-                auto now=Clock::now();if(now-mode_check>=std::chrono::seconds(5)){mode_check=now;bool g=game_mode(proc);if(g!=game){game=g;policy=Policy(game);jump=true;}}
+                auto now=Clock::now();if(now-mode_check>=std::chrono::seconds(5)){mode_check=now;bool g=game_mode(proc);if(g!=game){game=g;policy=Policy(game,balanced);jump=true;}}
                 Limits l;long long skin;int percent;
                 try {skin=skin_temperature(board_temperatures(bat,iio));percent=integer(bat/"capacity");l=policy.update(skin,percent);last_error.clear();}
                 catch(const std::exception&e){if(last_error!=e.what())std::cerr<<"Thermal telemetry unavailable; holding limits: "<<e.what()<<'\n';last_error=e.what();if(o.once)throw;pause(o.interval(1000));continue;}
@@ -100,7 +123,11 @@ int main(int argc,char **argv) {
                 auto old=offline;for(int n:old)if(!l.paused.count(n)&&online(n,1))offline.erase(n);
                 jump=false;
                 std::string major=std::to_string(game)+":"+std::to_string(l.gpu);for(int n:l.paused)major+=":"+std::to_string(n);
-                if(major!=last_major || now-logged>=std::chrono::seconds(30)){std::cout<<"skin "<<skin<<" mC battery "<<percent<<" mode "<<(game?"game":"normal")<<" gpu "<<l.gpu<<std::endl;last_major=major;logged=now;}
+                if(major!=last_major || now-logged>=std::chrono::seconds(30)){
+                    std::cout<<"skin "<<skin<<" mC battery "<<percent<<" mode "<<(game?"game":"normal")<<" policy "<<selected<<" gpu "<<l.gpu<<" cpu";
+                    for(const auto &[n,cap]:l.cpu)std::cout<<' '<<n<<':'<<cap/1000;
+                    std::cout<<std::endl;last_major=major;logged=now;
+                }
                 if(o.once)break;
                 pause(o.interval(1000));
             }while(!stopped);

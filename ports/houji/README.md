@@ -658,15 +658,15 @@ build/tests are in [native helpers](helpers/README.md).
 
 `houji-thermal` limits the CPU and GPU from the phone's estimated skin
 temperature. That estimate is Xiaomi's weighted mix of six board thermistors,
-the same one the charging service uses. The tables come from HyperOS
-(`mi_thermald`, `thermal-normal.conf` and `thermal-mgame.conf`) and follow its
-rules: a CPU cap moves one frequency step per second, and the GPU and
-core-pause limits have stock hysteresis.
+the same one the charging service uses. Desktop tables and low-battery/core
+rules come from HyperOS. Game Mode uses a measured CPU/GPU budget split: GPU
+clock is reduced earlier to keep CPU headroom in translated games. CPU caps
+move one frequency step per second; GPU and core-pause limits have hysteresis.
 
 | | Plasma | Steam Game Mode |
 | --- | --- | --- |
-| CPU | Stock normal steps from 25 °C skin. At 46 °C: prime 1.13 GHz, gold 1.29 GHz, little 1.34 GHz. | Same as Plasma. |
-| GPU | 770 MHz (stock level 2) above 15 °C skin. | Full speed (834 MHz) up to 46 °C skin, then 770 MHz, and 720 MHz from 48 °C. |
+| CPU | Stock normal steps from 25 °C skin. At 46 °C: prime 1.13 GHz, gold 1.29 GHz, little 1.34 GHz. | At 44 °C: prime 1.94 GHz, big clusters 1.82/1.61 GHz; converges to the previous caps at 46 °C and above. |
+| GPU | 770 MHz (stock level 2) above 15 °C skin. | 720 MHz at 39 °C, 680 MHz at 42 °C, 629 MHz at 44 °C, 578 MHz at 46 °C and 500 MHz at 48 °C; thresholds clear 2 °C below their trigger. |
 | Pause cores | cpu3, cpu4 and cpu7 offline from 50 °C until 48 °C. | Same. |
 | Low battery | Stock CPU caps and paused cores at 3 % and 1 %. | Stock game caps, which also lower the GPU. |
 
@@ -675,8 +675,18 @@ core-pause limits have stock hysteresis.
   combine with the power profile's limits, and with Steam's own, by taking the
   lower value, so the services never overwrite each other.
 - The kernel's own 95 °C GPU trip still applies and takes precedence.
-- Stopping the service removes every limit:
-  `sudo systemctl stop houji-thermal`. Its journal logs each change of target.
+- Houji's factory Performance profile lets the GPU scale down instead of fixing
+  its minimum at maximum clock. Explicit owner overrides remain authoritative.
+- A twelve-minute GTA stationary-scene trial measured 38.7 FPS late versus
+  32.1 initially and 35.0 after returning to the old policy. It held estimated
+  skin near 45.1 °C, with higher net battery draw; the final installed-policy
+  sample reached 39.9 FPS. This favors CPU-bound work;
+  GPU-bound games may lose performance. See [measurements](thermal/README.md).
+- CPU cooling votes are retained across service restarts, preventing a brief
+  jump to maximum clocks before the replacement reads its sensors. Deliberate
+  removal uses `--once --exit-caps release` after stopping the service; see
+  [thermal policy and handover](thermal/README.md). Its journal records policy
+  targets and regular temperature summaries.
 
 Not ported: the brightness cap at 51 °C, modem, Wi-Fi, NPU and torch limits,
 and Xiaomi's framework overrides (such as `cpu_nolimit_temp`).
