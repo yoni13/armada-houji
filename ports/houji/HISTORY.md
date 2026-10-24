@@ -3470,6 +3470,60 @@ Against the build that was flashed and booted:
   and uses `--wrap-mode=nodownload`. Subsequent GitHub fetches used verified WARP
   connections with immediate disconnection afterward.
 
+### Phone coolers on GTA V's built-in benchmark (2026-10-19)
+
+- **Correction after profile audit:** saved metadata shows Performance for the
+  bare/controller-only/FunCooler runs, but Balanced for the initial FX5 blue and
+  orange runs. The table below therefore mixes power profiles and cannot establish
+  a controlled cooler ranking. A new FX5 orange series explicitly verified the
+  `performance` governor on every CPU policy at each benchmark start: 37.70,
+  36.60 and 36.44 FPS (mean 36.91, sample SD 0.68). These were three successive
+  built-in benchmarks in one session, not three independent cold starts.
+
+- **Request:** Compare the GameSir FX5 Lite (a thermoelectric cooler for the X5
+  controller) and the Black Shark FunCooler 2 Pro on GTA V Enhanced.
+- **Method:** GTA's own performance test (Settings > Graphics > Tab; five passes,
+  about 3.3 minutes) at the shipped settings, with the `balanced` thermal policy.
+  Phone unplugged, brightness 500, no downloads. Each run: quit the game, cool to a
+  start state, fresh Steam launch, Story Mode, then every menu step by hand with a
+  screenshot after it. The recorder only logs temperatures, frequency caps, power and
+  MangoHud frame times (`thermal/cooler-benchmark/`). Two earlier methods were dropped:
+  an idle-scene capture whose camera drifted, and freezing the game between runs,
+  which ended in an out-of-memory kill of the Game Mode session.
+- **Results** (mean of GTA's five pass averages, one run each):
+
+  | configuration | mean FPS | skin / battery at start | battery draw |
+  |---|---|---|---|
+  | bare phone | 29.4 | 46.3 / 43.6 °C | 5.9 W |
+  | bare + FunCooler 2 Pro (max) | 46.9 | 43.8 / 36.0 °C | 8.9 W |
+  | phone in X5 controller | 28.7 | 46.6 / 44.1 °C | 6.0 W |
+  | controller + FX5 Lite (blue) | 42.4 | 45.1 / 38.2 °C | 7.6 W |
+  | controller + FX5 Lite (orange) | 37.4 | 45.0 / 37.5 °C | 7.8 W |
+
+  The orange run's temperatures, frequency caps and draw match the blue run, yet its
+  frame rate is 12% lower (slightly above the 9% spread seen between repeats), so one run
+  each cannot tell the two modes apart. The cooler's mode was set by hand and not verified.
+  The green mode has not been tested.
+
+  Without a cooler the CPU caps fell to 1.0–1.3 GHz and the GPU to 578 MHz. With one
+  they stayed around 1.4–1.9 GHz and 600–620 MHz. The cooler did not keep skin below the
+  policy's 43–44 °C step (it held 44–45 °C); it kept the battery near 37–39 °C instead
+  of 45 °C and the die and GPU less capped. The controller alone changed nothing.
+  MangoHud frame times over the sustained last stretch agree (29.4 / 44.1 / 38.1 fps).
+- **Caveats:** One run per configuration; earlier repeats varied by about 9%, so the
+  FunCooler's lead of about 10% over the FX5 Lite is within noise. The FunCooler run
+  started from a colder phone (battery 23.7 °C against 29–32 °C for the others), the
+  FX5 run followed a fresh boot with no swap in use and a longer lead-in (9.8 against
+  7.8–8.3 minutes), and ambient temperature was not measured. The recorder stopped on the
+  45 °C battery limit before the benchmark ended in the bare and controller-only runs;
+  GTA's reports are complete, the telemetry covers 165 s and 94 s of them.
+- **Harness change:** The recorder's own 92 °C die limit aborted the first FunCooler
+  attempt on a single spike while GTA kept running. Stock Android has no die limit and
+  the kernel's critical trip is 110 °C, so it now aborts at 105 °C. The skin (49 °C),
+  battery (45 °C) and low-battery (12%) limits are unchanged.
+- **Battery:** Across all runs the main percentage stayed within about 1–3 points of the
+  raw gauge while unplugged (80% to 29%), with no jump and no 0%.
+
 ## Open problems
 
 - Intermittent animation freeze around Steam wake: never reproduced or explained.
