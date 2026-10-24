@@ -1,0 +1,14 @@
+[Unit]
+Description=Resume Steam's UI when its resume notification is late
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/armada/houji-steam-resume
+# Waits about seven seconds for the UI, and about ten more in the rare stuck case.
+TimeoutStartSec=60
+Nice=10
+CPUWeight=20
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/armada

@@ -1723,6 +1723,51 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   UI validation. Restrict one to an actual short install transaction and remove
   it on success/failure; Power-button tests must first verify it is gone.
 
+### MangoHud-only display after a late Steam resume notification (2026-10-23)
+
+- **Report:** After a long sleep, Steam showed only the MangoHud overlay before the
+  UI appeared. Times are UTC+8. The kernel resumed at 15:21:55, Steam logged
+  `Resume complete` at 15:21:56 and Gamescope woke the display at 15:21:57. The UI
+  logged `Received resume request` only at 15:22:28, 33 s after the resume. Until
+  then its `SuspendResumeStore.suspending` flag stays true, and the UI draws a black
+  screen. By the time it was inspected the flag had cleared on its own.
+- **Not the 2026-10-18 cause:** No sleep inhibitor was held and the display wake worked.
+  The Steam client stalled for the same 33 s: its background updater logged a manifest
+  request at 15:21:56 but sent it at 15:22:29, and the client's update check timed
+  out after 30 s. Wi-Fi was back at 15:21:58. The USB host controller registered
+  again at 15:22:09 (only this incident's journal covers that, so it is not a pattern).
+  The boot ended in a reset at 16:18, so the swap counters read afterwards belong
+  to the next boot; page-in stalls are neither confirmed nor excluded.
+- **How often:** Of 391 resumes in the phone's Steam logs from 2026-10-04 to 2026-10-23,
+  371 reached the UI within 5 s (361 within 1 s) and 20 took 11 to 113 s; today's is
+  the only one since 2026-10-17. Three of the four update-check timeouts in the
+  archived logs had a late UI resume, but most late resumes had no timeout, so the
+  update check is not the only cause. The earlier ones were not analysed.
+- **Fix:** `houji-steam-resume` runs after every suspend (drop-in
+  `40-houji-steam-resume.conf`). After 6 s (the slowest normal resume was 5 s, the
+  fastest late one 11 s) and a 1 s recheck, if the UI is still suspending and no
+  new suspend has begun, it calls `SuspendResumeStore.InitiateResume()`, the same
+  handler the notification runs and the call that recovered 2026-10-18. It reaches
+  Steam's own DevTools port on loopback with a built-in WebSocket client; upstream's
+  `launch-steam` enables that port on every start. It then saves the state of every
+  Steam, Gamescope and InputPlumber thread (wait channel, syscall, kernel stack),
+  USB, network and Steam's logs to `/var/lib/armada/resume-stall/` (mode 0700, newest
+  10), again 8 s later. Read `threads-stuck.txt` after the next occurrence to see what
+  the client's main thread was blocked on.
+- **Measured:** With every thread of the Steam client stopped (`SIGSTOP`), the UI left
+  the black state 7.8 s after the stuck state began and showed Steam's resume
+  spinner; the library returned 4 s after the client was continued. So a dead black
+  screen becomes the normal spinner after about 7 s, but the client's own delay
+  is not removed. A real suspend started the way Steam starts one (RTC wake after
+  35 s) ran the helper, which found the UI resumed and did nothing. Not tested:
+  an actual stall since installing, "lock on wake" enabled, a game suspended
+  during sleep. When the late notification finally arrives the handler runs a
+  second time, so the resume animation can show twice.
+- **Tests:** `tests/houji-steam-resume-test.py` (15): acts only on a stuck UI, never
+  during a new suspend, grace between the normal and late resumes, DevTools client
+  (ping, fragmented reply, unreachable port), evidence bundle contents and
+  permissions, packaging. Evidence: `build/houji-resume-mango-20261023/`.
+
 ### Native SIM/eSIM settings broker and NFC off-state verification (2026-10-18)
 
 - **Request:** Check the still-resident `houji-cellular/service.py` after the

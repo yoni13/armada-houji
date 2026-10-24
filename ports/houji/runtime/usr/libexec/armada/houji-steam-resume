@@ -1,0 +1,289 @@
+#!/usr/bin/python3
+"""Un-stick Steam's UI after a resume whose notification never reached it.
+
+Steam's UI draws a black screen (only the MangoHud overlay) while its
+SuspendResumeStore still believes the system is suspending. The store leaves
+that state when the Steam client sends it a resume notification. Of the 391
+resumes logged between 2026-10-04 and 2026-10-23, 371 reached the UI within 5 s
+(361 within 1 s) and 20 took 11 to 113 s. The one that was examined (2026-10-23,
+33 s) had the client's other main-thread work stalled for the same time.
+
+Started after every suspend. If the UI is still suspending a few seconds after
+the slowest normal resume, and no new suspend has begun, call the UI's own
+resume handler (the call that recovered the 2026-10-18 incident) and save what
+the Steam client was doing, so the cause can be found. The UI then shows Steam's
+resume animation instead of a black screen; the library returns when the client
+answers. Nothing happens when the UI resumed normally.
+"""
+import base64
+import json
+import os
+from pathlib import Path
+import socket
+import struct
+import subprocess
+import sys
+import time
+import urllib.request
+
+CEF = ('127.0.0.1', 8080)
+GRACE = float(os.environ.get('HOUJI_STEAM_RESUME_GRACE', '6'))      # the slowest normal resume took 5 s, the fastest late one 11 s
+RECHECK = float(os.environ.get('HOUJI_STEAM_RESUME_RECHECK', '1'))
+LATE = float(os.environ.get('HOUJI_STEAM_RESUME_LATE', '8'))
+EVIDENCE = Path(os.environ.get('HOUJI_STEAM_RESUME_EVIDENCE', '/var/lib/armada/resume-stall'))
+KEEP = 10
+FILE_LIMIT = 64 * 1024
+COMPLETE = 1  # k_ESuspendResumeProgressState_Complete: the previous suspend finished preparing
+
+STATE = ('JSON.stringify({suspending: SuspendResumeStore.suspending, '
+         'progress: SuspendResumeStore.GetSuspendResumeState()})')
+KICK = 'SuspendResumeStore.InitiateResume(); "ok"'
+
+
+def log(message):
+    print('Houji Steam resume: ' + message, file=sys.stderr, flush=True)
+
+
+class Cef:
+    """Minimal DevTools client: Steam's own UI context over a local WebSocket."""
+
+    def __init__(self, host=CEF[0], port=CEF[1], timeout=3.0):
+        self.host, self.port, self.timeout = host, port, timeout
+
+    def page(self):
+        url = 'http://%s:%d/json/list' % (self.host, self.port)
+        with urllib.request.urlopen(url, timeout=self.timeout) as reply:
+            pages = json.load(reply)
+        return next(p for p in pages if p.get('title') == 'SharedJSContext')['webSocketDebuggerUrl']
+
+    def evaluate(self, expression):
+        path = '/' + self.page().split('/', 3)[3]
+        key = base64.b64encode(os.urandom(16)).decode()
+        with socket.create_connection((self.host, self.port), timeout=self.timeout) as sock:
+            sock.sendall(('GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+                          'Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n'
+                          % (path, self.host, self.port, key)).encode())
+            head = b''
+            while b'\r\n\r\n' not in head:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    raise OSError('DevTools closed the handshake')
+                head += chunk
+            if b' 101 ' not in head.split(b'\r\n', 1)[0]:
+                raise OSError('DevTools refused the WebSocket: ' + head.split(b'\r\n', 1)[0].decode(errors='replace'))
+            buffered = head.split(b'\r\n\r\n', 1)[1]
+            self._send(sock, json.dumps({'id': 1, 'method': 'Runtime.evaluate', 'params': {
+                'expression': expression, 'returnByValue': True}}))
+            while True:
+                reply, buffered = self._receive(sock, buffered)
+                if reply.get('id') == 1:
+                    break
+        result = reply.get('result', {})
+        if 'exceptionDetails' in result:
+            raise ValueError('UI script failed: ' + str(result['exceptionDetails'].get('text')))
+        return result.get('result', {}).get('value')
+
+    @staticmethod
+    def _send(sock, text):
+        payload = text.encode()
+        mask = os.urandom(4)
+        size = len(payload)
+        head = bytes([0x81]) + (bytes([0x80 | size]) if size < 126 else
+                                bytes([0x80 | 126]) + struct.pack('>H', size) if size < 65536 else
+                                bytes([0x80 | 127]) + struct.pack('>Q', size))
+        sock.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+
+    @staticmethod
+    def _read(sock, buffered, count):
+        while len(buffered) < count:
+            chunk = sock.recv(65536)
+            if not chunk:
+                raise OSError('DevTools closed the connection')
+            buffered += chunk
+        return buffered[:count], buffered[count:]
+
+    def _receive(self, sock, buffered):
+        message = b''
+        while True:
+            head, buffered = self._read(sock, buffered, 2)
+            opcode, size = head[0] & 0x0f, head[1] & 0x7f
+            if size == 126:
+                raw, buffered = self._read(sock, buffered, 2)
+                size = struct.unpack('>H', raw)[0]
+            elif size == 127:
+                raw, buffered = self._read(sock, buffered, 8)
+                size = struct.unpack('>Q', raw)[0]
+            data, buffered = self._read(sock, buffered, size)
+            if opcode == 0x8:
+                raise OSError('DevTools closed the WebSocket')
+            if opcode == 0x9:  # ping: answer, keep waiting
+                sock.sendall(bytes([0x8a, 0x80]) + os.urandom(4))
+                continue
+            message += data
+            if head[0] & 0x80 and opcode in (0x0, 0x1):
+                return json.loads(message), buffered
+
+
+def stuck(state):
+    """The previous suspend finished preparing and the UI never left it."""
+    return bool(state) and state.get('suspending') is True and state.get('progress') == COMPLETE
+
+
+class Platform:
+    """Everything that touches the system. Tests replace these methods."""
+
+    def __init__(self):
+        self.cef = Cef()
+
+    def sleep(self, seconds):
+        time.sleep(seconds)
+
+    def ui_state(self):
+        try:
+            return json.loads(self.cef.evaluate(STATE))
+        except (OSError, ValueError, KeyError, StopIteration, TypeError) as error:
+            log('Steam UI not reachable (%s)' % error)
+            return None
+
+    def kick(self):
+        try:
+            return self.cef.evaluate(KICK) == 'ok'
+        except (OSError, ValueError, KeyError, StopIteration) as error:
+            log('could not call the UI resume handler (%s)' % error)
+            return False
+
+    def suspends_completed(self):
+        try:
+            return int(Path('/sys/power/suspend_stats/success').read_text())
+        except (OSError, ValueError):
+            return None
+
+    def suspend_active(self):
+        try:
+            result = subprocess.run(['systemctl', 'is-active', 'systemd-suspend.service'],
+                                    capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return result.stdout.strip() in ('active', 'activating', 'reloading')
+
+    def snapshot(self, tag, directory=None):
+        if directory is None:
+            EVIDENCE.mkdir(parents=True, exist_ok=True, mode=0o700)
+            EVIDENCE.chmod(0o700)
+            directory = EVIDENCE / time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
+            directory.mkdir(mode=0o700, exist_ok=True)
+        collect(directory, tag)
+        prune(EVIDENCE)
+        return directory
+
+
+def read(path, limit=FILE_LIMIT):
+    try:
+        data = Path(path).read_bytes()
+    except OSError as error:
+        return '(%s)\n' % error
+    return data[-limit:].decode('utf-8', 'replace')
+
+
+def run_text(*command):
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+        return (result.stdout + result.stderr)[-FILE_LIMIT:]
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return '(%s)\n' % error
+
+
+def threads(names=('steam', 'gamescope-wl', 'inputplumber')):
+    """State, wait channel, syscall and kernel stack of every thread of the named processes."""
+    lines = []
+    for proc in sorted(Path('/proc').glob('[0-9]*'), key=lambda p: int(p.name)):
+        comm = read(proc / 'comm', 64).strip()
+        if comm not in names:
+            continue
+        lines.append('== %s pid %s' % (comm, proc.name))
+        try:
+            tasks = sorted((proc / 'task').iterdir(), key=lambda p: int(p.name))
+        except OSError:
+            continue
+        for task in tasks:
+            state = read(task / 'stat', 512).rsplit(')', 1)[-1].split()
+            lines.append('tid %s %s state=%s wchan=%s syscall=%s' % (
+                task.name, read(task / 'comm', 64).strip(), state[0] if state else '?',
+                read(task / 'wchan', 128).strip() or '-', read(task / 'syscall', 128).strip() or '-'))
+            stack = read(task / 'stack', 1024).strip()
+            if stack and not stack.startswith('('):
+                lines.append('    ' + stack.replace('\n', '\n    '))
+    return '\n'.join(lines) + '\n'
+
+
+def collect(directory, tag):
+    steam_logs = Path('/var/home/armada/.local/share/Steam/logs')
+    def put(name, text):
+        (directory / name).write_text(text[-FILE_LIMIT:])
+    put('summary-%s.txt' % tag, '\n'.join([
+        'time ' + time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+        'boot_id ' + read('/proc/sys/kernel/random/boot_id').strip(),
+        'kernel ' + read('/proc/sys/kernel/osrelease').strip(),
+        'uptime ' + read('/proc/uptime').strip(),
+        'suspend_success ' + read('/sys/power/suspend_stats/success').strip(),
+        'loadavg ' + read('/proc/loadavg').strip(), '']))
+    put('threads-%s.txt' % tag, threads())
+    if tag == 'stuck':
+        put('usb.txt', run_text('sh', '-c', 'for d in /sys/bus/usb/devices/*; do echo "$d $(cat $d/product 2>/dev/null)"; done; '
+                                'ls -l /sys/class/hidraw; dmesg | tail -80'))
+        put('network.txt', run_text('nmcli', '-t', 'device') + run_text('ip', '-br', 'address'))
+        for name in ('bootstrap_log.txt', 'systemmanager.txt', 'console_log.txt', 'connection_log.txt',
+                     'client_networkmanager.txt'):
+            put('steam-' + name, read(steam_logs / name, 16 * 1024))
+        put('steam-ui-suspend.txt', '\n'.join(line for line in read(steam_logs / 'webhelper_js.txt', 256 * 1024).splitlines()
+                                              if 'SuspendResume' in line)[-8000:])
+
+
+def prune(directory, keep=KEEP):
+    folders = sorted(p for p in directory.iterdir() if p.is_dir())
+    for old in folders[:-keep]:
+        for item in old.iterdir():
+            item.unlink()
+        old.rmdir()
+
+
+def run(platform):
+    completed = platform.suspends_completed()
+    platform.sleep(GRACE)
+    state = platform.ui_state()
+    if not stuck(state):
+        return 0
+    platform.sleep(RECHECK)  # a late notification can land between the two looks
+    state = platform.ui_state()
+    if not stuck(state):
+        return 0
+    if platform.suspends_completed() != completed or platform.suspend_active():
+        log('another suspend has begun; leaving the UI alone')
+        return 0
+    seconds = GRACE + RECHECK
+    log('the UI is still suspending %.0f s after resume; calling its resume handler' % seconds)
+    clean = platform.kick()
+    platform.sleep(2)
+    after = platform.ui_state()
+    recovered = bool(after) and after.get('suspending') is False
+    log('resume handler %s; UI %s' % ('called' if clean else 'failed', 'resumed' if recovered else 'still suspending'))
+    try:
+        directory = platform.snapshot('stuck')
+        log('saved what Steam was doing in %s' % directory)
+        platform.sleep(LATE)  # is the client still blocked this much later?
+        platform.snapshot('late', directory)
+    except OSError as error:
+        log('could not save evidence: %s' % error)
+    return 0
+
+
+def main():
+    try:
+        return run(Platform())
+    except Exception as error:  # a watchdog must never leave a failed unit behind a resume
+        log('stopped: %s' % error)
+        return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
