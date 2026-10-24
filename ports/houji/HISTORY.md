@@ -3572,6 +3572,17 @@ Against the build that was flashed and booted:
 ## Open problems
 
 - Intermittent animation freeze around Steam wake: never reproduced or explained.
+- Native sleep still resets the phone occasionally. From Oct 18 to 22 there were
+  5 resets in 371 recorded sleep cycles (about 1.3%), each right after a sensor-DSP
+  dark wake. Each console log (pstore) ends on the next suspend just after
+  `psci-exit state=0x41000044`, with no panic, oops or watchdog. Charger plug-in,
+  the power key and short gaps between wakes were not more common before resets
+  than overall. The Oct 22 one followed four dark wakes in a minute while the
+  phone was handled; neither the power key nor USB had registered. Light sleep
+  avoids it at higher drain. A sixth, on Oct 23 at 16:18, matches: the console log
+  ends at cycle 32, the suspend after a dark wake that served the sensor DSP, with no
+  panic. Evidence: `build/houji-day-report-20261022/`,
+  `build/houji-resume-mango-20261023/last-boot-end.private.txt`.
 - Sleep has been exercised for hours, not days. The standby power cost of the
   sensor DSP's periodic wakeups is unmeasured, and DSP crash recovery is
   untested.
@@ -3584,5 +3595,5 @@ Against the build that was flashed and booted:
 - The x86 Turnip build used under FEX when the Vulkan thunk is off misrenders
   Counter-Strike 2. The cause is unknown; native CS2 now uses the thunk.
 - NFC: NDEF reads from physical tags, other tag families and writes are unverified.
-- Gyro aiming, cellular, cameras and fingerprint are not implemented.
+- Cellular, cameras and fingerprint are not implemented.
 - Other panel revisions, storage sizes and regional firmware are untested.
