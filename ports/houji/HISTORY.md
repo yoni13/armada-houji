@@ -1210,6 +1210,37 @@ for every DSP request.
 - **Limits:** Physical touch alignment in every Steam orientation needs broader
   testing. Gyro input for aiming in games is not implemented.
 
+### Desktop rotation stopped after sleep, then was off (2026-10-22)
+
+- **Report:** in the KDE desktop, rotation ("gyro") was unresponsive and
+  sometimes wrong after a day of use.
+- **Cause 1, every resume:** `61-houji-sensors` stops `iio-sensor-proxy` before
+  sleep and starts it after. The proxy owns its bus name before it opens the
+  sensors, and opening the SSC accelerometer waits on the DSP while D-Bus calls
+  are still dispatched. KWin claims the accelerometer the moment the proxy
+  reappears, so the claim landed while the sensor was still opening. It was
+  recorded but the sensor was never started (the hotplug path handles this; the
+  startup path did not). With a debug build, KWin claimed again after the hook
+  ran, and 0 samples followed, against 182 in 6 s before. Rotation stayed frozen
+  at the pre-sleep angle, which is wrong once the phone has turned. Game Mode was
+  unaffected: its orientation helper starts after the proxy.
+- **Fix:** `sensors/iio-sensor-proxy-houji.patch` (replaces
+  `iio-ssc-stop-on-close.patch` and keeps that change) makes a claim wait for
+  the opened device and starts sensors that already have clients once startup
+  opens them. It applies to the pinned 3.9 revision; the unpatched source
+  rebuilt to the phone's exact binary, so the installed binary differs only by
+  this change. On the phone, after the real sleep hook restarted the proxy, KWin's
+  claim produced 183 samples in 6 s; Game Mode still applied its orientation.
+- **Cause 2, at the time of testing:** KWin's saved output config
+  (`~/.config/kwinoutputconfig.json`) had `autoRotation: Never`, so the desktop did
+  not use the sensor at all. KWin's sensor logs show auto-rotate active in
+  yesterday's desktop sessions, so it changed later; what wrote it is not
+  established (Display settings also crashed once, at 13:44). It was set back to
+  `Always` with a backup. Houji's first-session helper only sets it once, so a later
+  change by the user stays.
+- **Not verified:** physical rotation by hand; the phone lay flat during the
+  tests, so orientation read `undefined` throughout.
+
 ### Ambient light reported 0 lux
 
 - **Issue:** iio-sensor-proxy had no light sensor. The port's udev rule set the

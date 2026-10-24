@@ -1,0 +1,61 @@
+Houji changes to iio-sensor-proxy 3.9.
+
+1. SSC accelerometer: stop the DSP stream on close, even while clients still
+   hold the sensor at shutdown (the sleep hook stops the proxy before sleep).
+2. Start a sensor claimed during startup. The bus name is owned before the
+   sensors are opened, and opening an SSC sensor waits on the DSP while D-Bus
+   calls are still dispatched. KWin claims the accelerometer as soon as the
+   proxy reappears after each resume, so its claim landed in that window and
+   the sensor was never started: desktop auto-rotation stopped after the first
+   sleep. The claim path now waits for the opened device, and startup starts
+   sensors that already have clients, as the hotplug path does.
+
+diff --git a/src/drv-ssc-accel.c b/src/drv-ssc-accel.c
+index 4130657..474361f 100644
+--- a/src/drv-ssc-accel.c
++++ b/src/drv-ssc-accel.c
+@@ -133,9 +133,12 @@ ssc_accelerometer_set_polling (SensorDevice *sensor_device, gboolean state)
+ static void
+ ssc_accelerometer_close (SensorDevice *sensor_device)
+ {
+-	g_autoptr(GError) error = NULL;
+ 	DrvData *drv_data = (DrvData *) sensor_device->priv;
+ 
++	/* Shutdown can happen with clients still holding the sensor. Disconnect
++	 * the callback and send the disable request before releasing the client.
++	 */
++	ssc_accelerometer_set_polling (sensor_device, FALSE);
+ 	g_clear_object (&drv_data->sensor);
+ 	g_clear_pointer (&drv_data->mount_matrix, g_free);
+ 	g_clear_pointer (&sensor_device->priv, g_free);
+diff --git a/src/iio-sensor-proxy.c b/src/iio-sensor-proxy.c
+index 9c7e8cd..b92417d 100644
+--- a/src/iio-sensor-proxy.c
++++ b/src/iio-sensor-proxy.c
+@@ -522,7 +522,9 @@ handle_generic_method_call (SensorData            *data,
+ 							   NULL);
+ 		g_hash_table_insert (ht, g_strdup (sender), GUINT_TO_POINTER (watch_id));
+ 
+-		if (driver_type_exists (data, driver_type)) {
++		/* The device can still be opening at startup; name_acquired_handler()
++		 * starts it for the clients that claimed meanwhile. */
++		if (driver_type_exists (data, driver_type) && DEVICE_FOR_TYPE(driver_type) != NULL) {
+ 			SensorDevice *sensor_device = DEVICE_FOR_TYPE(driver_type);
+ 
+ 			/* No other clients for this sensor? Start it */
+@@ -779,6 +781,15 @@ name_acquired_handler (GDBusConnection *connection,
+ 		}
+ 
+ 		DEVICE_FOR_TYPE(i) = sensor_device;
++
++		/* The bus name is owned before the sensors are opened, and opening an
++		 * SSC sensor waits on the DSP while D-Bus calls are still dispatched.
++		 * A client that was waiting for the proxy can claim in that window.
++		 * Start the sensor as for an already claimed hotplugged one. */
++		if (g_hash_table_size (data->clients[i]) > 0) {
++			data->sensor_startup_dbus_event_delayed[i] = TRUE;
++			driver_set_polling (sensor_device, TRUE);
++		}
+ 	}
+ 
+ 	if (!any_sensors_left (data))

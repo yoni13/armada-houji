@@ -8,8 +8,8 @@
   "iio-sensor-proxy": {
     "revision": "0085ddf8ecb173a1c5fcf2344aa40e561125354f",
     "source": "https://gitlab.freedesktop.org/hadess/iio-sensor-proxy.git",
-    "local_patch": "iio-ssc-stop-on-close.patch",
-    "patch_sha256": "04af22ca53222c0849172469598205991efa2815f5b274de16f8b2f94121c0a0"
+    "local_patch": "iio-sensor-proxy-houji.patch",
+    "patch_sha256": "a696d10bbd127a3afb31dd59ca73f016520a5266f7d323deb639bd3be36ce644"
   },
   "hexagonrpc": {
     "revision": "598b591ae9da6a6cfe2ca5ea78998019ca6395ea",
