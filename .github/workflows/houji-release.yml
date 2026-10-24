@@ -71,6 +71,9 @@ jobs:
 
       # Sleep, charging, thermal, installer, kernel and userdata updates, session
       # switching, NFC and GPS helpers, panel gamma, and the patch checker's tests.
+      - name: Keep upstream session switching
+        run: python3 ports/houji/check-upstream.py
+
       - name: Run Python and shell tests
         run: bash ports/houji/unit-tests.sh
 

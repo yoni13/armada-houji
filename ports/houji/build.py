@@ -24,7 +24,12 @@ def main():
                    'update installs beside the running modules, so it needs a release name the root image does not use')
     p.add_argument('--inside',choices=['libraries','rootfs'],help=argparse.SUPPRESS)
     p.add_argument('--container',help=argparse.SUPPRESS)
-    a=p.parse_args();output=a.output.resolve();work=output/'work';work.mkdir(parents=True,exist_ok=True)
+    a=p.parse_args()
+    if not a.inside:
+        # Before any download or build: the port must not replace upstream session
+        # switching, and every reviewed override must still match its upstream pin.
+        run('python3',PORT/'check-upstream.py')
+    output=a.output.resolve();work=output/'work';work.mkdir(parents=True,exist_ok=True)
     kernel=kernel_source(work)
     pm=['podman']
     if bool(a.podman_root)!=bool(a.podman_runroot):p.error('Specify both Podman storage paths together')

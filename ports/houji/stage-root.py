@@ -142,11 +142,8 @@ copy(PORT/'power/org.armada.power-profiles.policy','usr/share/polkit-1/actions/o
 copy(PORT/'audio/prepare-protection.py','usr/libexec/houji-audio/prepare-protection.py',0o755)
 copy(PORT/'audio/ucm/Xiaomi-14.conf','usr/share/alsa/ucm2/conf.d/houji/Xiaomi-14.conf')
 copy(PORT/'audio/ucm/HiFi.conf','usr/share/alsa/ucm2/Houji/HiFi.conf')
-target('etc/sddm.conf.d/zz-holo-autologin.conf').unlink(missing_ok=True)
-write('etc/sddm.conf.d/zz-steamos-autologin.conf','[Autologin]\nSession=armada-plasma-mobile.desktop\n')
-(root/'etc/sudoers.d/houji-session-switch').chmod(0o440)
 # This layout is managed by this port's installer, not bootc/ESP tools.
-for name in ['udisks2','bootc-generic-growpart','armada-update-reserve','armada-session-default',
+for name in ['udisks2','bootc-generic-growpart','armada-update-reserve',
              'NetworkManager-wait-online','systemd-networkd','systemd-networkd-wait-online',
              'armada-bootimg-sync','armada-esp-rename','armada-installer-visibility']:
     link('etc/systemd/system/'+name+'.service','/dev/null')
@@ -215,4 +212,6 @@ write('usr/share/applications/kcm_houji_sim.desktop',
       'Exec=plasma-open-settings kcm_houji_sim\nNoDisplay=true\n'
       'Categories=Qt;KDE;Settings;Network;\n')
 run('depmod','-b',root,release)
+# Desktop switching is upstream's; the image must carry upstream's files unchanged.
+run('python3',PORT/'check-upstream.py','--staged-root',root)
 print('Staged clean Houji userspace and modules:',release)

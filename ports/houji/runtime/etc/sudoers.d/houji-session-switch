@@ -1,2 +1,0 @@
-armada ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start houji-session-switch@gamescope.service
-armada ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start houji-session-switch@plasma.service

@@ -542,13 +542,15 @@ only if all of them pass, so a failed check costs minutes, not hours.
 
 | Check | What it covers |
 | --- | --- |
-| Unit tests | Every Python and shell test (sleep, charging, thermal, installer, kernel and userdata updates, session switching, NFC and GPS helpers, panel gamma, and the patch checker itself). |
+| Unit tests | Every Python and shell test (sleep, charging, thermal, installer, kernel and userdata updates, the upstream session-switching gate, NFC and GPS helpers, panel gamma, and the patch checker itself). |
+| Upstream files | `check-upstream.py` (also the first step of `build.py`): no port file replaces an upstream one except pinned, reviewed firmware; session switching and autologin stay upstream's; upstream's session test passes. `stage-root.py` re-checks the staged image. |
 | Kernel patches | The shared Armada kernel series plus Houji's apply in build order, with every hunk parsed and no fuzz, onto the SHA-256-pinned Linux tarball. It then replays the Wi-Fi DBS/SBS parser on the phone's captured record. |
 | Userspace patches and native tests | The pinned revisions of libssc, hexagonrpc, iio-sensor-proxy, gamescope and tqftpserv take the port's patches. The C and C++ tests are then built and run against those patched trees, ideally in a Fedora 44 container like the image. |
 
 The same checks run locally, which is worth doing before a push:
 
 ```sh
+python3 ports/houji/check-upstream.py            # first, and after every upstream release pull
 ports/houji/unit-tests.sh
 python3 ports/houji/check-patches.py kernel      # downloads Linux once (about 150 MB), cached
 python3 ports/houji/check-patches.py userspace --keep /tmp/patched

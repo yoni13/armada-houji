@@ -2663,6 +2663,38 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   both directions and a second Game Mode switch. A live round trip through Armada's
   desktop switch and the normal Game Mode launcher returned to Steam.
 
+### Switch to Desktop ignored the selected desktop again (2026-10-22)
+
+- **Report:** with KDE Plasma chosen in Armada Control, Steam's Switch to Desktop
+  opened Plasma Mobile, or went straight back to Game Mode. Desktop switching had
+  broken after an earlier release pull for the same underlying reason.
+- **Cause:** the port shipped its own `/usr/libexec/os-session-select`, the hook
+  Steam's switch runs, which replaced upstream's file of the same path. It started
+  a Houji worker that always wrote `armada-plasma-mobile.desktop` into
+  `zz-steamos-autologin.conf`. Armada 20261010 moved switching to steamos-manager:
+  upstream's hook calls `steamosctl switch-to-desktop-mode`, the choice lives in
+  steamos-manager's `desktop_session` (set by Armada Control), and autologin is
+  `zz-holo-autologin.conf`, which `armada-fixups` migrates the old file to. The port
+  copy ignored the choice, and `stage-root.py` also masked upstream's
+  `armada-session-default.service`. Upstream's `plasma-session-test.sh` kept passing
+  because it tests upstream's hook, which the image did not contain.
+- **Fix:** removed the port's hook, worker, unit and sudoers rule, the autologin file
+  seeded at staging and the mask. Session switching is upstream's code alone.
+- **Gate:** `ports/houji/check-upstream.py` runs first in `build.py` and again on the
+  staged root in `stage-root.py`. It fails the build if a port overlay replaces any
+  upstream file, if staging or overlays touch session switching, autologin or
+  `armada-session-default`, if upstream's session test fails, or if the staged
+  session files differ from `system_files`. The port's six Wi-Fi/GPU firmware files
+  that must replace upstream's are pinned to the upstream hashes they were reviewed
+  against; when a release changes one, the build stops until it is reviewed again.
+  Run `python3 ports/houji/check-upstream.py` right after every release pull.
+  `tests/houji-upstream-session-test.py` covers the gate, including this bug.
+- **Verified:** on the phone, with upstream's hook installed in place of the port
+  copy and the session default unmasked, Switch to Desktop opened
+  `armada-plasma-session standalone` (KDE Plasma, as selected), and Return to Game
+  Mode brought Steam back. All 44 Houji unit test files, upstream's
+  `plasma-session-test.sh` and `boot-hotkeys-test.sh` passed.
+
 ## Houji Settings
 
 ### A Decky plugin for the phone's own settings (2026-10-09)
