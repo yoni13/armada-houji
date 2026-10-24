@@ -3410,6 +3410,66 @@ Against the build that was flashed and booted:
   stayed running, graphics preferences were not edited, and raw captures,
   process data and rollback receipts remain outside Git.
 
+### GTA V Enhanced: repair the native ARM64EC overlay boundary (2026-10-18)
+
+- **Request:** Repair the native graphics path and test a newer compatible
+  bundled FEX. The owner authorized restarting saved gameplay and autonomous
+  menu input while away. Prefix state, settings and the three working x64
+  fallback DLLs were backed up privately. No game graphics preferences were
+  changed; their SHA-256 matched the pre-test copy after gameplay.
+- **Compatible stack:** The installed October 14 Proton Experimental ARM64
+  contains FEX `2610-25-g5285020`, confirmed from the running game's shared-memory
+  header. This is a matched Wine/FEX build rather than a host-FEX substitution.
+  Stock native Experimental graphics still reproduced the null-execute failure
+  just after Social Club's renderer loaded. Keeping x64 DXGI while switching
+  the D3D12 pair to ARM64EC reached Story Mode, isolating the remaining boundary.
+- **Root cause:** DXVK returns `DxgiSwapChainDispatcher` to callers. The inner
+  swap chain has `DXVK_HOTPATCHABLE` annotations, but the dispatcher does not.
+  Reverse engineering the unchanged Social Club renderer identified its eight
+  MinHook installations. Live capture showed the factory and D3D12 queue hooks
+  targeting proper hybrid thunks, while dispatcher `Present` and `ResizeBuffers`
+  exposed raw ARM64 code. MinHook decoded those ARM64 bytes as x64, constructed
+  invalid trampolines, then replaced their prologues with x64 `E9` jumps before
+  the game crashed. Thus the x64 fallback was avoiding a specific missing
+  hook-compatible entrypoint, not proving native D3D12 itself unusable.
+- **Repair:** Add the same six `DXVK_HOTPATCHABLE` annotations to the dispatcher
+  and rebuild only native ARM64EC DXGI from matching DXVK revision
+  `a78a467cadb22bee928904290cf8e7921b121851` using llvm-mingw 20261006. The resulting
+  public methods point to x64 hybrid patch thunks with native ARM64EC targets.
+  The verifier checks the actual PE CHPE ranges, symbol addresses and thunk
+  encodings. Live capture confirms all eight Social Club hooks installed on
+  compatible entries, and the native `Present`/`ResizeBuffers` bodies still
+  matched the on-disk instructions after gameplay.
+- **Deployment:** Game-local patched DXGI plus Experimental's matching native
+  `d3d12.dll`/`d3d12core.dll`, with existing executable-scoped overrides retained.
+  The shortcut selects Experimental ARM64. Social Club remains enabled; no
+  proprietary DLL was patched. Build inputs, source patch, offline builder,
+  entrypoint verifier, identities and rollback instructions are under
+  [`graphics/dxvk/`](graphics/dxvk/README.md). Raw captures and backups stay
+  outside Git.
+- **Validation, Taiwan UTC+8:** The all-native configuration reached Story Mode,
+  rendered indoors/outdoors and accepted movement. The clean Steam-launched
+  game had `WINEDEBUG=-all`, no `PROTON_LOG`, the corrected non-Steam app-ID FEX
+  configuration, and the intended native DLL hashes mapped. At 16:47:52 the
+  process remained alive with intact native method bodies. Samples: 47.9 FPS
+  indoors (30 s, 1% minimum 30.1), 36.0 outdoors (45 s, 23.9), and 33.7 in a later
+  hot outdoor capture (60 s, 20.3). Scene/temperature differences prevent
+  assigning these changes solely to native graphics or FEX. The hot run again
+  capped big cores at 1286.4 MHz and prime at 1132.8 MHz; 60 FPS remains unmet.
+  A second clean full-prefix Steam launch also reached Story Mode by 16:57;
+  file identities, native method bodies and unchanged graphics settings were
+  verified again. The game was left paused at 16:58, with diagnostic units
+  inactive and the normal thermal/sleep services active.
+- **Test-harness corrections:** The initial stop check missed a trailing slash
+  in `WINEPREFIX`; registry/save state was captured again after explicit prefix
+  shutdown. Steam temporarily lost the shortcut from its in-memory overview;
+  a Game Mode session restart restored both existing shortcuts and normal Steam
+  launch. Temporary direct-launch focus overrides and virtual input were
+  cleared. A Meson fallback fetched one submodule before the workflow was made
+  strictly offline; the retained builder now requires all submodules in advance
+  and uses `--wrap-mode=nodownload`. Subsequent GitHub fetches used verified WARP
+  connections with immediate disconnection afterward.
+
 ## Open problems
 
 - Intermittent animation freeze around Steam wake: never reproduced or explained.

@@ -1,0 +1,62 @@
+From: Houji port maintainers
+Subject: [PATCH] dxgi: make the swap chain dispatcher hotpatchable
+
+The dispatcher returned by CreateSwapChainBase exposes its own vtable, so
+annotating the underlying DxgiSwapChain methods does not cover hooks placed
+on the public interface. On ARM64EC an x64 overlay can interpret the raw ARM64
+dispatcher prologue as x64 and overwrite it with an x64 jump.
+
+Observed with GTA V Enhanced's SocialClubD3D12Renderer: its MinHook installs
+Present and ResizeBuffers hooks on the dispatcher, corrupting both methods.
+Match the six hotpatchable entrypoints on the underlying swap chain so the
+compiler emits the ARM64EC hybrid patch thunks at the public boundary too.
+
+Base: a78a467cadb22bee928904290cf8e7921b121851
+
+--- a/src/dxgi/dxgi_swapchain_dispatcher.h
++++ b/src/dxgi/dxgi_swapchain_dispatcher.h
+@@ -187,12 +187,14 @@ namespace dxvk {
+       return m_dispatch->IsTemporaryMonoSupported();
+     }
+ 
++    DXVK_HOTPATCHABLE
+     HRESULT STDMETHODCALLTYPE Present(
+             UINT                      SyncInterval,
+             UINT                      Flags) final {
+       return m_dispatch->Present(SyncInterval, Flags);
+     }
+ 
++    DXVK_HOTPATCHABLE
+     HRESULT STDMETHODCALLTYPE Present1(
+             UINT                      SyncInterval,
+             UINT                      PresentFlags,
+@@ -200,6 +202,7 @@ namespace dxvk {
+       return m_dispatch->Present1(SyncInterval, PresentFlags, pPresentParameters);
+     }
+ 
++    DXVK_HOTPATCHABLE
+     HRESULT STDMETHODCALLTYPE ResizeBuffers(
+             UINT                      BufferCount,
+             UINT                      Width,
+@@ -209,6 +212,7 @@ namespace dxvk {
+       return m_dispatch->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
+     }
+ 
++    DXVK_HOTPATCHABLE
+     HRESULT STDMETHODCALLTYPE ResizeBuffers1(
+             UINT                      BufferCount,
+             UINT                      Width,
+@@ -220,11 +224,13 @@ namespace dxvk {
+       return m_dispatch->ResizeBuffers1(BufferCount, Width, Height, Format, SwapChainFlags, pCreationNodeMask, ppPresentQueue);
+     }
+ 
++    DXVK_HOTPATCHABLE
+     HRESULT STDMETHODCALLTYPE ResizeTarget(
+       const DXGI_MODE_DESC*           pNewTargetParameters) final {
+       return m_dispatch->ResizeTarget(pNewTargetParameters);
+     }
+ 
++    DXVK_HOTPATCHABLE
+     HRESULT STDMETHODCALLTYPE SetFullscreenState(
+             BOOL                      Fullscreen,
+             IDXGIOutput*              pTarget) final {

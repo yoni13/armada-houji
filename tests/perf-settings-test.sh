@@ -206,6 +206,19 @@ check("env global-only view intact", gt.merged_settings(env_tweaks, None)["env"]
 # --- armada-game-launch: FEX path unchanged by perf keys --------------------
 os.environ["XDG_CACHE_HOME"] = WORK
 launch = load_script("armada-game-launch")
+from unittest.mock import patch
+for env, expected in [
+    ({"STEAM_COMPAT_APP_ID": "620", "SteamAppId": "999"}, "620"),
+    ({"STEAM_COMPAT_APP_ID": "0", "SteamAppId": "4022596578"}, "4022596578"),
+    ({"STEAM_COMPAT_APP_ID": "0", "SteamGameId": str((4022596578 << 32) | 0x02000000)}, "4022596578"),
+    ({"SteamGameId": "620"}, "620"),
+    ({"STEAM_COMPAT_APP_ID": "0", "SteamAppId": "0", "SteamGameId": "0"}, None),
+    ({"STEAM_COMPAT_APP_ID": "bad", "SteamAppId": " 620 "}, "620"),
+    ({"SteamGameId": str(1 << 65)}, None),
+    ({"SteamGameId": str((620 << 32) | 0x01000000)}, None),
+]:
+    with patch.dict(os.environ, env, clear=True):
+        check("launcher app identity " + repr(env), launch.appid() == expected)
 with open(os.path.join(LIBEXEC, "armada-game-launch"), "rb") as f:
     check("wrapper interpreter is PATH-independent", f.readline() == b"#!/usr/bin/python3\n")
 

@@ -173,12 +173,14 @@ Results below are from the development handset.
   DX12 backend crashed after the photosensitivity warning on Adreno 750. Using
   FSR's Unreal RHI fallback passed startup; see the [tested game-local
   workaround](HISTORY.md#hogwarts-legacy-crashed-after-the-warning-screen-2026-10-10).
-- **GTA V Enhanced (Rockstar, Proton 11 ARM64).** Reached the opening Story
-  Mode mission using game-local x86-64 DXGI/D3D12 libraries from the installed
-  Proton build. Its Social Club overlay crashes with the ARM64 graphics path;
-  disabling that overlay instead stalls initialization. Some wave32 shaders
-  are still rejected on Adreno 750; longer play and rendering correctness remain
-  unverified. See the [working setup](HISTORY.md#gta-v-enhanced-crashed-during-frame-presentation-2026-10-11).
+- **GTA V Enhanced (Rockstar, Proton Experimental ARM64).** Native ARM64EC
+  DXGI/D3D12 now reaches indoor/outdoor Story Mode using bundled FEX-2610 and a
+  [DXVK dispatcher hotpatch fix](graphics/dxvk/README.md). It repairs Social
+  Club's x64 hooks overwriting ARM64 method bodies; the overlay remains enabled.
+  Short captures measured about 48 FPS indoors and 34–36 outdoors, with thermal
+  CPU caps still limiting sustained performance. The prior x64 fallback is
+  retained for rollback. Longer play, rendering correctness and the previously
+  rejected wave32 shaders remain unverified; sustained 60 FPS is not established.
 
 ## Firmware and boot layout
 

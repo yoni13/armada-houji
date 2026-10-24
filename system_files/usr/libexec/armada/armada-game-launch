@@ -79,10 +79,21 @@ def prepare_appimage_path(args):
     os.environ["PATH"] = os.pathsep.join(paths)
 
 def appid():
-    for key in ("STEAM_COMPAT_APP_ID", "SteamAppId", "SteamGameId"):
+    for key in ("STEAM_COMPAT_APP_ID", "SteamAppId"):
         value = os.environ.get(key, "").strip()
-        if value.isdigit():
-            return value
+        # Non-Steam Proton shortcuts set COMPAT_APP_ID=0 but carry their real
+        # 32-bit shortcut ID in SteamAppId. Zero must not mask that identity.
+        if value.isascii() and value.isdigit() and 0 < int(value) <= 0xffffffff:
+            return str(int(value))
+    value = os.environ.get("SteamGameId", "").strip()
+    if value.isascii() and value.isdigit():
+        number = int(value)
+        if 0 < number <= 0xffffffff:
+            return str(number)
+        # CGameID encodes a shortcut as its app ID in the high word and type 2
+        # in bits 24..31. Do not use arbitrary 64-bit IDs as per-game keys.
+        if number <= 0xffffffffffffffff and number & 0xffffffff == 0x02000000:
+            return str(number >> 32) if number >> 32 else None
     return None
 
 
