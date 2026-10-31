@@ -50,7 +50,7 @@ if [[ "$(cat "${tool}/.stamp" 2>/dev/null || true)" != "${stamp}" ]]; then
     cp -a "${here}/overlay/." "${tool}.new/images/rootfs_overlay/"
     # lepton sources liblepton/liblepton.sh; armada's takes that name and loads Valve's.
     mv "${tool}.new/liblepton/liblepton.sh" "${tool}.new/liblepton/liblepton.valve.sh"
-    cp "${here}/liblepton.sh" "${tool}.new/liblepton/liblepton.sh"
+    cp "${here}/liblepton.sh" "${here}/armada-apk-launcher" "${tool}.new/liblepton/"
     # A split install makes `pm path` print a line per APK and leaves the originals behind.
     guest=("${tool}.new/images/rootfs_overlay/system/bin/cmd" "${tool}.new/images/rootfs_overlay/vendor/bin/fix_obb_symlink.sh")
     sed -E -i 's#(\$\((pm|cmd_real package) path [^|)]*[^|) ])( *)#\1 | grep "/base.apk$" | head -n 1\3#' "${guest[@]}" || true

@@ -21,6 +21,8 @@ while IFS= read -r file; do tests+=("$file"); done < <(
         # houji-ssc-close-test.py needs a patched iio-sensor-proxy tree; see native-tests.sh.
         find tests -maxdepth 1 -name 'houji-*-test.py' ! -name 'houji-ssc-close-test.py'
         find tests -maxdepth 1 -name 'houji-*-test.sh'
+        # The Android apps the port ships changes for: the Lepton wrapper and its APK launcher reader.
+        find tests -maxdepth 1 \( -name 'lepton-armada-test.sh' -o -name 'armada-apk-launcher-test.py' \)
         # test-wmi-dbs-parser.py needs the pinned kernel archive; check-patches.py kernel runs it.
         find ports/houji -name 'test-*.py' -not -path '*/__pycache__/*' ! -name 'test-wmi-dbs-parser.py'
     } | LC_ALL=C sort -u

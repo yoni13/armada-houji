@@ -1,0 +1,187 @@
+#!/usr/bin/python3
+"""Print the launcher component of an APK, including <activity-alias> launchers.
+
+Lepton's own apk-info-extractor only looks at <activity> elements, so an app
+whose MAIN/LAUNCHER filter sits on an alias (Firefox, among others) has an empty
+activity name and Lepton refuses to start it. This reads the same binary
+AndroidManifest.xml and also considers aliases. Lepton calls it only when its
+own extractor found nothing.
+
+Usage: armada-apk-launcher APK
+Prints the fully qualified class name and exits 0, or prints nothing and exits 1.
+"""
+import struct
+import sys
+import zipfile
+
+RES_NAME, RES_ENABLED, RES_TARGET = 0x01010003, 0x0101000E, 0x01010202
+MAX_MANIFEST = 32 * 1024 * 1024
+
+TYPE_FILE, TYPE_STRING_POOL, TYPE_RESOURCE_MAP = 0x0003, 0x0001, 0x0180
+TYPE_START_ELEMENT, TYPE_END_ELEMENT = 0x0102, 0x0103
+VALUE_REFERENCE, VALUE_STRING, VALUE_BOOLEAN = 0x01, 0x03, 0x12
+UNRESOLVED = object()  # an attribute that points at a resource, which this does not read
+
+
+class ManifestError(Exception):
+    pass
+
+
+def string_pool(data, start):
+    header = struct.unpack_from('<H', data, start + 2)[0]
+    count, _styles, flags, strings_start, _styles_start = struct.unpack_from('<IIIII', data, start + 8)
+    offsets = struct.unpack_from('<%dI' % count, data, start + header)
+    base = start + strings_start
+    out = []
+    for offset in offsets:
+        pos = base + offset
+        if flags & 0x100:  # UTF-8: character count, then byte count, each in one or two bytes
+            pos += 2 if data[pos] & 0x80 else 1
+            size = data[pos]
+            pos += 1
+            if size & 0x80:
+                size = ((size & 0x7F) << 8) | data[pos]
+                pos += 1
+            out.append(data[pos:pos + size].decode('utf-8', 'replace'))
+        else:
+            size = struct.unpack_from('<H', data, pos)[0]
+            pos += 2
+            if size & 0x8000:
+                size = ((size & 0x7FFF) << 16) | struct.unpack_from('<H', data, pos)[0]
+                pos += 2
+            out.append(data[pos:pos + size * 2].decode('utf-16-le', 'replace'))
+    return out
+
+
+def elements(data):
+    """Yield ('start', name, attributes) and ('end', name, None) for every element.
+
+    attributes maps (resource id or None, attribute name) to a str, a bool, an int
+    or UNRESOLVED."""
+    if len(data) < 8 or struct.unpack_from('<H', data, 0)[0] != TYPE_FILE:
+        raise ManifestError('not a binary manifest')
+    strings, resources = [], []
+    pos = struct.unpack_from('<H', data, 2)[0]
+    end = min(len(data), struct.unpack_from('<I', data, 4)[0])
+    while pos + 8 <= end:
+        kind, header, size = struct.unpack_from('<HHI', data, pos)
+        if size < 8 or pos + size > len(data):
+            raise ManifestError('truncated chunk')
+        if kind == TYPE_STRING_POOL and not strings:
+            strings = string_pool(data, pos)
+        elif kind == TYPE_RESOURCE_MAP:
+            resources = list(struct.unpack_from('<%dI' % ((size - header) // 4), data, pos + header))
+        elif kind in (TYPE_START_ELEMENT, TYPE_END_ELEMENT):
+            name = struct.unpack_from('<I', data, pos + 20)[0]
+            element = strings[name] if name < len(strings) else ''
+            if kind == TYPE_END_ELEMENT:
+                yield 'end', element, None
+            else:
+                attr_start, attr_size, attr_count = struct.unpack_from('<HHH', data, pos + 24)
+                attributes = {}
+                for i in range(attr_count):
+                    at = pos + 16 + attr_start + i * attr_size
+                    _ns, a_name, _raw, _size, _res0, a_type, a_data = struct.unpack_from('<IIIHBBI', data, at)
+                    label = strings[a_name] if a_name < len(strings) else ''
+                    # Obfuscators strip names; the resource id still identifies the attribute.
+                    rid = resources[a_name] if a_name < len(resources) else None
+                    if a_type == VALUE_STRING:
+                        value = strings[a_data] if a_data < len(strings) else None
+                    elif a_type == VALUE_BOOLEAN:
+                        value = a_data != 0
+                    elif a_type == VALUE_REFERENCE:
+                        value = UNRESOLVED
+                    else:
+                        value = a_data
+                    attributes[(rid, label)] = value
+                yield 'start', element, attributes
+        pos += size
+
+
+def attribute(attributes, rid, label):
+    for (key_id, key_label), value in attributes.items():
+        if key_id == rid or (key_id is None and key_label == label):
+            return value
+    return None
+
+
+def qualify(package, name):
+    if name.startswith('.'):
+        return package + name
+    if '.' not in name:
+        return package + '.' + name
+    return name
+
+
+def state(enabled):
+    """'on' (the default, or true), 'off', or 'unknown' when it refers to a resource."""
+    if enabled is None:
+        return 'on'
+    if enabled is UNRESOLVED:
+        return 'unknown'
+    return 'on' if enabled else 'off'
+
+
+def launcher(manifest):
+    """The launcher class: an enabled component first, then one that depends on a resource, never a disabled one.
+
+    A launcher may be an activity or an alias; an alias is skipped when it targets a disabled activity."""
+    package, current, filters = '', None, []
+    enabled_of, found = {}, []
+    for kind, name, attributes in elements(manifest):
+        if kind == 'end':
+            if name == 'intent-filter' and filters:
+                component, main, category = filters.pop()
+                if main and category and not any(component is seen for seen in found):
+                    found.append(component)
+            elif name in ('activity', 'activity-alias'):
+                current = None
+        elif name == 'manifest':
+            package = next((v for (_i, label), v in attributes.items() if label == 'package' and isinstance(v, str)), '')
+        elif name in ('activity', 'activity-alias'):
+            current = {'name': attribute(attributes, RES_NAME, 'name'),
+                       'enabled': attribute(attributes, RES_ENABLED, 'enabled'),
+                       'target': attribute(attributes, RES_TARGET, 'targetActivity')}
+            if isinstance(current['name'], str):
+                enabled_of[qualify(package, current['name'])] = current['enabled']
+        elif name == 'intent-filter' and current is not None:
+            filters.append([current, False, False])
+        elif name == 'action' and filters:
+            filters[-1][1] |= attribute(attributes, RES_NAME, 'name') == 'android.intent.action.MAIN'
+        elif name == 'category' and filters:
+            filters[-1][2] |= attribute(attributes, RES_NAME, 'name') == 'android.intent.category.LAUNCHER'
+    usable = []
+    for component in found:
+        if not isinstance(component['name'], str) or state(component['enabled']) == 'off':
+            continue
+        target = component['target']
+        if isinstance(target, str) and state(enabled_of.get(qualify(package, target))) == 'off':
+            continue
+        usable.append((qualify(package, component['name']), state(component['enabled'])))
+    for wanted in ('on', 'unknown'):
+        for name, enabled in usable:
+            if enabled == wanted:
+                return name
+    return None
+
+
+def main(argv):
+    if len(argv) != 2:
+        print('usage: armada-apk-launcher APK', file=sys.stderr)
+        return 2
+    try:
+        with zipfile.ZipFile(argv[1]) as apk:
+            info = apk.getinfo('AndroidManifest.xml')
+            if info.file_size > MAX_MANIFEST:
+                return 1
+            name = launcher(apk.read(info))
+    except (OSError, KeyError, zipfile.BadZipFile, ManifestError, struct.error, IndexError, UnicodeError):
+        return 1
+    if not name:
+        return 1
+    print(name)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

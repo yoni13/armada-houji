@@ -50,6 +50,7 @@ function podman()
         armada_log "expected one --network argument, found ${NETWORKS}; refusing to start the container"
         return 1
     fi
+    ARGS=("${ARGS[0]}" --security-opt unmask=/proc/sys "${ARGS[@]:1}")
     command podman "${ARGS[@]}"
 }
 
@@ -84,9 +85,25 @@ if armada_wrap setup_podman_mounts "gamepads and the second display"; then
     }
 fi
 
-if armada_wrap setup_props "phone density and the second display"; then
+# Android gives the app 60 s from boot to come to the foreground, then Lepton ends the run as "did not
+# start". The first launch installs the app before it can start, so a big one outlasts that: a 1.77 GB
+# set took about 100 s, and the install finished just after Lepton had given up. Allow 60 s plus one
+# second per 8 MB (installs ran at about 18 MB/s), at most 15 minutes.
+function armada_launch_timeout()
+{
+    local APK SIZE TIMEOUT BYTES=0
+    while IFS= read -r APK; do
+        SIZE="$(stat -c %s -- "${APK}" 2>/dev/null)" || continue
+        BYTES=$((BYTES + SIZE))
+    done < <(get_app_apks 2>/dev/null || true)
+    TIMEOUT=$((60 + BYTES / 8000000))
+    echo $((TIMEOUT > 900 ? 900 : TIMEOUT))
+}
+
+if armada_wrap setup_props "phone density, the second display and the launch timeout"; then
     function setup_props()
     {
+        local LEPTON_APP_LAUNCH_TIMEOUT="${LEPTON_APP_LAUNCH_TIMEOUT:-$(armada_launch_timeout)}"
         valve_setup_props "$@"
 
         local PROPS_FILE="$(props_file)"
@@ -199,6 +216,22 @@ if armada_wrap extract_app_hash "split APK change tracking"; then
         else
             sha256sum "${APKS[@]}" | sha256sum | awk '{print $1}'
         fi
+    }
+fi
+
+# Valve's extractor ignores <activity-alias>, so an app that launches through one (Firefox) has no
+# activity and Lepton refuses to start it. Valve's answer is used whenever it has one.
+ARMADA_APK_LAUNCHER="$(dirname -- "${BASH_SOURCE[0]}")/armada-apk-launcher"
+if armada_wrap extract_app_activity "launcher aliases"; then
+    function extract_app_activity()
+    {
+        local ACTIVITY
+        ACTIVITY="$(valve_extract_app_activity "$@" || true)"
+        if [[ -z "${ACTIVITY}" ]]; then
+            ACTIVITY="$(/usr/bin/python3 "${ARMADA_APK_LAUNCHER}" "${1:-$(get_apk_path)}" || true)"
+            [[ -z "${ACTIVITY}" ]] || armada_log "no launcher activity in the APK; using its launcher alias ${ACTIVITY}"
+        fi
+        printf '%s\n' "${ACTIVITY}"
     }
 fi
 

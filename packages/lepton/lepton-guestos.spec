@@ -21,6 +21,7 @@ Source5:        compatibilitytool.vdf
 Source6:        toolmanifest.vdf
 Source7:        liblepton-armada.sh
 Source8:        overlay.tar
+Source9:        armada-apk-launcher
 
 BuildRequires:  systemd-rpm-macros
 
@@ -43,6 +44,8 @@ paths its scripts assume.
 %package -n lepton-armada
 Summary:        Lepton (Armada) compat tool, Lepton with controllers and a second display
 Requires:       lepton-guestos = %{version}-%{release}
+# armada-apk-launcher reads an APK's manifest.
+Requires:       python3
 
 %description -n lepton-armada
 Lepton (Armada) compat tool. On launch it wraps a copy of Lepton's launcher
@@ -66,6 +69,7 @@ ln -s ../../../bin/adb %{buildroot}%{_prefix}/lib/android-sdk/platform-tools/adb
 install -Dpm 0755 %{SOURCE4} %{buildroot}%{_datadir}/steam/compatibilitytools.d/lepton-armada/lepton
 install -Dpm 0644 -t %{buildroot}%{_datadir}/steam/compatibilitytools.d/lepton-armada %{SOURCE5} %{SOURCE6}
 install -Dpm 0644 %{SOURCE7} %{buildroot}%{_datadir}/steam/compatibilitytools.d/lepton-armada/liblepton.sh
+install -Dpm 0755 %{SOURCE9} %{buildroot}%{_datadir}/steam/compatibilitytools.d/lepton-armada/armada-apk-launcher
 # Android 11 only, so these reach lepton-armada's copy and not the directory every Lepton mounts.
 install -dm 0755 %{buildroot}%{_datadir}/steam/compatibilitytools.d/lepton-armada/overlay
 tar -C %{buildroot}%{_datadir}/steam/compatibilitytools.d/lepton-armada/overlay -xf %{SOURCE8}

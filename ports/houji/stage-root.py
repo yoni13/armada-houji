@@ -47,6 +47,12 @@ for directory in [PORT/'runtime',PORT/'firmware/root']:
 # until the pinned Armada image includes it.
 for name in ['armada-powerd','device-env','fake-suspend','mtp-gadget','armada-game-launch']:
     rel='usr/libexec/armada/'+name;copy(REPO/'system_files'/rel,rel,0o755)
+# lepton-armada cannot start an APK whose launcher is an <activity-alias> (Firefox) without these;
+# they are the files in packages/lepton/files, until the pinned Armada image ships them.
+lepton_tool='usr/share/steam/compatibilitytools.d/lepton-armada/'
+for src,name,mode in [('lepton-armada','lepton',0o755),('liblepton-armada.sh','liblepton.sh',0o644),
+                      ('armada-apk-launcher','armada-apk-launcher',0o755)]:
+    copy(REPO/'packages/lepton/files'/src,lepton_tool+name,mode)
 for name in ['defaults.conf','xiaomi-14.conf']:
     rel='usr/lib/armada/devices/'+name;copy(REPO/'system_files'/rel,rel)
 # A passively cooled phone cannot usefully spend GPU power at the top OPP

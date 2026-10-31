@@ -18,6 +18,7 @@ mkdir -p "$tool_dir/overlay/vendor/lib64"
 cp "$WRAPPER" "$tool_dir/lepton"
 printf 'patched library\n' >"$tool_dir/overlay/vendor/lib64/display.so"
 cp "$ROOT/packages/lepton/files/liblepton-armada.sh" "$tool_dir/liblepton.sh"
+cp "$ROOT/packages/lepton/files/armada-apk-launcher" "$tool_dir/armada-apk-launcher"
 
 # Steam's Lepton install.
 lepton="$tmp/home/.local/share/Steam/steamapps/common/Lepton"
@@ -32,6 +33,9 @@ printf '%s\n' \
     'function adb_port() { echo 5555; }' \
     'function get_apk_path() { [[ -n "$APP_PATH" ]] || APP_PATH="$(compgen -G "$APP_DIR/*.apk")"; printf %s "$APP_PATH"; }' \
     'function extract_app_hash() { echo one-apk; }' \
+    'function extract_app_activity() { printf "%s\n" "${VALVE_ACTIVITY-}"; }' \
+    'function props_file() { echo "$WORK/props"; }' \
+    'function setup_props() { echo "lepton.active_app_launch_timeout=${LEPTON_APP_LAUNCH_TIMEOUT:-60}" >> "$(props_file)"; }' \
     'function clear_baked_app_data() { echo "cleared: $1"; }' \
     'function app_workdir() { echo "$WORK/app_workdir"; }' \
     'function data_workdir() { echo "$WORK/data_workdir"; }' \
@@ -67,6 +71,8 @@ run run -- /some/app.apk
 [[ "$(<"$tmp/result")" == $'run -- /some/app.apk\nunset' ]]
 cmp -s "$derived/liblepton/liblepton.sh" "$tool_dir/liblepton.sh"
 cmp -s "$derived/liblepton/liblepton.valve.sh" "$lepton/liblepton/liblepton.sh"
+cmp -s "$derived/liblepton/armada-apk-launcher" "$tool_dir/armada-apk-launcher"
+[[ -x "$derived/liblepton/armada-apk-launcher" ]]
 [[ "$(<"$derived/images/rootfs_overlay/system/bin/cmd")" == \
 '    APP_PATH=$(pm path "$package" | grep "/base.apk$" | head -n 1)
     APP_PATH="$(cmd_real package path ${APP_ID} | grep "/base.apk$" | head -n 1)"
@@ -147,12 +153,13 @@ hooks() {
 hooks true 2>"$tmp/skipped"
 grep -q 'has no setup_mounts' "$tmp/skipped"
 
-# Whatever ports the launcher asks for, only adb is forwarded, on loopback.
+# Whatever ports the launcher asks for, only adb is forwarded, on loopback. Android's network
+# service has to write its own namespace's sysctls, which podman mounts read-only unless asked.
 [[ "$(hooks podman run --network=pasta:-I,eth0,-t,auto,-u,auto,--no-splice x 2>/dev/null)" == \
-    'podman run --network=pasta:-I,eth0,--no-splice,-t,127.0.0.1/5555 x' ]]
+    'podman run --security-opt unmask=/proc/sys --network=pasta:-I,eth0,--no-splice,-t,127.0.0.1/5555 x' ]]
 [[ "$(hooks podman run --network=pasta:-I,eth0,-t,5555,-t,2337,--no-splice x 2>/dev/null)" == \
-    'podman run --network=pasta:-I,eth0,--no-splice,-t,127.0.0.1/5555 x' ]]
-[[ "$(hooks podman run --network=none x 2>/dev/null)" == 'podman run --network=none x' ]]
+    'podman run --security-opt unmask=/proc/sys --network=pasta:-I,eth0,--no-splice,-t,127.0.0.1/5555 x' ]]
+[[ "$(hooks podman run --network=none x 2>/dev/null)" == 'podman run --security-opt unmask=/proc/sys --network=none x' ]]
 [[ "$(hooks podman ps -a 2>/dev/null)" == 'podman ps -a' ]]
 # Network arguments it does not recognise stop the launch.
 for arguments in 'x' '--network host x' '--network=pasta:-t,auto -p 5555:5555 x'; do
@@ -173,8 +180,60 @@ done
 [[ "$(hooks armada_adb kill-server 2>/dev/null)" == 'adb kill-server' ]]
 [[ "$(hooks extract_app_hash 2>/dev/null)" != one-apk ]]
 [[ "$(hooks extract_app_hash "$tmp/single/game.apk" 2>/dev/null)" == one-apk ]]
+# Android gives an app 60 s from boot to start, and the first launch installs it first. The wrapper allows
+# 60 s plus 1 s per 8 MB of APKs, at most 15 minutes, unless the owner set one.
+launch_timeout() {
+    local dir="$1"
+    shift
+    mkdir -p "$tmp/baked"
+    rm -f "$tmp/baked/props"
+    env "$@" PATH="$tmp/bin:$PATH" STEAM_COMPAT_INSTALL_PATH="$dir" WORK="$tmp/baked" \
+        bash -euo pipefail -c 'source "$1"; shift; "$@"' _ "$derived/liblepton/liblepton.sh" setup_props 2>/dev/null
+    sed -n 's/^lepton.active_app_launch_timeout=//p' "$tmp/baked/props"
+}
+mkdir -p "$tmp/none" "$tmp/huge"
+truncate -s 160000000 "$tmp/app/base.apk"
+truncate -s 80000000 "$tmp/app/config.apk"
+truncate -s 800000000 "$tmp/single/game.apk"
+truncate -s 20000000000 "$tmp/huge/game.apk"
+[[ "$(launch_timeout "$tmp/app")" == 90 ]]
+[[ "$(launch_timeout "$tmp/single")" == 160 ]]
+[[ "$(launch_timeout "$tmp/none")" == 60 ]]
+[[ "$(launch_timeout "$tmp/huge")" == 900 ]]
+[[ "$(launch_timeout "$tmp/app" LEPTON_APP_LAUNCH_TIMEOUT=45)" == 45 ]]
+# The density and display lines Armada adds still follow Valve's.
+grep -q '^ro.sf.lcd_density=320$' "$tmp/baked/props"
+
 printf 'base.apk\nmissing.apk\n' >"$tmp/app/.armada-apks"
 ! hooks armada_adb install -g "$tmp/app/base.apk" >/dev/null 2>&1
+
+# Valve's extractor ignores launcher aliases. Its answer is used when it has one; without one
+# the launcher is read from the manifest, aliases included. The APKs are built for the test.
+python3 - "$ROOT" "$tmp" <<'PY'
+import importlib.util, sys, zipfile
+from pathlib import Path
+sys.dont_write_bytecode = True
+root, tmp = map(Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location('launcher_test', root / 'tests/armada-apk-launcher-test.py')
+built = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(built)
+for name, data in {
+    'alias.apk': built.apk(built.component('activity', 'org.example.app.Home', main=False, category=None),
+                           built.component('activity-alias', 'org.example.app.Off', enabled=False,
+                                           target='org.example.app.Home'),
+                           built.component('activity-alias', 'org.example.app.App', target='org.example.app.Home')),
+    'none.apk': built.apk(built.component('activity', 'org.example.app.X', category=None)),
+}.items():
+    with zipfile.ZipFile(tmp / name, 'w') as archive:
+        archive.writestr('AndroidManifest.xml', data)
+PY
+[[ "$(VALVE_ACTIVITY=org.valve.Main hooks extract_app_activity "$tmp/alias.apk" 2>/dev/null)" == org.valve.Main ]]
+[[ "$(VALVE_ACTIVITY= hooks extract_app_activity "$tmp/alias.apk" 2>/dev/null)" == org.example.app.App ]]
+alias_log="$(VALVE_ACTIVITY= hooks extract_app_activity "$tmp/alias.apk" 2>&1 >/dev/null)"
+[[ "$alias_log" == *'using its launcher alias org.example.app.App'* ]]
+[[ -z "$(VALVE_ACTIVITY= hooks extract_app_activity "$tmp/none.apk" 2>/dev/null)" ]]
+[[ -z "$(VALVE_ACTIVITY= hooks extract_app_activity "$tmp/not-there.apk" 2>/dev/null)" ]]
+[[ "$(VALVE_ACTIVITY=org.valve.Main hooks extract_app_activity "$tmp/not-there.apk" 2>/dev/null)" == org.valve.Main ]]
 
 # An early exit keeps the baked app; every other reason still clears it.
 [[ "$(hooks clear_baked_app_data 'early exit' 2>/dev/null)" == 'Keeping baked app data after an early exit' ]]
