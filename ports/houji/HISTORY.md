@@ -1768,6 +1768,97 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
   (ping, fragmented reply, unreachable port), evidence bundle contents and
   permissions, packaging. Evidence: `build/houji-resume-mango-20261023/`.
 
+### Android apps started nothing (2026-10-25)
+
+- **Report:** A Firefox APK imported with Armada Store's "Add local .apk" did not launch. The store's own
+  Android category lists also do not load; that was not looked at. Times are UTC+8.
+- **Findings, in the order each hid the next.** Lepton (Steam app 3029110) was not installed; the first
+  launch asked Steam to install it (as designed), and it finished at 17:29. Lepton's own log is
+  `~/.local/share/lepton/steamvr/logs/lepton-steamlaunch-<app id>.log`, not Steam's.
+  1. **Empty launcher activity.** The log ends `Early-exit due to malformed .apk metadata`. Lepton's
+     `apk-info-extractor` reads only `<activity>` elements. Firefox's only enabled launcher is the
+     `<activity-alias> org.mozilla.firefox.App` (24 other alias icons are disabled). `armada-apk-launcher`
+     reads the same binary manifest, aliases included, and Lepton's wrapper calls it only when Valve's
+     extractor returns nothing. Checked on the Firefox manifest against its decoded tree (and by test
+     manifests built in the test). The same gap hides any app that launches through an alias.
+  2. **Overlay on an overlay.** podman failed with the kernel message `overlay: filesystem on …/upper not
+     supported as upperdir`. `/var/home` is itself an overlay (lower `/run/houji/lower/var/home`, upper on
+     the ext4 userdata partition), and the container's root and each app's data are overlays whose layers
+     podman keeps there (`~/.local/share/containers`, `steamapps/compatdata/<id>/baked`). Moving podman's
+     storage to ext4 fixed only the first; Lepton deletes `baked` at every launch, so a symlink there does
+     not survive. `fuse-overlayfs`, which the image already ships, needs no relocation.
+  3. **Android's network setup looped.** With the container up, `adb` stayed `offline` and nothing was
+     installed: Android's ethernet service failed 7,731 times in three minutes on `disabling IPv6 failed`,
+     and `eth0` lost its address, so adb had nowhere to connect. Inside the container `/proc/sys` was
+     read-only (podman's default). Adding `--security-opt unmask=/proc/sys` to Lepton's `podman run`, in the
+     wrapper that already rewrites its arguments, let the write succeed. In a rootless container only the
+     container's own network settings become writable: `kernel.printk`, `vm.swappiness` and `kernel.sysrq`
+     were still refused.
+- **Delivering the storage setting.** podman reads one `storage.conf` and none merge. The `/etc` one is
+  ignored for rootless users, a drop-in directory is not read, and `CONTAINERS_STORAGE_CONF` fails because
+  Lepton runs `env -i podman exec`. So each user needs their own `~/.config/containers/storage.conf`.
+  `houji-podman-storage.service` (a user oneshot, enabled by the image) installs it only when missing, so an
+  owner's own file is kept. The file is generated when the image is staged from the image's own
+  `usr/share/containers/storage.conf` (`rootless_podman_storage_conf`): the same file with the root-only
+  `graphroot` and `runroot` left out and `mount_program` added, verified by parsing so nothing else may
+  differ. A `systemd-tmpfiles` copy was tried first and rejected: it creates the file but exits with an error
+  (it cannot take root's ownership), which would leave the user manager degraded.
+- **Staging.** `stage-root.py` copies `packages/lepton/files/` (the wrapper, its library and the new helper) over
+  lepton-armada in the image until the pinned Armada image ships them, the way it already does for
+  `armada-game-launch`, so no divergent copy exists. `lepton-guestos.spec` installs the helper and requires python3.
+- **Result.** Firefox 158.0.2 (a 630 MB universal APK) installed, started through the alias and reported
+  `Displayed org.mozilla.firefox/.App: +759ms`; the page rendered on the phone. After restarting Game Mode with
+  none of the experimental settings left, a cold relaunch with the baked app data reached the same screen.
+  Boot and install took about 50 s the first time.
+- **Not verified:** any other Android app; audio, touch and controller input inside the container; speed,
+  memory and battery cost of FUSE-based layers against native overlays (Firefox started quickly, nothing was
+  measured); a full image build (the staging lines were checked by running the generator on the phone's real
+  `storage.conf` and by tests, and the service was applied live, but `stage-root.py` itself was not run);
+  why the store's categories do not load.
+- **Rollback.** Originals of the two replaced Lepton files: `/var/lib/armada/lepton-armada-before-20261025T175301/`.
+  Remove `~/.config/containers/storage.conf`, `/usr/lib/houji/containers-storage.conf`,
+  `/usr/lib/systemd/user/houji-podman-storage.service` and its `default.target.wants` link.
+- **Tests:** `tests/armada-apk-launcher-test.py` (17), `tests/houji-podman-storage-test.py` (11) and
+  `tests/lepton-armada-test.sh` (the helper is copied into the derived tool, Valve's answer wins, an alias is
+  used otherwise, every `podman run` carries the unmask). Evidence: `build/houji-firefox-apk-20261025/`.
+
+### A large Android app ended its first launch right after installing (2026-10-25)
+
+- **Report:** Brawl Stars (a Play split set of 1.77 GB, installed by hand from an XAPK and then
+  re-downloaded from Armada Store) showed only Android's home screen and never started. Times are UTC+8.
+- **How an XAPK got in:** "Add local .apk" accepts only a file ending `.apk` with `AndroidManifest.xml` at the top
+  of the zip, so an XAPK is refused. It was installed by hand into the store's own layout
+  (`~/Applications/Android/<package>/base.apk`, the splits, `.armada-apks`), recorded with the store's
+  functions and given a shortcut the way the front end does. The store's later download replaced it.
+- **Cause 1, a timer that outlasts the install.** Valve's `LeptonProcessObserver` (inside Android's system_server)
+  gives the target app `lepton.active_app_launch_timeout` seconds, 60 unless `LEPTON_APP_LAUNCH_TIMEOUT` is set,
+  counted from Android's boot. If the app has not come to the foreground by then it logs `Target app (…) did not
+  start` and creates `/data/lepton-on-app-exit`, which ends the run. A first launch installs the app before it
+  can start, and this set took about 100 s: the log shows the message at 11:42:27.000, 60.0 s after
+  system_server started, and the install finishing at about 11:43:07. Lepton then printed
+  `Waiting for app … to exit` and `Exited!` straight away. Firefox's 630 MB install fits inside 60 s, so it never
+  showed this.
+- **Fix:** the `setup_props` wrapper now sets `LEPTON_APP_LAUNCH_TIMEOUT` to 60 s plus one second per 8 MB of the
+  app's APKs, at most 900 s (`armada_launch_timeout`); a value set by the owner is kept. This game gets 291 s,
+  checked as the guest's property. In the next first-install run the 60 s mark passed during the install with
+  no `did not start` line.
+- **Cause 2, tapping the icon too early (not fixed).** The launcher shows the app's icon as soon as Android has
+  registered the package, but Lepton is still moving the installed APKs. A tap at 11:57:21 started the game
+  `from uid 10007` (the launcher), it crashed at once on a null `Resources` (`addLoaders`), and the process dying
+  ends the run the same way. During a first install the screen is only Android's home screen, for about two
+  minutes with no progress shown, and it has to be left alone.
+- **Brawl Stars itself:** with the app installed, a launch reaches the game (sign-in screen, then the tutorial with
+  the joystick) and about 10 to 20 s later the game ends itself: `Report: Exiting: elsm.g: 01`, then a fatal
+  exception raised by the game. The host kernel log showed no GPU fault or out-of-memory kill. The log also says
+  Google Play services and the Play Store are missing, and it creates a key named `PromonHardwareBoundIdRsaKey2`:
+  the game ships Promon app protection, which ends apps in environments it does not accept. That is the likely
+  cause, not a proven one. It was not investigated further: it is the game's anti-tamper protection, and no
+  attempt was made to hide the container from it.
+- **Not verified:** a first install left completely untouched, from install through to a running game, after the
+  timeout change (the timed run was interrupted by the tap above); other large apps.
+- **Tests:** `tests/lepton-armada-test.sh` covers the timeout for a split set, a single APK, no APK, the cap and an
+  owner's value. Evidence: `build/houji-firefox-apk-20261025/`.
+
 ### Native SIM/eSIM settings broker and NFC off-state verification (2026-10-18)
 
 - **Request:** Check the still-resident `houji-cellular/service.py` after the
