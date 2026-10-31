@@ -57,6 +57,11 @@ lepton_tool='usr/share/steam/compatibilitytools.d/lepton-armada/'
 for src,name,mode in [('lepton-armada','lepton',0o755),('liblepton-armada.sh','liblepton.sh',0o644),
                       ('armada-apk-launcher','armada-apk-launcher',0o755)]:
     copy(REPO/'packages/lepton/files'/src,lepton_tool+name,mode)
+# Android 11 in Lepton starts no autofill service yet declares the feature, so an app that shows a filled text
+# field dies in AutofillManager (Discord's two-factor step). This stub answers "autofill is off"; the rc starts it.
+for src,name in [('prebuilt/system/framework/armada-autofillstub.jar','system/framework/armada-autofillstub.jar'),
+                 ('overlay/system/etc/init/armada-autofillstub.rc','system/etc/init/armada-autofillstub.rc')]:
+    copy(REPO/'packages/lepton'/src,lepton_tool+'overlay/'+name,0o644)
 for name in ['defaults.conf','xiaomi-14.conf']:
     rel='usr/lib/armada/devices/'+name;copy(REPO/'system_files'/rel,rel)
 # A passively cooled phone cannot usefully spend GPU power at the top OPP

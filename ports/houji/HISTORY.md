@@ -1859,6 +1859,37 @@ HyperCharge. The port's own 38°C gate was the cause of an abrupt slowdown.
 - **Tests:** `tests/lepton-armada-test.sh` covers the timeout for a split set, a single APK, no APK, the cap and an
   owner's value. Evidence: `build/houji-firefox-apk-20261025/`.
 
+### Discord ended at its two-factor step: Lepton's Android has no autofill service (2026-10-25)
+
+- **Report:** Discord (installed from Armada Store, version 350.8) closed after the two-factor code was entered. Two
+  runs, at 22:17 and 22:20 (UTC+8), ended the same way.
+- **Cause:** both die with a `NullPointerException` in
+  `android.view.autofill.AutofillManager.ensureServiceClientAddedIfNeededLocked`, which calls
+  `IAutoFillManager.addClient` on a null service. The guest has no `autofill` service (`service list` lacks it,
+  `dumpsys autofill` says `Can't find service: autofill`), yet the image declares `android.software.autofill`. Valve's
+  `services.jar` starts none of Autofill, Accessibility, AppPrediction, Backup or CompanionDevice. Any app that makes a
+  text field holding text visible without focus can hit it. A one-screen test app (`packages/lepton/autofillstub/device-test`)
+  built for this died 3 ms after showing such a field, with the same exception and no stub installed.
+- **Fix, on the `autofill-stub` branch and not on `main`:** `AutofillStub` registers a Binder as `autofill` and
+  answers every `IAutoFillManager` call as "autofill is off". All 23 calls are one-way; the thirteen that carry an
+  `IResultReceiver` are answered through it (`addClient` 0 for disabled, `startSession` `Integer.MAX_VALUE` for no
+  session, 0 with no bundle for the rest, which `SyncResultReceiver` reads as false or null). An init file starts it at
+  `zygote-start` on Android 11 only, as `armada-clipstub` does. `autofillstub/build.sh` builds the jar with the pinned
+  Android platform and R8 (a second build gave the same SHA-256) and records it in `prebuilt.sha256`; `stage-root.py`
+  copies the jar and the init file into the lepton-armada tool's overlay.
+- **Rejected:** patching Valve's `system_server` to start a real service. It forces recompiles and breaks on every
+  Lepton update.
+- **Not verified:** the stub on a device. The run with the stub installed was cut off by a server restart, and the
+  phone was then off the network. The part most likely to need work is finding the result receiver in the parcel
+  (`RECEIVER_TAIL` assumes a 24-byte binder object plus a 4-byte stability marker at the end of the data); if it is not
+  found, `addClient` goes unanswered and `SyncResultReceiver` times out instead of the app crashing. Discord's code step
+  was not retried. To finish, follow `device-test/README.md`.
+- **Left on the phone:** the two stub files under `/usr/share/steam/compatibilitytools.d/lepton-armada/overlay/system/`
+  (`framework/armada-autofillstub.jar`, `etc/init/armada-autofillstub.rc`); a Steam shortcut named AutofillTest (app id
+  3340674331); `~/.cache/autofill-test/`; `/tmp/steam-shortcut.py` and `/tmp/autofill-test.appid`.
+- **Tests:** `tests/houji-lepton-autofillstub-test.py` (9): the checksum, the jar's contents, the init file, the
+  staging, and the table of calls with and without a receiver.
+
 ### Native SIM/eSIM settings broker and NFC off-state verification (2026-10-18)
 
 - **Request:** Check the still-resident `houji-cellular/service.py` after the

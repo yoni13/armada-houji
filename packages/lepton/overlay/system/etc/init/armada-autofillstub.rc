@@ -1,0 +1,9 @@
+service armada_autofillstub /system/bin/app_process -Djava.class.path=/system/framework/armada-autofillstub.jar /system/bin AutofillStub
+    user root
+    group root
+    disabled
+
+# Lepton's Android 11 starts no autofill service yet declares the feature, and apps die on the null manager
+# (autofillstub/AutofillStub.java). Android 14's image has its own service.
+on zygote-start && property:ro.build.version.sdk=30
+    start armada_autofillstub
