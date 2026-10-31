@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
-from buildlib import PORT, REPO, kernel_source, run, stage_modules
+from buildlib import PORT, REPO, kernel_source, rootless_podman_storage_conf, run, stage_modules
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('root',type=Path)
 p.add_argument('work',type=Path)
@@ -47,6 +47,10 @@ for directory in [PORT/'runtime',PORT/'firmware/root']:
 # until the pinned Armada image includes it.
 for name in ['armada-powerd','device-env','fake-suspend','mtp-gadget','armada-game-launch']:
     rel='usr/libexec/armada/'+name;copy(REPO/'system_files'/rel,rel,0o755)
+# Android apps need overlay layers on /var/home, itself an overlay here. houji-podman-storage.service gives each
+# user this file as their own podman storage.conf; see rootless_podman_storage_conf.
+write('usr/lib/houji/containers-storage.conf',
+      rootless_podman_storage_conf(target('usr/share/containers/storage.conf').read_text()))
 # lepton-armada cannot start an APK whose launcher is an <activity-alias> (Firefox) without these;
 # they are the files in packages/lepton/files, until the pinned Armada image ships them.
 lepton_tool='usr/share/steam/compatibilitytools.d/lepton-armada/'
@@ -154,6 +158,7 @@ copy(PORT/'power/upower-houji.conf','etc/systemd/system/upower.service.d/20-houj
 # Houji already owns /run/vpower with readiness and stale-data handling.
 # The release's user-session ETA writer would otherwise race that provider.
 link('etc/systemd/user/armada-steam-charging-eta.service','/dev/null')
+link('etc/systemd/user/default.target.wants/houji-podman-storage.service','/usr/lib/systemd/user/houji-podman-storage.service')
 copy(PORT/'power/armada-power-profiles.conf','etc/dbus-1/system.d/armada-power-profiles.conf')
 copy(PORT/'power/org.armada.power-profiles.policy','usr/share/polkit-1/actions/org.armada.power-profiles.policy')
 copy(PORT/'audio/prepare-protection.py','usr/libexec/houji-audio/prepare-protection.py',0o755)

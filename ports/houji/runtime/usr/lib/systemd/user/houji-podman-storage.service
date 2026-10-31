@@ -1,0 +1,14 @@
+[Unit]
+Description=Give rootless podman an overlay mount program that works on /var/home
+# Rootless podman cannot use the kernel's overlayfs on this port (/var/home is an overlay); see
+# rootless_podman_storage_conf in ports/houji/buildlib.py, which generates the file when the image is
+# staged. It has to be the user's own storage.conf: Lepton starts some podman commands with an empty
+# environment, so a variable could not carry it. An existing file, including the owner's own, is kept.
+ConditionPathExists=!%h/.config/containers/storage.conf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/install -D -m 0644 /usr/lib/houji/containers-storage.conf %h/.config/containers/storage.conf
+
+[Install]
+WantedBy=default.target

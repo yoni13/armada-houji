@@ -56,6 +56,42 @@ def erofs_worker_options(help_text):
     return ['--workers=8'] if '--workers' in help_text else []
 
 
+FUSE_OVERLAYFS = '/usr/bin/fuse-overlayfs'
+
+
+def rootless_podman_storage_conf(default):
+    """The image's podman storage defaults, for rootless users, with fuse-overlayfs mounting every overlay.
+
+    /var/home is itself an overlayfs on this port, and the kernel refuses one overlayfs as
+    the writable layer of another ("not supported as upperdir"); Lepton's Android container
+    needs exactly that, for its root and for each app's data. podman reads a single
+    storage.conf (none of them merge), so this is the image's own file with one setting
+    added. A file chosen through CONTAINERS_STORAGE_CONF is taken literally, so the
+    root-only graphroot and runroot are left out and rootless podman keeps its own
+    locations. Any other difference from the default is an error."""
+    import copy
+    import re
+    import tomllib
+    before = tomllib.loads(default)
+    options = before.get('storage', {}).get('options', {})
+    if 'mount_program' in options.get('overlay', {}):
+        raise ValueError('the image already chooses an overlay mount program; review it')
+    text = re.sub(r'^(graphroot|runroot)[ \t]*=.*\n', '', default, flags=re.M)
+    setting = 'mount_program = "%s"' % FUSE_OVERLAYFS
+    header = re.compile(r'^\[storage\.options\.overlay\][ \t]*$', re.M)
+    if header.search(text):
+        text = header.sub(lambda match: match.group(0) + '\n' + setting, text, count=1)
+    else:
+        text = text.rstrip('\n') + '\n\n[storage.options.overlay]\n' + setting + '\n'
+    expected = copy.deepcopy(before)
+    for key in ('graphroot', 'runroot'):
+        expected.get('storage', {}).pop(key, None)
+    expected.setdefault('storage', {}).setdefault('options', {}).setdefault('overlay', {})['mount_program'] = FUSE_OVERLAYFS
+    if tomllib.loads(text) != expected:
+        raise ValueError('podman storage.conf changed more than graphroot, runroot and the overlay mount program')
+    return text
+
+
 def sha(path):
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
